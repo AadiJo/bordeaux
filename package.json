@@ -1,0 +1,34 @@
+{
+  "name": "bordeaux",
+  "version": "0.1.0",
+  "private": true,
+  "productName": "Bordeaux",
+  "description": "Desktop trajectory authoring and .bdx export app for FRC paths.",
+  "main": "dist-electron/electron/main.js",
+  "scripts": {
+    "extract": "node scripts/extract-standalone.mjs",
+    "dev": "npm run extract && npm run build:electron && electron dist-electron/electron/main.js",
+    "build": "npm run extract && npm run build:electron",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit && npm run build:electron -- --pretty false"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "electron": "^37.0.0",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "vitest": "^2.1.8",
+    "wait-on": "^8.0.1"
+  }
+}
