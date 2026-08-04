@@ -31,9 +31,35 @@ final class StrictJson {
     private static void validate(JsonNode node, Type type, String path, int depth) {
         if (depth > MAX_DEPTH) fail(path, "exceeds the nesting limit of " + MAX_DEPTH);
         if (node == null || node.isNull()) fail(path, "must not be null");
-        if (!(type instanceof Class<?> raw)) fail(path, "has an unsupported Java type");
+        if (type instanceof GenericArrayType array) {
+            array(node, array.getGenericComponentType(), path, depth);
+            return;
+        }
+        if (type instanceof ParameterizedType parameterized) {
+            if (!(parameterized.getRawType() instanceof Class<?>)) fail(path, "has an unsupported generic type");
+            Class<?> raw = (Class<?>) parameterized.getRawType();
+            Type[] arguments = parameterized.getActualTypeArguments();
+            if (Collection.class.isAssignableFrom(raw)) {
+                array(node, arguments[0], path, depth);
+                return;
+            }
+            if (Map.class.isAssignableFrom(raw)) {
+                if (arguments[0] != String.class) fail(path, "map keys must be strings");
+                objectValues(node, arguments[1], path, depth);
+                return;
+            }
+            validateClass(node, raw, path, depth);
+            return;
+        }
+        if (!(type instanceof Class<?>)) fail(path, "has an unsupported Java type");
+        Class<?> raw = (Class<?>) type;
+        if (raw.isArray()) {
+            array(node, raw.getComponentType(), path, depth);
+            return;
+        }
         validateClass(node, raw, path, depth);
     }
+
     private static void validateClass(JsonNode node, Class<?> raw, String path, int depth) {
         if (raw == boolean.class || raw == Boolean.class) {
             if (!node.isBoolean()) fail(path, "must be a boolean");
@@ -62,10 +88,58 @@ final class StrictJson {
                 if (((Enum<?>) constant).name().equals(node.textValue())) found = true;
             }
             if (!found) fail(path, "is not a valid " + raw.getSimpleName() + " value");
+        } else if (raw.isRecord()) {
+            record(node, raw, path, depth);
         } else {
-            fail(path, "has an unsupported Java type");
+            publicFields(node, raw, path, depth);
         }
     }
+
+    private static void array(JsonNode node, Type elementType, String path, int depth) {
+        if (!node.isArray()) fail(path, "must be an array");
+        if (node.size() > MAX_ARRAY_ITEMS) fail(path, "exceeds the array limit of " + MAX_ARRAY_ITEMS);
+        for (int index = 0; index < node.size(); index++) {
+            validate(node.get(index), elementType, path + "[" + index + "]", depth + 1);
+        }
+    }
+
+    private static void objectValues(JsonNode node, Type valueType, String path, int depth) {
+        if (!node.isObject()) fail(path, "must be an object");
+        if (node.size() > MAX_OBJECT_FIELDS) fail(path, "exceeds the object-field limit of " + MAX_OBJECT_FIELDS);
+        node.fields().forEachRemaining(entry -> validate(entry.getValue(), valueType, path + "." + entry.getKey(), depth + 1));
+    }
+
+    private static void record(JsonNode node, Class<?> raw, String path, int depth) {
+        Map<String, Type> fields = new HashMap<>();
+        for (RecordComponent component : raw.getRecordComponents()) fields.put(component.getName(), component.getGenericType());
+        objectShape(node, fields, path, depth);
+    }
+
+    private static void publicFields(JsonNode node, Class<?> raw, String path, int depth) {
+        Map<String, Type> fields = new HashMap<>();
+        for (Field field : raw.getDeclaredFields()) {
+            int modifiers = field.getModifiers();
+            if (java.lang.reflect.Modifier.isPublic(modifiers)
+                    && !java.lang.reflect.Modifier.isStatic(modifiers)
+                    && !java.lang.reflect.Modifier.isFinal(modifiers)) {
+                fields.put(field.getName(), field.getGenericType());
+            }
+        }
+        objectShape(node, fields, path, depth);
+    }
+
+    private static void objectShape(JsonNode node, Map<String, Type> fields, String path, int depth) {
+        if (!node.isObject()) fail(path, "must be an object");
+        if (node.size() > MAX_OBJECT_FIELDS) fail(path, "exceeds the object-field limit of " + MAX_OBJECT_FIELDS);
+        Set<String> actual = new HashSet<>();
+        node.fieldNames().forEachRemaining(actual::add);
+        for (String name : actual) if (!fields.containsKey(name)) fail(path + "." + name, "is not a declared field");
+        for (Map.Entry<String, Type> field : fields.entrySet()) {
+            if (!actual.contains(field.getKey())) fail(path + "." + field.getKey(), "is required");
+            validate(node.get(field.getKey()), field.getValue(), path + "." + field.getKey(), depth + 1);
+        }
+    }
+
     private static void integral(JsonNode node, String path, BigInteger minimum, BigInteger maximum) {
         if (!node.isIntegralNumber()) fail(path, "must be an integer number");
         BigInteger value = node.bigIntegerValue();
