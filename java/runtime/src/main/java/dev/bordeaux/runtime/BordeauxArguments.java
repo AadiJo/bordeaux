@@ -53,6 +53,80 @@ public final class BordeauxArguments {
         assertRange(name, BigDecimal.valueOf(value), minimum, maximum);
         return value;
     }
+
+    public BigInteger requireBigInteger(String name) {
+        JsonNode node = requiredNode(name);
+        StrictJson.validate(node, BigInteger.class, "Command '" + commandId + "' argument '" + name + "'");
+        try {
+            if (node.isTextual()) return new BigInteger(node.textValue());
+        } catch (NumberFormatException ignored) {
+            // Fall through to a contextual error.
+        }
+        throw error(name, "must be an integer encoded as a decimal string");
+    }
+
+    public BigInteger requireBigInteger(String name, String minimum, String maximum) {
+        BigInteger value = requireBigInteger(name);
+        assertRange(name, new BigDecimal(value), minimum, maximum);
+        return value;
+    }
+
+    public BigDecimal requireBigDecimal(String name) {
+        JsonNode node = requiredNode(name);
+        StrictJson.validate(node, BigDecimal.class, "Command '" + commandId + "' argument '" + name + "'");
+        try {
+            if (node.isTextual()) return new BigDecimal(node.textValue());
+        } catch (NumberFormatException ignored) {
+            // Fall through to a contextual error.
+        }
+        throw error(name, "must be a decimal encoded as a string");
+    }
+
+    public BigDecimal requireBigDecimal(String name, String minimum, String maximum) {
+        BigDecimal value = requireBigDecimal(name);
+        assertRange(name, value, minimum, maximum);
+        return value;
+    }
+
+    public double requireDouble(String name) {
+        Double value = require(name, new TypeReference<Double>() {});
+        if (!Double.isFinite(value)) throw error(name, "must be finite");
+        return value;
+    }
+
+    public double requireDouble(String name, String minimum, String maximum) {
+        double value = requireDouble(name);
+        assertRange(name, BigDecimal.valueOf(value), minimum, maximum);
+        return value;
+    }
+
+    public float requireFloat(String name) {
+        Float value = require(name, new TypeReference<Float>() {});
+        if (!Float.isFinite(value)) throw error(name, "must be finite");
+        return value;
+    }
+
+    public float requireFloat(String name, String minimum, String maximum) {
+        float value = requireFloat(name);
+        assertRange(name, new BigDecimal(Float.toString(value)), minimum, maximum);
+        return value;
+    }
+
+    public <T extends Number> T requireNumber(
+            String name, TypeReference<T> type, String minimum, String maximum) {
+        T value = require(name, type);
+        assertRange(name, new BigDecimal(value.toString()), minimum, maximum);
+        return value;
+    }
+
+    void assertOnly(Set<String> expected) {
+        values.fieldNames().forEachRemaining(name -> {
+            if (!expected.contains(name)) {
+                throw error(name, "is not a declared parameter");
+            }
+        });
+    }
+
     private JsonNode requiredNode(String name) {
         JsonNode node = values.get(name);
         if (node == null) throw error(name, "is required");
