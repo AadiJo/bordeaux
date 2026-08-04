@@ -88,3 +88,61 @@ Treat every spatial occurrence as a path **visit**, identified by its position i
 - Place targets and markers on the explicitly selected visit instead of using a global nearest fraction.
 - Latch their visit while dragging so an exact overlap cannot silently move the feature to an earlier or later occurrence.
 - Keep the existing path-distance storage. Visit-aware projection chooses the correct fraction; it does not require a new feature schema.
+- Selecting a target or marker from the outline restores its visit focus on the field.
+
+### Visual treatment
+
+- Do not turn every pass into a different permanent color; velocity and other overlays already use color semantically.
+- Use accent thickness/opacity for the active visit and a subtle short tick stack at an overlap conflict.
+- Keep the indicator flat and compact—no floating card unless the conflict contains enough candidates to require a searchable list.
+- An optional future “spread visits” inspection mode may offset strokes visually, but dragging should remain disabled or projected against the true ghost path in that mode.
+
+## Candidate resolver
+
+The resolver should work on sampled polyline edges rather than only sample points:
+
+1. Project the pointer onto every nearby polyline edge in screen space.
+2. Produce candidates containing screen distance, path distance/fraction, segment index, and local segment parameter.
+3. Cluster adjacent samples that describe the same visit.
+4. Keep candidates separated when their ordered path distances differ, even if their field coordinates and segment index are identical.
+5. Rank by screen distance, then current visit/segment affinity, then path order for deterministic ties.
+
+Use a screen-pixel tolerance so selection does not change with zoom.
+
+## Implementation phases
+
+### Phase 1 — visit selection
+
+- Add and test a pure `nearestVisits` geometry helper.
+- Add transient `activeVisit` and conflict-candidate state to the field editor.
+- Add the compact conflict indicator and keyboard cycling.
+- Route segment selection, explicit waypoint insertion, rotation-target placement, and event-marker placement through the chosen visit.
+
+### Phase 2 — stable constraints
+
+- Start constraint drags from an explicit candidate rather than global `nearestFraction`.
+- Add continuity-aware endpoint projection and hysteresis.
+- Use the same latched projection for dragging rotation targets and event markers.
+- Verify proportional and local range anchors through edits and reversal.
+
+### Phase 3 — coincident controls
+
+- Render selected waypoint/control handles last.
+- Disable competing hit areas while a visit is focused.
+- Add coincident-waypoint cycling and outline-to-field focus synchronization.
+
+### Phase 4 — optional inspection tools
+
+- Evaluate a sequence strip for long routines.
+- Evaluate an explicit “spread visits” read-only view.
+- Only add persisted named layers if real projects show that automatic visit focus is insufficient for organization.
+
+## Success criteria
+
+- Every overlapping occurrence can be selected without creating another path.
+- A range started on one visit never jumps to another visit during a normal drag.
+- Rotation targets and event markers remain attached to the chosen visit during placement and dragging.
+- Selected coincident waypoints and tangents remain draggable.
+- Selection remains deterministic across zoom levels.
+- Existing project files and `.bdx` export require no schema change for phases 1–3.
+- Simple non-overlapping paths retain the current one-click workflow with no extra UI.
