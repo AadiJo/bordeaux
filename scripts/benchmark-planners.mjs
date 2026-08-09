@@ -1,8 +1,8 @@
 import { createRequire } from "node:module";
 import { performance } from "node:perf_hooks";
+import { optimizerCorpus } from "./optimizer-corpus.mjs";
 
 const require = createRequire(import.meta.url);
-const { buildWaypoints, createDemoProject } = require("../dist-electron/shared/project/defaults.js");
 const { optimizedTrajectoryPlanner } = require("../dist-electron/shared/planners/optimizedTrajectory.js");
 const { profiledSplinePlanner } = require("../dist-electron/shared/planners/profiledSpline.js");
 
@@ -32,47 +32,7 @@ function benchmark(planner, input) {
   };
 }
 
-function demoCase() {
-  const project = createDemoProject();
-  return { name: "demo", input: { path: project.paths[0], robot: project.robot } };
-}
-
-function curvedCase() {
-  const project = createDemoProject();
-  const path = project.paths[0];
-  path.headingMode = "tangent";
-  path.waypoints = buildWaypoints([
-    { x: 0.8, y: 1.0, nextC: { x: 2.2, y: 0.8 } },
-    { x: 4.0, y: 4.9, prevC: { x: 2.8, y: 4.8 }, nextC: { x: 5.2, y: 5.0 } },
-    { x: 8.0, y: 2.0, prevC: { x: 6.8, y: 2.1 }, nextC: { x: 10.0, y: 1.8 } },
-    { x: 14.5, y: 6.8, prevC: { x: 12.5, y: 6.7 } },
-  ]);
-  return { name: "curved", input: { path, robot: project.robot } };
-}
-
-function constrainedStopCase() {
-  const project = createDemoProject();
-  const path = project.paths[0];
-  path.headingMode = "tangent";
-  path.waypoints = buildWaypoints([
-    { x: 1, y: 1, nextC: { x: 2, y: 1 } },
-    { x: 5, y: 1, prevC: { x: 4, y: 1 }, nextC: { x: 7, y: 1 }, stop: true },
-    { x: 11, y: 1, prevC: { x: 9, y: 1 } },
-  ]);
-  path.ranges = [{
-    anchor: "param",
-    f0: 0.2,
-    f1: 0.8,
-    maxVel: 1.5,
-    maxAccel: 1,
-    maxDecel: 1,
-    maxAngVel: 360,
-    maxAngAccel: 720,
-  }];
-  return { name: "range-stop", input: { path, robot: project.robot } };
-}
-
-const rows = [demoCase(), curvedCase(), constrainedStopCase()].map(({ name, input }) => {
+const rows = optimizerCorpus().filter((entry) => entry.benchmark !== false).map(({ name, input }) => {
   const profiled = benchmark(profiledSplinePlanner, input);
   const optimized = benchmark(optimizedTrajectoryPlanner, input);
   const profiledTime = profiled.result.totalTimeS;

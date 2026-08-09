@@ -12,6 +12,7 @@
     "build:java": "node scripts/build-java.mjs build",
     "build:electron": "tsc -p tsconfig.electron.build.json",
     "benchmark:planners": "npm run build:electron && node scripts/benchmark-planners.mjs",
+    "shadow:optimizer": "npm run build:electron && node scripts/shadow-optimizer.mjs",
     "fuzz:optimizer": "npm run build:electron && node scripts/fuzz-reachability.mjs",
     "test": "vitest run",
     "test:java": "node scripts/build-java.mjs test",
