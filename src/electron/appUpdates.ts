@@ -41,40 +41,42 @@ export class AppUpdateController {
   private readonly promptedVersions = new Set<string>();
 
   constructor(
-    private readonly updater: AppUpdaterLike,
+    private readonly updater: AppUpdaterLike | null,
     private readonly presenter: UpdatePresenter,
     private readonly runtime: UpdateRuntime,
   ) {}
 
   get available(): boolean {
-    return this.runtime.packaged && this.runtime.supported;
+    return this.runtime.packaged && this.runtime.supported && this.updater !== null;
   }
 
   start(): void {
     if (this.started || !this.available) return;
+    const updater = this.updater;
+    if (!updater) return;
     this.started = true;
-    this.updater.autoDownload = true;
-    this.updater.autoInstallOnAppQuit = true;
-    this.updater.allowPrerelease = true;
-    this.updater.channel = "beta";
-    this.updater.allowDowngrade = false;
+    updater.autoDownload = true;
+    updater.autoInstallOnAppQuit = true;
+    updater.allowPrerelease = true;
+    updater.channel = "beta";
+    updater.allowDowngrade = false;
 
-    this.updater.on("update-available", (info) => {
+    updater.on("update-available", (info) => {
       if (!this.interactiveCheck) return;
       void this.presenter.downloading(info.version);
     });
-    this.updater.on("update-not-available", () => {
+    updater.on("update-not-available", () => {
       if (!this.interactiveCheck) return;
       this.interactiveCheck = false;
       void this.presenter.upToDate(this.runtime.currentVersion);
     });
-    this.updater.on("error", (error) => {
+    updater.on("error", (error) => {
       this.runtime.warn("Bordeaux update check failed", error);
       if (!this.interactiveCheck) return;
       this.interactiveCheck = false;
       void this.presenter.failed(errorMessage(error));
     });
-    this.updater.on("update-downloaded", (info) => {
+    updater.on("update-downloaded", (info) => {
       if (this.promptedVersions.has(info.version)) return;
       this.promptedVersions.add(info.version);
       this.interactiveCheck = false;
@@ -88,11 +90,13 @@ export class AppUpdateController {
       return;
     }
     this.start();
+    const updater = this.updater;
+    if (!updater) return;
     this.interactiveCheck ||= interactive;
     if (this.checkPromise) return this.checkPromise;
     this.checkPromise = (async () => {
       try {
-        await this.updater.checkForUpdates();
+        await updater.checkForUpdates();
       } catch (error) {
         this.runtime.warn("Bordeaux update check failed", error);
         if (this.interactiveCheck) {
@@ -110,6 +114,6 @@ export class AppUpdateController {
     const projectDirty = this.runtime.isProjectDirty();
     const choice = await this.presenter.ready(version, projectDirty);
     if (choice !== "restart" || this.runtime.isProjectDirty()) return;
-    this.updater.quitAndInstall(false, true);
+    this.updater?.quitAndInstall(false, true);
   }
 }

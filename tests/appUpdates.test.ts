@@ -65,6 +65,13 @@ describe("application updates", () => {
     expect(calls).toEqual(["unavailable"]);
   });
 
+  it("does not require an update client in unavailable builds", async () => {
+    const { presenter, runtime, calls } = fixture({ packaged: false });
+    const controller = new AppUpdateController(null, presenter, runtime);
+    await controller.check(true);
+    expect(calls).toEqual(["unavailable"]);
+  });
+
   it("reports interactive availability without making automatic checks noisy", async () => {
     const automatic = fixture();
     const automaticCheck = automatic.controller.check(false);

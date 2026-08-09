@@ -128,7 +128,9 @@ function showUpdateMessage(options: Electron.MessageBoxOptions): Promise<Electro
 
 function createAppUpdateController(): AppUpdateController {
   nativeAutoUpdater.on("before-quit-for-update", () => { allowClose = true; });
-  return new AppUpdateController(updateClient, {
+  const supported = process.platform === "darwin" || process.platform === "win32";
+  const packaged = app.isPackaged;
+  return new AppUpdateController(packaged && supported ? updateClient : null, {
     unavailable: (currentVersion) => showUpdateMessage({
       type: "info",
       title: "Bordeaux updates",
@@ -177,8 +179,8 @@ function createAppUpdateController(): AppUpdateController {
       return !projectDirty && result.response === 1 ? "restart" : "later";
     },
   }, {
-    packaged: app.isPackaged,
-    supported: process.platform === "darwin" || process.platform === "win32",
+    packaged,
+    supported,
     currentVersion: app.getVersion(),
     isProjectDirty: () => dirty,
     warn: (message, error) => console.warn(message, error),
