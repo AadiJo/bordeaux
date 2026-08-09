@@ -68,6 +68,19 @@ describe("fixed-path reachability", () => {
     });
   });
 
+  it("classifies a boundary above its local cap as invalid input", () => {
+    const result = solveReachabilityProfile(input({
+      velocityLimits: [1, 10, 10],
+      startVelocity: 2,
+    }));
+
+    expect(result).toMatchObject({
+      status: "invalid-input",
+      iterations: 0,
+      reason: "Start velocity exceeds the local velocity limit.",
+    });
+  });
+
   it("classifies an unreachable goal velocity as infeasible", () => {
     const result = solveReachabilityProfile(input({
       positions: [0, 1],

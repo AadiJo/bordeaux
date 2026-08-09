@@ -70,10 +70,10 @@ export function solveReachabilityProfile(input: ReachabilityInput): Reachability
   const goalSquared = input.goalVelocity ** 2;
   const boundaryTolerance = 1e-8;
   if (startSquared > velocitySquaredLimits[0] + boundaryTolerance) {
-    return { status: "infeasible", velocities: [], iterations: 0, reason: "Start velocity exceeds the local velocity limit." };
+    return invalid("Start velocity exceeds the local velocity limit.");
   }
   if (goalSquared > velocitySquaredLimits[count - 1] + boundaryTolerance) {
-    return { status: "infeasible", velocities: [], iterations: 0, reason: "Goal velocity exceeds the local velocity limit." };
+    return invalid("Goal velocity exceeds the local velocity limit.");
   }
 
   const controllable = new Array<number>(count);
