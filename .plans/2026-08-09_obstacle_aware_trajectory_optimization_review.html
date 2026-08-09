@@ -15,7 +15,7 @@
 <!-- Optional: issue numbers this plan closes on ship, e.g. content="3,7". They
      auto-close when the plan is marked done (`lab done … --commit`). -->
 <meta name="thelab:addresses" content="">
-<meta name="thelab:version" content="1">
+<meta name="thelab:version" content="2">
 <meta name="thelab:hosted-url" content="https://thelab.wilsonzach.com/project/bordeaux/review/obstacle-aware-trajectory-optimization-review">
 <!-- Optional owner questions. Add 1–8 entries; each needs 2–8 options. -->
 <script type="application/json" id="thelab-questions">[]</script>
@@ -75,7 +75,7 @@
   <section class="plan-links">
     <div class="tbl-scroll"><table class="data">
       <tr><td>Project</td><td>bordeaux</td></tr>
-      <tr><td>Version</td><td id="thelab-version">v1</td></tr>
+      <tr><td>Version</td><td id="thelab-version">v2</td></tr>
       <tr><td>Status</td><td><span class="status st-done">done</span> · 2026-08-09</td></tr>
     </table></div>
   </section>
@@ -95,7 +95,7 @@
   </ul>
 
   <h2>Observed behavior</h2>
-  <p>The current LeftAuto2 fixture found a bounded refinement from 12.121 s to 11.996 s with a maximum centerline shift of 0.048 m during a read-only benchmark. Results now require the configured clearance, so a stricter target can intentionally return unchanged rather than silently accepting less clearance.</p>
+  <p>With collision avoidance set to 0 m, the current LeftAuto2 fixture found a bounded refinement from 12.121 s to 12.000 s with a maximum centerline shift of 0.045 m during a read-only benchmark. Its existing 0.032 m obstacle clearance does not satisfy the safer 0.05 m default, so that setting intentionally returns unchanged rather than silently accepting less clearance.</p>
   <div class="callout"><strong>Claim boundary:</strong> the result is the fastest valid candidate found within 72 deterministic evaluations of fixed-direction Bezier handles. It is not a global-optimality certificate.</div>
 
   <h2>Risks &amp; mitigations</h2>
