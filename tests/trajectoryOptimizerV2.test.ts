@@ -121,6 +121,36 @@ describe("drivetrain projection", () => {
 });
 
 describe("dense optimized trajectory validation", () => {
+  it("checks angular limits for short ranges that only overlap an interval", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.startVel = 1;
+    path.goalVel = 1;
+    path.constraints.maxAngVel = 720;
+    path.constraints.maxAngAccel = 1_000;
+    path.waypoints = buildWaypoints([{ x: 0, y: 0 }, { x: 1, y: 0 }]);
+    path.ranges = [{
+      anchor: "param",
+      f0: 0.4,
+      f1: 0.6,
+      maxVel: 4,
+      maxAccel: 5,
+      maxDecel: 5,
+      maxAngVel: 60,
+      maxAngAccel: 1_000,
+    }];
+    const samples = [
+      { i: 0, t: 0, s: 0, f: 0, x: 0, y: 0, headingRad: 0, velocityMps: 1, accelerationMps2: 0, angularVelocityRadps: 0, curvatureInvM: 0 },
+      { i: 1, t: 1, s: 1, f: 1, x: 1, y: 0, headingRad: 2, velocityMps: 1, accelerationMps2: 0, angularVelocityRadps: 2, curvatureInvM: 0 },
+    ];
+
+    const validation = validateOptimizedTrajectory({ path, robot: project.robot }, samples);
+
+    expect(validation.violations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "angular-velocity", sampleIndex: 1 }),
+    ]));
+  });
+
   it("refines an under-resolved path until dense validation passes", () => {
     const project = createDemoProject();
     const path = project.paths[0];

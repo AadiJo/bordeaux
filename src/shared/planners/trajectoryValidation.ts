@@ -50,15 +50,32 @@ function tolerance(limit: number, absolute = 1e-3, relative = 2e-3): number {
 }
 
 function angularLimitsAt(input: PlannerInput, ranges: readonly EffectiveRange[], fraction: number) {
+  return angularLimitsForRanges(input, activeRanges(ranges, fraction));
+}
+
+function angularLimitsForRanges(input: PlannerInput, ranges: readonly EffectiveRange[]) {
   let velocity = input.path.constraints.maxAngVel * DEG;
   let acceleration = input.path.constraints.maxAngAccel * DEG;
   let deceleration = (input.path.constraints.maxAngDecel ?? input.path.constraints.maxAngAccel) * DEG;
-  for (const range of activeRanges(ranges, fraction)) {
+  for (const range of ranges) {
     velocity = Math.min(velocity, range.maxAngVel * DEG);
     acceleration = Math.min(acceleration, range.maxAngAccel * DEG);
     deceleration = Math.min(deceleration, range.maxAngAccel * DEG);
   }
   return { velocity, acceleration, deceleration };
+}
+
+function angularLimitsForInterval(
+  input: PlannerInput,
+  ranges: readonly EffectiveRange[],
+  before: number,
+  after: number,
+) {
+  const start = Math.min(before, after);
+  const end = Math.max(before, after);
+  return angularLimitsForRanges(input, ranges.filter((range) => (
+    Math.min(end, range.end) - Math.max(start, range.start) >= -EPSILON
+  )));
 }
 
 function pushViolation(
@@ -257,14 +274,23 @@ export function validateOptimizedTrajectory(
     }
 
     if (!skipsAngularForInterval(index)) {
-      const angular = angularLimitsAt(input, ranges, midpoint.f);
+      const angular = angularLimitsForInterval(input, ranges, before.f, after.f);
       const omegaBefore = before.angularVelocityRadps;
       const omegaAfter = after.angularVelocityRadps;
       const dt = after.t - before.t;
+      const omega = Math.abs(omegaAfter);
+      if (omega > angular.velocity + tolerance(angular.velocity, 2e-3, 0.02)) {
+        pushViolation(violations, "angular-velocity", index + 1, omega, angular.velocity, false, "Angular velocity");
+      }
       const angularAcceleration = Math.abs(dt > EPSILON ? (omegaAfter - omegaBefore) / dt : 0);
-      const angularAccelerationLimit = Math.abs(omegaAfter) >= Math.abs(omegaBefore)
-        ? angular.acceleration
-        : angular.deceleration;
+      const reversing = Math.sign(omegaAfter) !== 0
+        && Math.sign(omegaBefore) !== 0
+        && Math.sign(omegaAfter) !== Math.sign(omegaBefore);
+      const angularAccelerationLimit = reversing
+        ? Math.min(angular.acceleration, angular.deceleration)
+        : Math.abs(omegaAfter) >= Math.abs(omegaBefore)
+          ? angular.acceleration
+          : angular.deceleration;
       if (angularAcceleration > angularAccelerationLimit + tolerance(angularAccelerationLimit, 2e-3, 0.02)) {
         pushViolation(violations, "angular-acceleration", index + 1, angularAcceleration, angularAccelerationLimit, true, "Angular acceleration");
         refinableIntervals.add(index);
