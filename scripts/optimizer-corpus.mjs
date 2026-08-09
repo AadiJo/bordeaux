@@ -115,9 +115,21 @@ function unsupportedJerkCase() {
   };
 }
 
+function longPathCase() {
+  const project = createDemoProject();
+  const path = project.paths[0];
+  path.headingMode = 'tangent';
+  path.waypoints = buildWaypoints(Array.from({ length: 91 }, (_unused, index) => ({
+    x: 0.7 + index * 0.16,
+    y: 3 + Math.sin(index * 0.22) * 0.35,
+    segType: 'line',
+  })));
+  return { name: 'long-path', input: { path, robot: project.robot }, expectedStatuses: ['optimal'], stress: true };
+}
+
 export function optimizerCorpus() {
   return [
     demoCase(), curvedCase(), constrainedStopCase(), rotatingSwerveCase(), physicalTankCase(),
-    translationPriorityCase(), stationaryActionCase(), unsupportedJerkCase(),
+    translationPriorityCase(), stationaryActionCase(), longPathCase(), unsupportedJerkCase(),
   ];
 }
