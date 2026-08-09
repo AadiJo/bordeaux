@@ -57,7 +57,56 @@ describe("planner correctness boundaries", () => {
       else expect(-acceleration).toBeLessThanOrEqual(path.constraints.maxDecel + 0.002);
     }
     expect(result.optimization?.constraintViolations).toBe(0);
+    expect(result.optimization?.status).toBe("feasible");
+    expect(result.optimization?.iterations).toBe((result.samples.length - 1) * 2);
     expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
+  });
+
+  it("reports invalid boundary conditions without disguising them as a planner fallback", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.startVel = 2;
+    path.goalVel = 0;
+    path.constraints = {
+      ...path.constraints,
+      maxVel: 4,
+      maxAccel: 1,
+      maxDecel: 0.1,
+      maxAngVel: 360,
+      maxAngAccel: 720,
+    };
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 1 },
+      { x: 1.1, y: 1, stop: true },
+    ]);
+
+    const result = optimizedTrajectoryPlanner.generate({ path, robot: project.robot });
+
+    expect(result.planner).toBe("optimizedTrajectory");
+    expect(result.optimization).toMatchObject({
+      status: "invalid-input",
+      fallback: false,
+    });
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        severity: "error",
+        message: expect.stringContaining("Optimized trajectory is invalid-input"),
+      }),
+    ]));
+  });
+
+  it("produces deterministic samples without iterative smoothing passes", () => {
+    const project = createDemoProject();
+    const input = { path: project.paths[0], robot: project.robot };
+
+    const first = optimizedTrajectoryPlanner.generate({ ...input, smoothingPasses: 0 });
+    const second = optimizedTrajectoryPlanner.generate({ ...input, smoothingPasses: 8 });
+
+    expect(first.optimization?.status).toBe("feasible");
+    expect(second.optimization?.status).toBe("feasible");
+    expect(second.samples).toEqual(first.samples);
+    expect(second.markers).toEqual(first.markers);
   });
 
   it.each([
@@ -106,6 +155,32 @@ describe("planner correctness boundaries", () => {
       else expect(-acceleration).toBeLessThanOrEqual(0.102);
     }
     expect(result.optimization?.constraintViolations).toBe(0);
+    expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
+  });
+
+  it("enforces partial constraint ranges on both endpoints of overlapping intervals", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 1, nextC: { x: 2, y: 1 } },
+      { x: 5, y: 1, prevC: { x: 4, y: 1 }, nextC: { x: 7, y: 1 }, stop: true },
+      { x: 11, y: 1, prevC: { x: 9, y: 1 } },
+    ]);
+    path.ranges = [{
+      anchor: "param",
+      f0: 0.2,
+      f1: 0.8,
+      maxVel: 1.5,
+      maxAccel: 1,
+      maxDecel: 1,
+      maxAngVel: 360,
+      maxAngAccel: 720,
+    }];
+
+    const result = optimizedTrajectoryPlanner.generate({ path, robot: project.robot });
+
+    expect(result.optimization).toMatchObject({ status: "feasible", constraintViolations: 0 });
     expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
   });
 
