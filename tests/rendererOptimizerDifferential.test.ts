@@ -18,6 +18,8 @@ interface RendererDerived {
     totalTimeS?: number;
     maxVelocityMps?: number;
     maxAccelerationMps2?: number;
+    translationPriorityStart?: number | null;
+    activeConstraints?: string[];
   };
   rev: boolean;
 }
@@ -109,6 +111,7 @@ describe("static renderer optimizer mirror", () => {
       expect(preview.optimization?.plannerUsed, `planner for seed ${seed}`).toBe(shared.optimization?.plannerUsed);
       expect(preview.optimization?.refinementPasses, `refinement for seed ${seed}`).toBe(shared.optimization?.refinementPasses);
       expect(preview.optimization?.constraintViolations, `violations for seed ${seed}`).toBe(shared.optimization?.constraintViolations);
+      expect(preview.optimization?.activeConstraints, `active constraints for seed ${seed}`).toEqual(shared.optimization?.activeConstraints);
       expect(preview.optimization?.solveTimeMs, `solve time for seed ${seed}`).toBeGreaterThanOrEqual(0);
       expect(preview.sample.pts, `sample count for seed ${seed}`).toHaveLength(shared.samples.length);
       expect(preview.prof.totalTime, `time for seed ${seed}`).toBeCloseTo(shared.totalTimeS, 3);
@@ -158,6 +161,102 @@ describe("static renderer optimizer mirror", () => {
     const stationaryShared = getPlanner("optimizedTrajectory").generate({ path: stationaryPath, robot: stationaryProject.robot, samplesPerSegment: 56 });
     expect(stationaryPreview.optimization?.status).toBe("optimal");
     expect(stationaryPreview.prof.totalTime).toBeCloseTo(stationaryShared.totalTimeS, 1);
+  });
+
+  it("recognizes translation-priority heading-transition windows", () => {
+    const renderer = rendererMath();
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.constraints.maxAngVel = 60;
+    path.constraints.maxAngAccel = 120;
+    path.constraints.maxAngDecel = 120;
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      {
+        x: 4, y: 2, theta: 0, thetaOn: true, segType: "line", segmentHeadingMode: "manual",
+        headingTransition: { placement: "after", rotationPriority: "translation", distanceM: 1.5 },
+      },
+      { x: 8, y: 2, theta: 180, thetaOn: true },
+    ]);
+
+    const preview = renderer.derivePath(path, project.robot, 56, "optimizedTrajectory");
+    const shared = getPlanner("optimizedTrajectory").generate({ path, robot: project.robot, samplesPerSegment: 56 });
+
+    expect(preview.optimization?.translationPriorityStart).toBeTypeOf("number");
+    expect(preview.optimization?.status).toBe(shared.optimization?.status);
+    expect(preview.optimization?.activeConstraints).toEqual(shared.optimization?.activeConstraints);
+    expect(preview.prof.totalTime).toBeCloseTo(shared.totalTimeS, 4);
+    preview.metrics.v.forEach((velocity, index) => {
+      expect(velocity, `velocity ${index}`).toBeCloseTo(shared.samples[index].velocityMps, 3);
+    });
+  });
+
+  it("matches active swerve-module attribution while rotating", () => {
+    const renderer = rendererMath();
+    const project = createDemoProject();
+    project.robot.driveModel = {
+      motorId: "differential-test",
+      motorFreeRpm: 5_000,
+      gearRatio: 6,
+      wheelDiameterM: 0.1,
+      wheelbaseM: 0.6,
+      trackwidthM: 0.8,
+    };
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.constraints = {
+      ...path.constraints,
+      maxVel: 5,
+      maxAccel: 10,
+      maxDecel: 10,
+      maxAngVel: 2_000,
+      maxAngAccel: 4_000,
+    };
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 1, theta: 0, thetaOn: true },
+      { x: 6, y: 1, theta: 180, thetaOn: true },
+    ]);
+
+    const preview = renderer.derivePath(path, project.robot, 56, "optimizedTrajectory");
+    const shared = getPlanner("optimizedTrajectory").generate({ path, robot: project.robot, samplesPerSegment: 56 });
+
+    expect(preview.optimization?.activeConstraints).toEqual(shared.optimization?.activeConstraints);
+    expect(preview.optimization?.activeConstraints).toEqual(expect.arrayContaining([
+      expect.stringContaining("swerve-"),
+    ]));
+  });
+
+  it("matches a physical tank trajectory", () => {
+    const renderer = rendererMath();
+    const project = createDemoProject();
+    project.robot.drive = "tank";
+    project.robot.driveModel = {
+      motorId: "differential-test",
+      motorFreeRpm: 5_000,
+      gearRatio: 6,
+      wheelDiameterM: 0.1,
+      wheelbaseM: 0.6,
+      trackwidthM: 0.8,
+    };
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 1, nextC: { x: 3, y: 1 }, segType: "bezier" },
+      { x: 5, y: 4, prevC: { x: 3, y: 4 }, nextC: { x: 7, y: 4 }, segType: "bezier", stop: true },
+      { x: 9, y: 2, prevC: { x: 7, y: 2 } },
+    ]);
+
+    const preview = renderer.derivePath(path, project.robot, 56, "optimizedTrajectory");
+    const shared = getPlanner("optimizedTrajectory").generate({ path, robot: project.robot, samplesPerSegment: 56 });
+
+    expect(preview.optimization?.status).toBe(shared.optimization?.status);
+    expect(preview.optimization?.activeConstraints).toEqual(shared.optimization?.activeConstraints);
+    expect(preview.prof.totalTime).toBeCloseTo(shared.totalTimeS, 3);
+    expect(preview.metrics.v).toHaveLength(shared.samples.length);
+    preview.metrics.v.forEach((velocity, index) => {
+      expect(velocity, `tank velocity ${index}`).toBeCloseTo(shared.samples[index].velocityMps, 3);
+    });
   });
 });
 
