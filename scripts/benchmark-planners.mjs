@@ -82,6 +82,8 @@ const rows = [demoCase(), curvedCase(), constrainedStopCase()].map(({ name, inpu
     samples: optimized.result.samples.length,
     status: optimized.result.optimization?.status ?? "missing",
     violations: optimized.result.optimization?.constraintViolations ?? -1,
+    refinementPasses: optimized.result.optimization?.refinementPasses ?? -1,
+    validatedPoints: optimized.result.optimization?.validatedPoints ?? -1,
     profiledTimeS: profiledTime.toFixed(4),
     optimizedTimeS: optimizedTime.toFixed(4),
     timeDeltaPct: `${(((optimizedTime / profiledTime) - 1) * 100).toFixed(1)}%`,

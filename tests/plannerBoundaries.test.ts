@@ -57,8 +57,9 @@ describe("planner correctness boundaries", () => {
       else expect(-acceleration).toBeLessThanOrEqual(path.constraints.maxDecel + 0.002);
     }
     expect(result.optimization?.constraintViolations).toBe(0);
-    expect(result.optimization?.status).toBe("feasible");
+    expect(result.optimization?.status).toBe("optimal");
     expect(result.optimization?.iterations).toBe((result.samples.length - 1) * 2);
+    expect(result.optimization?.validatedPoints).toBe(result.samples.length * 2 - 1);
     expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
   });
 
@@ -103,8 +104,8 @@ describe("planner correctness boundaries", () => {
     const first = optimizedTrajectoryPlanner.generate({ ...input, smoothingPasses: 0 });
     const second = optimizedTrajectoryPlanner.generate({ ...input, smoothingPasses: 8 });
 
-    expect(first.optimization?.status).toBe("feasible");
-    expect(second.optimization?.status).toBe("feasible");
+    expect(first.optimization?.status).toBe("optimal");
+    expect(second.optimization?.status).toBe("optimal");
     expect(second.samples).toEqual(first.samples);
     expect(second.markers).toEqual(first.markers);
   });
@@ -195,7 +196,7 @@ describe("planner correctness boundaries", () => {
 
     const result = optimizedTrajectoryPlanner.generate({ path, robot: project.robot });
 
-    expect(result.optimization).toMatchObject({ status: "feasible", constraintViolations: 0 });
+    expect(result.optimization).toMatchObject({ status: "optimal", constraintViolations: 0 });
     expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
   });
 
