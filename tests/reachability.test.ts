@@ -107,6 +107,21 @@ describe("fixed-path reachability", () => {
     });
   });
 
+  it("rejects an under-resolved moving interval between stopped boundaries", () => {
+    const result = solveReachabilityProfile(input({
+      positions: [0, 1],
+      velocityLimits: [10, 10],
+      accelerationLimits: [1],
+      decelerationLimits: [1],
+      freeSpeeds: [10],
+    }));
+
+    expect(result).toMatchObject({
+      status: "invalid-input",
+      reason: "Path interval 0 must include a moving sample between stopped boundaries.",
+    });
+  });
+
   it("is deterministic for identical normalized input", () => {
     const request = input({
       positions: [0, 0.25, 1.5, 3],

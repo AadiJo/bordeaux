@@ -109,6 +109,21 @@ describe("planner correctness boundaries", () => {
     expect(second.markers).toEqual(first.markers);
   });
 
+  it("rejects an under-resolved moving path instead of returning an enormous duration", () => {
+    const project = createDemoProject();
+    const result = optimizedTrajectoryPlanner.generate({
+      path: project.paths[0],
+      robot: project.robot,
+      samplesPerSegment: 1,
+    });
+
+    expect(result.optimization?.status).toBe("invalid-input");
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ message: expect.stringContaining("moving sample between stopped boundaries") }),
+    ]));
+    expect(result.totalTimeS).toBeLessThan(1);
+  });
+
   it.each([
     ["param", { anchor: "param", f0: 0, f1: 1 }],
     ["distance", { anchor: "dist", f0: 0.4, f1: 0.6, d0: 0, d1: 9 }],

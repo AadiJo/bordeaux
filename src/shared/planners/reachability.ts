@@ -107,6 +107,18 @@ export function solveReachabilityProfile(input: ReachabilityInput): Reachability
   }
   speedSquared[count - 1] = goalSquared;
 
+  for (let index = 0; index < count - 1; index += 1) {
+    const distance = input.positions[index + 1] - input.positions[index];
+    if (distance > EPSILON && speedSquared[index] + speedSquared[index + 1] <= EPSILON) {
+      return {
+        status: "invalid-input",
+        velocities: [],
+        iterations: (count - 1) * 2,
+        reason: `Path interval ${index} must include a moving sample between stopped boundaries.`,
+      };
+    }
+  }
+
   return {
     status: "optimal",
     velocities: speedSquared.map((value) => Math.sqrt(Math.max(0, value))),

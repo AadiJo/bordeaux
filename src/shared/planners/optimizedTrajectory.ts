@@ -102,7 +102,10 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
         ...base,
         planner: "profiledSpline",
         diagnostics: [...base.diagnostics, issue],
-        optimization: diagnostics(input, base.samples, solveTimeMs, "invalid-input", 0, fallbackReason),
+        optimization: {
+          ...diagnostics(input, base.samples, solveTimeMs, "invalid-input", 0, fallbackReason),
+          plannerUsed: "profiledSpline",
+        },
       };
     }
 
@@ -138,11 +141,30 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
         "feasible",
         reachability.iterations,
       );
-      const constraintIssue: ValidationIssue[] = optimization.constraintViolations > 0 ? [{
-        severity: "error",
-        path: `paths.${input.path.name}.planner`,
-        message: `Optimized trajectory has ${optimization.constraintViolations} final linear constraint violation${optimization.constraintViolations === 1 ? "" : "s"}.`,
-      }] : [];
+      if (optimization.constraintViolations > 0) {
+        const fallbackReason = `Fixed-path optimizer produced ${optimization.constraintViolations} final linear constraint violation${optimization.constraintViolations === 1 ? "" : "s"}.`;
+        const issue: ValidationIssue = {
+          severity: "warning",
+          path: `paths.${input.path.name}.planner`,
+          message: `Optimized trajectory fell back to profiled spline: ${fallbackReason}`,
+        };
+        return {
+          ...base,
+          planner: "profiledSpline",
+          diagnostics: [...base.diagnostics, issue],
+          optimization: {
+            ...diagnostics(
+              input,
+              base.samples,
+              performance.now() - started,
+              "internal-error",
+              reachability.iterations,
+              fallbackReason,
+            ),
+            plannerUsed: "profiledSpline",
+          },
+        };
+      }
 
       return {
         planner: "optimizedTrajectory",
@@ -150,7 +172,7 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
         totalDistanceM: base.totalDistanceM,
         samples,
         markers: base.markers.map((marker) => ({ ...marker, timeS: R(timeAtFraction(samples, marker.fraction), 4) })),
-        diagnostics: [...base.diagnostics, ...constraintIssue],
+        diagnostics: base.diagnostics,
         optimization,
       };
     } catch (error) {
@@ -164,7 +186,10 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
         ...base,
         planner: "profiledSpline",
         diagnostics: [...base.diagnostics, issue],
-        optimization: diagnostics(input, base.samples, performance.now() - started, "internal-error", 0, fallbackReason),
+        optimization: {
+          ...diagnostics(input, base.samples, performance.now() - started, "internal-error", 0, fallbackReason),
+          plannerUsed: "profiledSpline",
+        },
       };
     }
   },
