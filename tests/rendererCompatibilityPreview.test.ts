@@ -7,8 +7,10 @@ interface Point { x: number; y: number }
 
 function rendererMath() {
   const window: Record<string, unknown> = {};
-  const source = fs.readFileSync(new URL("../public/renderer/assets/path-math.js", import.meta.url), "utf8");
-  vm.runInNewContext(source, { window, console, Math, Number, Set, Map, Infinity, isFinite });
+  for (const asset of ["trajectory-optimizer.js", "path-math.js"]) {
+    const source = fs.readFileSync(new URL(`../public/renderer/assets/${asset}`, import.meta.url), "utf8");
+    vm.runInNewContext(source, { window, console, Math, Number, Set, Map, Infinity, isFinite, Error, Array, Object });
+  }
   return window.PM as {
     derivePath(path: unknown, robot: unknown, perSegment: number, plannerId: string): {
       sample: { pts: Array<Point & { s: number }>; length: number };
@@ -60,7 +62,9 @@ describe("renderer application", () => {
   it("contains planner failures and retains the last valid preview", () => {
     const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
     expect(app).toContain("const lastDerived = useRef(null)");
-    expect(app).toContain("derivation.error && h('div'");
+    expect(app).toContain("previewError && h('div'");
+    expect(app).toContain("new window.OptimizedPreviewController()");
+    expect(app).toContain("derivePath(doc, robot, PERSEG, 'profiledSpline')");
     expect(app).toContain("class AppErrorBoundary");
   });
 
