@@ -1109,13 +1109,14 @@
       } else invalidJiggle = true;
     }
     const profileOptions = { stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, dwell, turns, jiggles, freeSpeed: cap, motorMaxSpeed: hardLimits ? cap : 0 };
-    const profiled = profile(pts, doc.constraints, sv, gv, profileOptions);
+    const movementProfileOptions = { ...profileOptions, dwell: [], turns: [], jiggles: [] };
+    const profiled = profile(pts, doc.constraints, sv, gv, movementProfileOptions);
     let prof = profiled;
     let optimization;
     if (plannerId === 'optimizedTrajectory' && window.TrajectoryOptimizer) {
       const result = window.TrajectoryOptimizer.optimize(doc, robot, pts, head, profiled, effRanges, wpIdx, headingTransitions);
       if (result.status === 'optimal' || result.status === 'feasible') {
-        prof = profile(pts, doc.constraints, sv, gv, { ...profileOptions, velocityOverride: result.velocities, timeOverride: result.times });
+        prof = profile(pts, doc.constraints, sv, gv, { ...movementProfileOptions, velocityOverride: result.velocities, timeOverride: result.times });
         optimization = { ...result, iterations: internal.iterations + result.iterations, refinementPasses: internal.refinementPasses, validatedPoints: pts.length * 2 - 1, constraintViolations: 0, fallback: false };
       } else if (result.refinable && internal.refinementPasses < 2
         && (nWp - 1) <= Math.floor((250000 - 1) / (perSeg * 2))) {
@@ -1152,6 +1153,19 @@
         activeConstraints: Array.from(new Set([...(optimization.activeConstraints || []), ...followedValidation.activeConstraints])).sort(),
       };
     }
+    let incompatibleTurnIndex = -1;
+    doc.waypoints.forEach((waypoint, waypointIndex) => {
+      if (incompatibleTurnIndex >= 0 || !waypoint.turnInPlace || waypointIndex >= nWp - 1) return;
+      const boundary = wpIdx[waypointIndex];
+      let movingIndex = boundary + 1;
+      while (movingIndex < pts.length
+        && Math.abs(pts[movingIndex].s - pts[boundary].s) <= 1e-6
+        && Math.hypot(pts[movingIndex].x - pts[boundary].x, pts[movingIndex].y - pts[boundary].y) <= 1e-5) movingIndex++;
+      const outgoing = movingIndex < trackedHead.length ? trackedHead[movingIndex] : null;
+      if (outgoing == null || Math.abs(angWrap(outgoing - waypoint.turnInPlace.headingDeg * D2R)) > 2 * D2R) incompatibleTurnIndex = waypointIndex;
+    });
+    const appliedProfileOptions = incompatibleTurnIndex >= 0 ? movementProfileOptions : profileOptions;
+    prof = profile(pts, doc.constraints, sv, gv, { ...appliedProfileOptions, velocityOverride: prof.v, timeOverride: prof.t });
     appendTerminalHeadingCatchup(doc, prof, trackedHead, head, effRanges);
     const anchors = mode === 'tank' ? [] : buildAnchors(pts.map((p, i) => ({ f: total > 1e-6 ? p.s / total : 0, rad: trackedHead[i] })));
     const mtr = metrics(pts, prof, anchors, mode);
@@ -1177,6 +1191,7 @@
     });
     if (invalidJiggle) checks.push({ f: 1, kind: 'jiggle', level: 'error', text: 'Jiggle directions must be unique and stay on the field' });
     if (unsupportedJiggle) checks.push({ f: 1, kind: 'jiggle', level: 'error', text: 'Arbitrary-direction jiggle requires swerve drive' });
+    if (incompatibleTurnIndex >= 0) checks.push({ f: wpFrac[incompatibleTurnIndex], kind: 'turn', level: 'error', text: 'Interior turn heading must match the outgoing segment heading' });
     if (prof.headingCatchupFailed) checks.push({ f: 1, kind: 'rotation', level: 'error', text: 'Final heading cannot settle within the trajectory sample limit' });
     // Rotation limiting is expected planner behavior, so report it as a note.
     if (prof.rotLimited) {

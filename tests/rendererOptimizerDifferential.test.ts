@@ -157,9 +157,15 @@ describe("static renderer optimizer mirror", () => {
       { x: 4, y: 2, theta: 90, thetaOn: true, stop: true, wait: 0.12, segType: "line", segmentHeadingMode: "manual", turnInPlace: { headingDeg: 90 } },
       { x: 6, y: 2, theta: 90, thetaOn: true },
     ]);
+    stationaryPath.ranges = [{
+      anchor: "param", f0: 0, f1: 1,
+      maxVel: 4, maxAccel: 5, maxDecel: 5, maxAngVel: 360, maxAngAccel: 720,
+      rotationPriority: "translation",
+    }];
     const stationaryPreview = renderer.derivePath(stationaryPath, stationaryProject.robot, 56, "optimizedTrajectory");
     const stationaryShared = getPlanner("optimizedTrajectory").generate({ path: stationaryPath, robot: stationaryProject.robot, samplesPerSegment: 56 });
     expect(stationaryPreview.optimization?.status).toBe("optimal");
+    expect(stationaryPreview.optimization?.activeConstraints).toEqual(stationaryShared.optimization?.activeConstraints);
     expect(stationaryPreview.prof.totalTime).toBeCloseTo(stationaryShared.totalTimeS, 1);
   });
 

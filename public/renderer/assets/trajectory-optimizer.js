@@ -443,7 +443,7 @@
     }
     for (let index = 0; index < points.length - 1; index++) {
       const distance = points[index + 1].s - points[index].s;
-      if (distance <= EPSILON || stationaryTurn(points[index]) || stationaryTurn(points[index + 1])) continue;
+      if (distance <= EPSILON) continue;
       const dt = times[index + 1] - times[index];
       const acceleration = (velocities[index + 1] ** 2 - velocities[index] ** 2) / (2 * distance);
       const speed = Math.sqrt(Math.max(0, (velocities[index] ** 2 + velocities[index + 1] ** 2) * 0.5));
@@ -452,8 +452,10 @@
       const angular = angularLimits(doc, ranges.filter((range) => overlaps(range, points[index].f, points[index + 1].f)));
       const reversing = Math.sign(omegas[index + 1]) && Math.sign(omegas[index]) && Math.sign(omegas[index + 1]) !== Math.sign(omegas[index]);
       const alphaLimit = reversing ? Math.min(angular.acceleration, angular.deceleration) : Math.abs(omegas[index + 1]) >= Math.abs(omegas[index]) ? angular.acceleration : angular.deceleration;
-      if (Math.abs(alpha) > alphaLimit + tolerance(alphaLimit, 2e-3, 0.02)) violations.push({ kind: 'angular-acceleration', index: index + 1, measured: Math.abs(alpha), limit: alphaLimit });
-      if (alphaLimit > EPSILON && Math.abs(alpha) >= alphaLimit * SAFETY) active.add('angular-acceleration');
+      if (!stationaryTurn(points[index]) && !stationaryTurn(points[index + 1])) {
+        if (Math.abs(alpha) > alphaLimit + tolerance(alphaLimit, 2e-3, 0.02)) violations.push({ kind: 'angular-acceleration', index: index + 1, measured: Math.abs(alpha), limit: alphaLimit });
+        if (alphaLimit > EPSILON && Math.abs(alpha) >= alphaLimit * SAFETY) active.add('angular-acceleration');
+      }
       const linear = limitsForRanges(doc, robot, ranges.filter((range) => overlaps(range, points[index].f, points[index + 1].f)));
       const midpoint = interpolate(points[index], points[index + 1]);
       evaluateModule(midpoint, robot, speed, acceleration, omega, alpha).forEach((module) => {
