@@ -320,6 +320,8 @@
     const projectHist = useRef({ past: [], future: [] });
     const autosaveRevision = useRef(0);
     const lastDerived = useRef(null);
+    const optimizedPreviewController = useRef(null);
+    const [optimizedPreview, setOptimizedPreview] = useState(null);
     const [, force] = useState(0);
 
     useEffect(() => {
@@ -408,12 +410,37 @@
 
     // ---- derived path data ----
     const derivation = useMemo(() => {
-      try { return { value: window.PM.derivePath(doc, robot, PERSEG, selectedPlannerId), error: null }; }
+      try { return { value: window.PM.derivePath(doc, robot, PERSEG, 'profiledSpline'), error: null }; }
       catch (error) { return { value: null, error }; }
+    }, [doc, robot]);
+    useEffect(() => {
+      if (!optimizedPreviewController.current && window.OptimizedPreviewController) {
+        optimizedPreviewController.current = new window.OptimizedPreviewController();
+      }
+      const controller = optimizedPreviewController.current;
+      if (selectedPlannerId !== 'optimizedTrajectory' || !controller) {
+        if (controller) controller.cancel();
+        setOptimizedPreview(null);
+        return undefined;
+      }
+      setOptimizedPreview(null);
+      controller.request(
+        { path: doc, robot, perSegment: PERSEG },
+        (value) => setOptimizedPreview({ sourceDoc: doc, sourceRobot: robot, value, error: null }),
+        (error) => setOptimizedPreview({ sourceDoc: doc, sourceRobot: robot, value: null, error }),
+      );
+      return () => controller.cancel();
     }, [doc, robot, selectedPlannerId]);
     if (derivation.value) lastDerived.current = derivation.value;
     if (!lastDerived.current) throw derivation.error || new Error('Could not derive the active path');
-    const derived = derivation.value || lastDerived.current;
+    const currentOptimizedPreview = selectedPlannerId === 'optimizedTrajectory'
+      && optimizedPreview
+      && optimizedPreview.sourceDoc === doc
+      && optimizedPreview.sourceRobot === robot
+      ? optimizedPreview
+      : null;
+    const derived = (currentOptimizedPreview && currentOptimizedPreview.value) || derivation.value || lastDerived.current;
+    const previewError = derivation.error || (currentOptimizedPreview && currentOptimizedPreview.error);
 
     useEffect(() => { setTimes((t) => (t[doc.id] === derived.prof.totalTime ? t : { ...t, [doc.id]: derived.prof.totalTime })); }, [derived, doc.id]);
 
@@ -541,7 +568,7 @@
       const prepared = prepareWaypointInsertion(p, segmentHint, onPath, selectedVisit);
       if (prepared.previewRequired) {
         try {
-          const previewDerived = window.PM.derivePath(prepared.doc, robot, PERSEG, selectedPlannerId);
+          const previewDerived = window.PM.derivePath(prepared.doc, robot, PERSEG, 'profiledSpline');
           const message = 'Splitting this ' + prepared.segmentType + ' may rebuild its geometry. Review the dashed path first.';
           setWaypointPreview({ ...prepared, derived: previewDerived, plannerId: selectedPlannerId, message });
         } catch (error) {
@@ -592,7 +619,7 @@
 
       if (segmentType === 'clothoid') {
         try {
-          const previewDerived = window.PM.derivePath(candidate, robot, PERSEG, selectedPlannerId);
+          const previewDerived = window.PM.derivePath(candidate, robot, PERSEG, 'profiledSpline');
           const message = 'The new clothoid join may rebuild the previous turn. Review the dashed path first.';
           setWaypointPreview({ doc: candidate, index: oldCount, derived: previewDerived, plannerId: selectedPlannerId, message, actionLabel: 'Place endpoint' });
         } catch (error) {
@@ -1075,10 +1102,10 @@
     const agentProposalPreviews = useMemo(() => agentCandidates.flatMap((candidate) => {
       if (!candidate.path) return [];
       try {
-        return [{ id: candidate.id, label: candidate.label, selected: candidate.id === (agentCandidate && agentCandidate.id), valid: candidate.valid !== false, derived: window.PM.derivePath(candidate.path, robot, PERSEG, plannerId) }];
+        return [{ id: candidate.id, label: candidate.label, selected: candidate.id === (agentCandidate && agentCandidate.id), valid: candidate.valid !== false, derived: window.PM.derivePath(candidate.path, robot, PERSEG, 'profiledSpline') }];
       }
       catch (_) { return []; }
-    }), [agentProposal, agentCandidateId, robot, plannerId]);
+    }), [agentProposal, agentCandidateId, robot]);
     const rejectAgentProposal = useCallback(() => {
       if (!agentProposal) return;
       if (window.bordeauxAPI && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(agentProposal.id, 'rejected');
@@ -1349,9 +1376,9 @@
               h(window.Panels.Outline, { open: outlineOpen, setOpen: setOutlineOpen, doc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot })),
             h('div', { className: 'fieldcol' },
               h(window.Panels.ToolRail, { tool, setTool }),
-              derivation.error && h('div', { className: 'insert-preview derivation-error', role: 'alert' },
-                h('div', { className: 'insert-preview-copy' }, h('b', null, 'Path preview unavailable'), h('span', null, derivation.error.message || String(derivation.error))),
-                h('span', null, 'Showing the last valid preview. Undo or edit the selected geometry.')),
+              previewError && h('div', { className: 'insert-preview derivation-error', role: 'alert' },
+                h('div', { className: 'insert-preview-copy' }, h('b', null, selectedPlannerId === 'optimizedTrajectory' ? 'Optimized preview unavailable' : 'Path preview unavailable'), h('span', null, previewError.message || String(previewError))),
+                h('span', null, selectedPlannerId === 'optimizedTrajectory' ? 'Showing the immediate profiled preview.' : 'Showing the last valid preview. Undo or edit the selected geometry.')),
               h(window.FieldView, { doc, derived, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, playTime, playing, actions: fieldActions, onSelPos, showHandles: true }),
               tool !== 'select' && !waypointPreview && h('div', { className: 'stage-hint', dangerouslySetInnerHTML: { __html: toolHint(tool) } }),
               waypointPreview && h('div', { className: 'insert-preview', role: 'region', 'aria-label': 'Preview waypoint insertion' },
