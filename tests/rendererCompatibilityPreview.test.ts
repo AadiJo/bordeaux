@@ -65,6 +65,7 @@ describe("renderer application", () => {
     expect(app).toContain("previewError && h('div'");
     expect(app).toContain("new window.OptimizedPreviewController()");
     expect(app).toContain("derivePath(doc, robot, PERSEG, 'profiledSpline')");
+    expect(app).toContain("currentOptimizedPreview.value.optimization.status !== 'optimal'");
     expect(app).toContain("class AppErrorBoundary");
   });
 

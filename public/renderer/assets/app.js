@@ -440,7 +440,18 @@
       ? optimizedPreview
       : null;
     const derived = (currentOptimizedPreview && currentOptimizedPreview.value) || derivation.value || lastDerived.current;
-    const previewError = derivation.error || (currentOptimizedPreview && currentOptimizedPreview.error);
+    const optimizationFailure = currentOptimizedPreview
+      && currentOptimizedPreview.value
+      && currentOptimizedPreview.value.optimization
+      && currentOptimizedPreview.value.optimization.status !== 'optimal'
+      ? currentOptimizedPreview.value.optimization
+      : null;
+    const previewError = derivation.error
+      || (currentOptimizedPreview && currentOptimizedPreview.error)
+      || (optimizationFailure && {
+        message: 'Optimized trajectory is ' + optimizationFailure.status + ': '
+          + (optimizationFailure.fallbackReason || optimizationFailure.reason || 'the authored constraints could not be satisfied.'),
+      });
 
     useEffect(() => { setTimes((t) => (t[doc.id] === derived.prof.totalTime ? t : { ...t, [doc.id]: derived.prof.totalTime })); }, [derived, doc.id]);
 
