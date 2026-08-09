@@ -418,19 +418,28 @@
         optimizedPreviewController.current = new window.OptimizedPreviewController();
       }
       const controller = optimizedPreviewController.current;
-      if (selectedPlannerId !== 'optimizedTrajectory' || !controller) {
+      const shadow = window.BordeauxOptimizerShadow;
+      const shadowEnabled = !!(shadow && shadow.enabled());
+      if ((selectedPlannerId !== 'optimizedTrajectory' && !shadowEnabled) || !controller) {
         if (controller) controller.cancel();
         setOptimizedPreview(null);
         return undefined;
       }
       setOptimizedPreview(null);
+      const shadowMode = selectedPlannerId === 'optimizedTrajectory' ? 'optimized-opt-in' : 'profiled-shadow';
       controller.request(
         { path: doc, robot, perSegment: PERSEG },
-        (value) => setOptimizedPreview({ sourceDoc: doc, sourceRobot: robot, value, error: null }),
-        (error) => setOptimizedPreview({ sourceDoc: doc, sourceRobot: robot, value: null, error }),
+        (value) => {
+          if (shadowEnabled) shadow.record({ mode: shadowMode, profiled: derivation.value, optimized: value });
+          if (selectedPlannerId === 'optimizedTrajectory') setOptimizedPreview({ sourceDoc: doc, sourceRobot: robot, value, error: null });
+        },
+        (error) => {
+          if (shadowEnabled) shadow.recordWorkerError(shadowMode);
+          if (selectedPlannerId === 'optimizedTrajectory') setOptimizedPreview({ sourceDoc: doc, sourceRobot: robot, value: null, error });
+        },
       );
       return () => controller.cancel();
-    }, [doc, robot, selectedPlannerId]);
+    }, [doc, robot, selectedPlannerId, derivation.value]);
     if (derivation.value) lastDerived.current = derivation.value;
     if (!lastDerived.current) throw derivation.error || new Error('Could not derive the active path');
     const currentOptimizedPreview = selectedPlannerId === 'optimizedTrajectory'
