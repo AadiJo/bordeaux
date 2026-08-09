@@ -7,10 +7,29 @@ import {
   robotFootprintVertices,
   verticalLineSection,
 } from "../src/shared/agent/robotFootprint";
-import { createDemoProject } from "../src/shared/project/defaults";
+import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
 import { validateProject } from "../src/shared/validation";
 
 describe("robot footprint geometry", () => {
+  it("validates bounded geometry-refinement provenance", () => {
+    const project = createDemoProject();
+    const geometry = project.paths[0].waypoints.map((waypoint) => ({
+      x: waypoint.x,
+      y: waypoint.y,
+      ...(waypoint.prevC ? { prevC: waypoint.prevC } : {}),
+      ...(waypoint.nextC ? { nextC: waypoint.nextC } : {}),
+    }));
+    project.paths[0].geometryRefinement = { version: 1, anchor: geometry, applied: geometry.map((waypoint) => ({ ...waypoint })) };
+    expect(validateProject(project).ok).toBe(true);
+
+    project.paths[0].waypoints = buildWaypoints([{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 1 }]);
+    expect(validateProject(project).ok).toBe(true);
+
+    project.paths[0].geometryRefinement.applied.push({ ...geometry[0] });
+    expect(validateProject(project).issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "$.paths[0].geometryRefinement", message: expect.stringContaining("same waypoint count") }),
+    ]));
+  });
   it("validates path-local keep-out bounds and stable IDs", () => {
     const project = createDemoProject();
     project.paths[0].keepOuts = [{ id: "keepout_one", name: "Partner lane", min: { x: 2, y: 2 }, max: { x: 3, y: 3 } }];

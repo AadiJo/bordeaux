@@ -16,6 +16,46 @@
   const clone = (value) => JSON.parse(JSON.stringify(value));
   const distance = (first, second) => Math.hypot(first.x - second.x, first.y - second.y);
 
+  function geometrySnapshot(path) {
+    return path.waypoints.map((waypoint) => ({
+      x: waypoint.x,
+      y: waypoint.y,
+      ...(waypoint.prevC ? { prevC: clone(waypoint.prevC) } : {}),
+      ...(waypoint.nextC ? { nextC: clone(waypoint.nextC) } : {}),
+    }));
+  }
+
+  function samePoint(first, second) {
+    return first && second && Math.abs(first.x - second.x) <= 1e-9 && Math.abs(first.y - second.y) <= 1e-9;
+  }
+
+  function sameGeometry(first, second) {
+    return Array.isArray(first) && Array.isArray(second) && first.length === second.length
+      && first.every((waypoint, index) => {
+        const other = second[index];
+        return samePoint(waypoint, other)
+          && ((!waypoint.prevC && !other.prevC) || samePoint(waypoint.prevC, other.prevC))
+          && ((!waypoint.nextC && !other.nextC) || samePoint(waypoint.nextC, other.nextC));
+      });
+  }
+
+  function validGeometry(snapshot, waypointCount) {
+    return Array.isArray(snapshot) && snapshot.length === waypointCount
+      && snapshot.every((waypoint) => samePoint(waypoint, waypoint)
+        && (!waypoint.prevC || samePoint(waypoint.prevC, waypoint.prevC))
+        && (!waypoint.nextC || samePoint(waypoint.nextC, waypoint.nextC)));
+  }
+
+  function applyGeometry(path, snapshot) {
+    path.waypoints.forEach((waypoint, index) => {
+      const geometry = snapshot[index];
+      waypoint.x = geometry.x;
+      waypoint.y = geometry.y;
+      if (geometry.prevC) waypoint.prevC = clone(geometry.prevC); else delete waypoint.prevC;
+      if (geometry.nextC) waypoint.nextC = clone(geometry.nextC); else delete waypoint.nextC;
+    });
+  }
+
   function pointSegmentDistance(point, start, end) {
     const dx = end.x - start.x, dy = end.y - start.y;
     const lengthSquared = dx * dx + dy * dy;
@@ -142,8 +182,17 @@
       official: clearanceM,
       keepOut: hasKeepOuts ? clearanceM : -Infinity,
     };
-    const referenceRoute = window.PM.sample(authored.waypoints, Math.max(48, perSegment * 2)).pts;
-    const handles = movableHandles(authored);
+    const currentGeometry = geometrySnapshot(authored);
+    const savedRefinement = authored.geometryRefinement;
+    const anchorGeometry = savedRefinement && savedRefinement.version === 1
+      && sameGeometry(savedRefinement.applied, currentGeometry)
+      && validGeometry(savedRefinement.anchor, currentGeometry.length)
+      ? clone(savedRefinement.anchor) : currentGeometry;
+    const searchOrigin = clone(authored);
+    applyGeometry(searchOrigin, anchorGeometry);
+    delete searchOrigin.geometryRefinement;
+    const referenceRoute = window.PM.sample(searchOrigin.waypoints, Math.max(48, perSegment * 2)).pts;
+    const handles = movableHandles(searchOrigin);
     if (handles.length === 0) return { status: 'unchanged', reason: 'The path has no movable Bezier handles.' };
 
     const baselineAllowed = baselineClearance.official >= requiredClearance.official - 1e-6
@@ -163,14 +212,16 @@
     const starts = [];
     seedPatterns.forEach((scaleAt, seedIndex) => {
       if (evaluations >= MAX_EVALUATIONS) return;
-      const seed = clone(authored);
-      handles.forEach((handle, index) => {
-        const waypoint = authored.waypoints[handle.waypoint];
-        const authoredLength = distance(waypoint, waypoint[handle.key]);
-        setLength(seed, handle, Math.max(0.05, Math.min(handle.chord * 1.5, authoredLength * scaleAt(index))));
-      });
+      const seed = clone(searchOrigin);
+      if (seedIndex !== 0) {
+        handles.forEach((handle, index) => {
+          const waypoint = searchOrigin.waypoints[handle.waypoint];
+          const authoredLength = distance(waypoint, waypoint[handle.key]);
+          setLength(seed, handle, Math.max(0.05, Math.min(handle.chord * 1.5, authoredLength * scaleAt(index))));
+        });
+      }
       evaluations += 1;
-      const evaluation = seedIndex === 0 && baselineAllowed
+      const evaluation = seedIndex === 0 && baselineAllowed && sameGeometry(geometrySnapshot(seed), currentGeometry)
         ? { derived: baseline, maxDeviationM: 0, clearance: baselineClearance }
         : evaluate(seed, robot, perSegment, referenceRoute, corridorM, requiredClearance);
       if (!evaluation) return;
@@ -239,6 +290,11 @@
         reason: `No material time improvement was found within the ${corridorM.toFixed(2)} m route corridor.`,
       };
     }
+    bestPath.geometryRefinement = {
+      version: 1,
+      anchor: clone(anchorGeometry),
+      applied: geometrySnapshot(bestPath),
+    };
     return {
       status: 'candidate',
       path: bestPath,

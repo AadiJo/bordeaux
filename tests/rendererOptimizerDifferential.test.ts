@@ -467,7 +467,13 @@ describe("explicit geometry refinement", () => {
         expect(first.x * second.x + first.y * second.y).toBeGreaterThan(0);
       }
     });
-  });
+
+    const repeated = rendererGeometryOptimizer().refine(result.path!, project.robot, 56, { corridorM: 0.15 });
+    expect(repeated.status).toBe("unchanged");
+    expect(repeated.path).toBeUndefined();
+    expect(result.path?.geometryRefinement?.anchor).toHaveLength(path.waypoints.length);
+    expect(result.path?.geometryRefinement?.applied).toHaveLength(path.waypoints.length);
+  }, 12_000);
 
   it("matches shared robot-footprint clearance for field obstacles and path keep-outs", () => {
     const project = createDemoProject();

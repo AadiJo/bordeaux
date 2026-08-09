@@ -305,6 +305,20 @@ export interface KeepOutRegion {
   max: ControlPoint;
 }
 
+/** Geometry-only snapshot used to keep explicit refinement anchored and repeatable. */
+export interface GeometryWaypointSnapshot {
+  x: number;
+  y: number;
+  prevC?: ControlPoint;
+  nextC?: ControlPoint;
+}
+
+export interface GeometryRefinementProvenance {
+  version: 1;
+  anchor: GeometryWaypointSnapshot[];
+  applied: GeometryWaypointSnapshot[];
+}
+
 export interface PathDoc {
   id: string;
   name: string;
@@ -314,6 +328,8 @@ export interface PathDoc {
   ranges: ConstraintRange[];
   /** User-authored field regions excluded from geometry optimization and path analysis. */
   keepOuts?: KeepOutRegion[];
+  /** Fixed authored origin and last applied result for idempotent geometry refinement. */
+  geometryRefinement?: GeometryRefinementProvenance;
   constraints: PathConstraints;
   headingMode?: HeadingMode;
   /** Robot-side following policy. Omitted for backwards-compatible time following. */

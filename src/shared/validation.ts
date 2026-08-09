@@ -460,6 +460,35 @@ function validateProjectInner(project: unknown): ValidationResult {
           });
         }
       }
+      if (path.geometryRefinement !== undefined) {
+        const refinementBase = `${base}.geometryRefinement`;
+        const refinement = path.geometryRefinement;
+        if (!isRecord(refinement)) issues.push(issue(refinementBase, "Geometry refinement provenance must be an object"));
+        else {
+          if (refinement.version !== 1) issues.push(issue(`${refinementBase}.version`, "Geometry refinement provenance version must be 1"));
+          const snapshotLengths: number[] = [];
+          (["anchor", "applied"] as const).forEach((name) => {
+            const snapshots = refinement[name];
+            const snapshotsBase = `${refinementBase}.${name}`;
+            if (!Array.isArray(snapshots) || snapshots.length < 2 || snapshots.length > MAX_PATH_ITEMS) {
+              issues.push(issue(snapshotsBase, `Geometry refinement snapshot must contain 2 to ${MAX_PATH_ITEMS} waypoints`));
+              return;
+            }
+            snapshotLengths.push(snapshots.length);
+            snapshots.forEach((snapshot, index) => {
+              const snapshotBase = `${snapshotsBase}[${index}]`;
+              if (!isRecord(snapshot)) return issues.push(issue(snapshotBase, "Geometry refinement waypoint must be an object"));
+              validateFinite(issues, snapshot.x, `${snapshotBase}.x`, "Geometry refinement waypoint x");
+              validateFinite(issues, snapshot.y, `${snapshotBase}.y`, "Geometry refinement waypoint y");
+              if (snapshot.prevC !== undefined) validatePoint(issues, snapshot.prevC, `${snapshotBase}.prevC`, "Geometry refinement incoming handle");
+              if (snapshot.nextC !== undefined) validatePoint(issues, snapshot.nextC, `${snapshotBase}.nextC`, "Geometry refinement outgoing handle");
+            });
+          });
+          if (snapshotLengths.length === 2 && snapshotLengths[0] !== snapshotLengths[1]) {
+            issues.push(issue(refinementBase, "Geometry refinement anchor and applied snapshots must have the same waypoint count"));
+          }
+        }
+      }
       if (Array.isArray(path.targets) && path.targets.length <= MAX_PATH_ITEMS) path.targets.forEach((target, i) => {
         const targetBase = `${base}.targets[${i}]`;
         if (!isRecord(target)) return issues.push(issue(targetBase, "Rotation target must be an object"));
