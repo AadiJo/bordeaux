@@ -1102,10 +1102,10 @@
     const agentProposalPreviews = useMemo(() => agentCandidates.flatMap((candidate) => {
       if (!candidate.path) return [];
       try {
-        return [{ id: candidate.id, label: candidate.label, selected: candidate.id === (agentCandidate && agentCandidate.id), valid: candidate.valid !== false, derived: window.PM.derivePath(candidate.path, robot, PERSEG, 'profiledSpline') }];
+        return [{ id: candidate.id, label: candidate.label, selected: candidate.id === (agentCandidate && agentCandidate.id), valid: candidate.valid !== false, derived: window.PM.derivePath(candidate.path, robot, PERSEG, plannerId) }];
       }
       catch (_) { return []; }
-    }), [agentProposal, agentCandidateId, robot]);
+    }), [agentProposal, agentCandidateId, robot, plannerId]);
     const rejectAgentProposal = useCallback(() => {
       if (!agentProposal) return;
       if (window.bordeauxAPI && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(agentProposal.id, 'rejected');

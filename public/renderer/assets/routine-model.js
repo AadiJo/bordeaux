@@ -134,12 +134,12 @@
   function countSteps(routine) { let n = 0; walk(routine.nodes, () => n++); return n; }
 
   // ---- derive a path-bearing node into a field trajectory ----
-  function derivePathNode(node, paths, robot) {
+  function derivePathNode(node, paths, robot, plannerId) {
     let doc = null;
     if (node.type === 'path') doc = paths.find((path) => path.id === node.ref);
     else if (node.type === 'function' && node.cat === 'generate' && node.preview) doc = node.preview;
     if (!doc) return null;
-    const d = window.PM.derivePath(doc, robot, 56, 'profiledSpline');
+    const d = window.PM.derivePath(doc, robot, 56, plannerId);
     return { doc, deriv: d, pts: d.sample.pts, total: d.prof.totalTime || 0 };
   }
 
@@ -169,7 +169,7 @@
     let t = 0, pIdx = 0; const steps = []; const segs = []; let lastPose = null;
     flat.forEach((it) => {
       if (it.kind === 'path' || it.kind === 'gen') {
-        const dp = derivePathNode(it.node, paths, robot);
+        const dp = derivePathNode(it.node, paths, robot, plannerId);
         if (!dp || dp.pts.length < 2) { steps.push({ ...it, t0: t, t1: t, dur: 0 }); return; }
         const t0 = t, dur = dp.total, t1 = t + dur;
         pIdx += 1;
