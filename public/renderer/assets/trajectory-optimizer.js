@@ -97,7 +97,9 @@
 
   function overlaps(range, before, after) {
     const start = Math.min(before, after), end = Math.max(before, after);
-    const low = Math.min(range.f0, range.f1), high = Math.max(range.f0, range.f1);
+    const first = range.f0 != null ? range.f0 : range.start;
+    const second = range.f1 != null ? range.f1 : range.end;
+    const low = Math.min(first, second), high = Math.max(first, second);
     return Math.min(end, high) - Math.max(start, low) >= -EPSILON;
   }
 
@@ -267,9 +269,11 @@
     return Math.max(absolute == null ? 1e-3 : absolute, Math.abs(limit) * (relative == null ? 2e-3 : relative));
   }
 
-  function validate(doc, robot, points, linear, intervalProjections, velocities, times, omegas, ranges, skipAngularFrom) {
+  function validate(doc, robot, points, linear, pointProjections, intervalProjections, velocities, times, omegas, ranges, skipAngularFrom) {
     const violations = [], active = new Set();
     const add = (kind, index, measured, limit, refinable) => violations.push({ kind, index, measured, limit, refinable });
+    const stationaryTurn = (point) => point.stop && point.waypointIndex != null
+      && doc.waypoints[point.waypointIndex] && doc.waypoints[point.waypointIndex].turnInPlace;
     const expectedStart = doc.waypoints[0].stop ? 0 : Math.min(linear.points[0].velocity, Math.max(0, doc.startVel || 0));
     const expectedGoal = doc.waypoints[doc.waypoints.length - 1].stop ? 0 : Math.min(linear.points[linear.points.length - 1].velocity, Math.max(0, doc.goalVel || 0));
     if (Math.abs(velocities[0] - expectedStart) > tolerance(expectedStart, 2e-4, 2e-4)) add('boundary-velocity', 0, velocities[0], expectedStart, false);
@@ -278,6 +282,12 @@
       const limit = Math.min(linear.points[index].velocity, linear.intervals[index - 1] ? linear.intervals[index - 1].velocity : Infinity, linear.intervals[index] ? linear.intervals[index].velocity : Infinity);
       if (velocities[index] > limit + tolerance(limit, 1e-4, 1e-4)) add('linear-velocity', index, velocities[index], limit, false);
       if (velocities[index] >= limit * SAFETY) active.add('linear-velocity');
+      const drivetrainLimit = pointProjections[index].velocityLimit;
+      if (drivetrainLimit > EPSILON && velocities[index] >= drivetrainLimit * SAFETY) active.add('drivetrain-velocity');
+      if ((skipAngularFrom == null || index < skipAngularFrom) && !stationaryTurn(points[index])) {
+        const angular = angularLimits(doc, activeRanges(ranges, points[index].f));
+        if (angular.velocity > EPSILON && Math.abs(omegas[index]) >= angular.velocity * SAFETY) active.add('angular-velocity');
+      }
     }
     for (let index = 0; index < points.length - 1; index++) {
       const distance = points[index + 1].s - points[index].s;
@@ -289,11 +299,24 @@
       const motor = interval.acceleration * Math.max(0, Math.min(1, 1 - velocities[index] / interval.freeSpeed));
       if (acceleration >= 0 && acceleration > motor + tolerance(motor, 2e-3, 0.01)) add('linear-acceleration', index + 1, acceleration, motor, true);
       if (acceleration < 0 && -acceleration > interval.deceleration + tolerance(interval.deceleration, 2e-3, 0.01)) add('linear-deceleration', index + 1, -acceleration, interval.deceleration, true);
+      if (acceleration >= 0 && motor > EPSILON && acceleration >= motor * SAFETY) active.add('linear-acceleration');
+      if (acceleration < 0 && interval.deceleration > EPSILON && -acceleration >= interval.deceleration * SAFETY) active.add('linear-deceleration');
       const bounds = accelerationBounds(intervalProjections[index].accelerationConstraints, speedSquared);
       if (!bounds || acceleration < bounds.minimum - tolerance(Math.abs(bounds ? bounds.minimum : 0)) || acceleration > bounds.maximum + tolerance(Math.abs(bounds ? bounds.maximum : 0))) add('drivetrain-acceleration', index + 1, Math.abs(acceleration), bounds ? Math.max(Math.abs(bounds.minimum), Math.abs(bounds.maximum)) : 0, true);
       const speed = Math.sqrt(Math.max(0, speedSquared));
       if (speed > intervalProjections[index].velocityLimit + tolerance(intervalProjections[index].velocityLimit)) add('drivetrain-velocity', index + 1, speed, intervalProjections[index].velocityLimit, true);
-      const stationaryTurn = (point) => point.stop && point.waypointIndex != null && doc.waypoints[point.waypointIndex] && doc.waypoints[point.waypointIndex].turnInPlace;
+      intervalProjections[index].velocityConstraints.forEach((constraint) => {
+        if (constraint.limit > EPSILON && constraint.coefficient * speed >= constraint.limit * SAFETY) active.add(constraint.label);
+      });
+      if (bounds) {
+        intervalProjections[index].accelerationConstraints.forEach((constraint) => {
+          const measured = Math.hypot(
+            constraint.uX * acceleration + constraint.xX * speedSquared,
+            constraint.uY * acceleration + constraint.xY * speedSquared,
+          );
+          if (measured >= constraint.limit * SAFETY) active.add(constraint.label);
+        });
+      }
       if ((skipAngularFrom == null || index + 1 < skipAngularFrom) && !stationaryTurn(points[index]) && !stationaryTurn(points[index + 1])) {
         const angular = angularLimits(doc, ranges.filter((range) => overlaps(range, points[index].f, points[index + 1].f)));
         const omegaAfter = omegas[index + 1];
@@ -303,6 +326,7 @@
         const reversing = Math.sign(omegaAfter) && Math.sign(omegaBefore) && Math.sign(omegaAfter) !== Math.sign(omegaBefore);
         const alphaLimit = reversing ? Math.min(angular.acceleration, angular.deceleration) : Math.abs(omegaAfter) >= Math.abs(omegaBefore) ? angular.acceleration : angular.deceleration;
         if (alpha > alphaLimit + tolerance(alphaLimit, 2e-3, 0.02)) add('angular-acceleration', index + 1, alpha, alphaLimit, true);
+        if (alphaLimit > EPSILON && alpha >= alphaLimit * SAFETY) active.add('angular-acceleration');
       }
     }
     return { violations, activeConstraints: Array.from(active).sort() };
@@ -318,7 +342,7 @@
       x: R(point.x, 4),
       y: R(point.y, 4),
     }));
-    const boundaryHead = head.map((heading) => R(heading, 5));
+    const boundaryHead = head.map((heading) => R(heading + (doc.driveBackward ? Math.PI : 0), 5));
     const points = canonicalState(doc, boundaryPoints, boundaryHead, waypointIndices);
     const linear = {
       points: points.map((point) => limitsForRanges(doc, robot, activeRanges(ranges, point.f))),
@@ -326,6 +350,7 @@
     };
     const translationStart = translationPriorityStart(ranges, transitions, points);
     const pointProjections = points.map((point, index) => project(point, robot, (doc.constraints.maxCentripetalAccel || Math.min(linear.intervals[index - 1] ? linear.intervals[index - 1].acceleration : Infinity, linear.intervals[index] ? linear.intervals[index].acceleration : Infinity)) * SAFETY));
+    const validationPointProjections = points.map((point, index) => project(point, robot, doc.constraints.maxCentripetalAccel || Math.min(linear.intervals[index - 1] ? linear.intervals[index - 1].acceleration : Infinity, linear.intervals[index] ? linear.intervals[index].acceleration : Infinity)));
     const intervalProjections = points.slice(1).map((point, index) => project(interpolate(points[index], point), robot, (doc.constraints.maxCentripetalAccel || linear.intervals[index].acceleration) * SAFETY));
     const validationProjections = points.slice(1).map((point, index) => project(interpolate(points[index], point), robot, doc.constraints.maxCentripetalAccel || linear.intervals[index].acceleration));
     const angularIntervalLimits = points.slice(1).map((point, index) => {
@@ -356,7 +381,7 @@
     });
     if (solved.status !== 'optimal') return solved;
     const remapped = timing(points, solved.velocities);
-    const validation = validate(doc, robot, points, linear, validationProjections, remapped.velocities, remapped.times, remapped.omegas, ranges, translationStart);
+    const validation = validate(doc, robot, points, linear, validationPointProjections, validationProjections, remapped.velocities, remapped.times, remapped.omegas, ranges, translationStart);
     return {
       status: validation.violations.length ? 'internal-error' : translationStart == null ? 'optimal' : 'feasible',
       velocities: remapped.velocities,
@@ -376,6 +401,7 @@
       const offsetY = sin * module.x + cos * module.y;
       const perpendicularX = -offsetY, perpendicularY = offsetX;
       return {
+        label: module.label,
         speed: Math.hypot(point.tangentX * velocity + omega * perpendicularX, point.tangentY * velocity + omega * perpendicularY),
         acceleration: Math.hypot(
           point.tangentX * acceleration + point.curvature * point.normalX * velocity ** 2 + alpha * perpendicularX - omega ** 2 * offsetX,
@@ -394,13 +420,14 @@
       x: R(point.x, 4),
       y: R(point.y, 4),
     }));
-    const points = canonicalState(doc, boundaryPoints, trackedHead, waypointIndices);
+    const physicalHead = trackedHead.map((heading) => heading + (doc.driveBackward ? Math.PI : 0));
+    const points = canonicalState(doc, boundaryPoints, physicalHead, waypointIndices);
     const velocities = profile.v.map((velocity) => R(velocity, 4));
     const times = profile.t.map((time) => R(time, 4));
     const omegas = points.map((point, index) => index === 0
       ? 0
       : (point.heading - points[index - 1].heading) / Math.max(EPSILON, times[index] - times[index - 1]));
-    const violations = [];
+    const violations = [], active = new Set();
     const stationaryTurn = (point) => point.stop && point.waypointIndex != null
       && doc.waypoints[point.waypointIndex] && doc.waypoints[point.waypointIndex].turnInPlace;
     for (let index = 0; index < points.length; index++) {
@@ -408,8 +435,10 @@
       if (!stationaryTurn(points[index]) && Math.abs(omegas[index]) > angular.velocity + tolerance(angular.velocity, 2e-3, 0.02)) {
         violations.push({ kind: 'angular-velocity', index, measured: Math.abs(omegas[index]), limit: angular.velocity });
       }
+      if (!stationaryTurn(points[index]) && angular.velocity > EPSILON && Math.abs(omegas[index]) >= angular.velocity * SAFETY) active.add('angular-velocity');
       evaluateModule(points[index], robot, velocities[index], 0, omegas[index], 0).forEach((module) => {
         if (module.speed > robot.maxSpeed + tolerance(robot.maxSpeed)) violations.push({ kind: 'drivetrain-velocity', index, measured: module.speed, limit: robot.maxSpeed });
+        if (module.speed >= robot.maxSpeed * SAFETY) active.add(module.label);
       });
     }
     for (let index = 0; index < points.length - 1; index++) {
@@ -424,15 +453,17 @@
       const reversing = Math.sign(omegas[index + 1]) && Math.sign(omegas[index]) && Math.sign(omegas[index + 1]) !== Math.sign(omegas[index]);
       const alphaLimit = reversing ? Math.min(angular.acceleration, angular.deceleration) : Math.abs(omegas[index + 1]) >= Math.abs(omegas[index]) ? angular.acceleration : angular.deceleration;
       if (Math.abs(alpha) > alphaLimit + tolerance(alphaLimit, 2e-3, 0.02)) violations.push({ kind: 'angular-acceleration', index: index + 1, measured: Math.abs(alpha), limit: alphaLimit });
+      if (alphaLimit > EPSILON && Math.abs(alpha) >= alphaLimit * SAFETY) active.add('angular-acceleration');
       const linear = limitsForRanges(doc, robot, ranges.filter((range) => overlaps(range, points[index].f, points[index + 1].f)));
       const midpoint = interpolate(points[index], points[index + 1]);
       evaluateModule(midpoint, robot, speed, acceleration, omega, alpha).forEach((module) => {
         const accelerationLimit = doc.constraints.maxCentripetalAccel || linear.acceleration;
         if (module.speed > robot.maxSpeed + tolerance(robot.maxSpeed)) violations.push({ kind: 'drivetrain-velocity', index: index + 1, measured: module.speed, limit: robot.maxSpeed });
         if (module.acceleration > accelerationLimit + tolerance(accelerationLimit)) violations.push({ kind: 'drivetrain-acceleration', index: index + 1, measured: module.acceleration, limit: accelerationLimit });
+        if (module.speed >= robot.maxSpeed * SAFETY || module.acceleration >= accelerationLimit * SAFETY) active.add(module.label);
       });
     }
-    return violations;
+    return { violations, activeConstraints: Array.from(active).sort() };
   }
 
   window.TrajectoryOptimizer = { optimize, validateFollowed };

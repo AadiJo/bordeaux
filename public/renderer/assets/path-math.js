@@ -1133,7 +1133,8 @@
     }
     let trackedHead = headingWithTranslationPriority(doc, robot, pts, prof, head, effRanges, headingTransitions);
     if (optimization && optimization.status === 'feasible') {
-      const violations = window.TrajectoryOptimizer.validateFollowed(doc, robot, pts, trackedHead, prof, effRanges, wpIdx);
+      const followedValidation = window.TrajectoryOptimizer.validateFollowed(doc, robot, pts, trackedHead, prof, effRanges, wpIdx);
+      const violations = followedValidation.violations;
       if (violations.length) {
         prof = profiled;
         trackedHead = headingWithTranslationPriority(doc, robot, pts, prof, head, effRanges, headingTransitions);
@@ -1145,7 +1146,11 @@
           fallback: true,
           fallbackReason: 'Post-rotation renderer validation found ' + violations.length + ' violations.',
         };
-      } else optimization = { ...optimization, status: 'optimal' };
+      } else optimization = {
+        ...optimization,
+        status: 'optimal',
+        activeConstraints: Array.from(new Set([...(optimization.activeConstraints || []), ...followedValidation.activeConstraints])).sort(),
+      };
     }
     appendTerminalHeadingCatchup(doc, prof, trackedHead, head, effRanges);
     const anchors = mode === 'tank' ? [] : buildAnchors(pts.map((p, i) => ({ f: total > 1e-6 ? p.s / total : 0, rad: trackedHead[i] })));
