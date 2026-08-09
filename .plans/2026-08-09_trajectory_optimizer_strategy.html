@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- TheLab metadata (read by the `lab` CLI on publish; do not remove).
+     thelab:plan is the STABLE plan id — re-publishing this file updates the same
+     plan (bumping its version) even if the title changes. -->
+<meta name="thelab:project" content="bordeaux">
+<meta name="thelab:title" content="Trajectory Optimizer Strategy for Bordeaux">
+<meta name="thelab:plan" content="trajectory-optimizer-strategy-for-bordeaux">
+<meta name="thelab:kind" content="plan">
+<meta name="thelab:status" content="active">
+<meta name="thelab:tags" content="trajectory,optimization,planner,research">
+<!-- Optional: issue numbers this plan closes on ship, e.g. content="3,7". They
+     auto-close when the plan is marked done (`lab done … --commit`). -->
+<meta name="thelab:addresses" content="">
+<meta name="thelab:version" content="1">
+<meta name="thelab:hosted-url" content="https://thelab.wilsonzach.com/project/bordeaux/plan/trajectory-optimizer-strategy-for-bordeaux">
+<!-- Optional owner questions. Add 1–8 entries; each needs 2–8 options. -->
+<script type="application/json" id="thelab-questions">
+[
+  {
+    "id": "phase-one-scope",
+    "prompt": "What should the first production optimizer be allowed to change?",
+    "options": [
+      { "id": "timing-only", "label": "Authored geometry stays fixed (recommended)" },
+      { "id": "geometry-and-timing", "label": "Jointly optimize geometry and timing" },
+      { "id": "adopt-trajoptlib", "label": "Adopt TrajoptLib before custom work" }
+    ]
+  },
+  {
+    "id": "native-policy",
+    "prompt": "How much native solver infrastructure should Bordeaux accept?",
+    "options": [
+      { "id": "typescript-first", "label": "TypeScript first; native only if benchmarks require it (recommended)" },
+      { "id": "native-allowed", "label": "Native sidecar or addon is acceptable" }
+    ]
+  }
+]
+</script>
+<title>Trajectory Optimizer Strategy for Bordeaux</title>
+<style>
+  /* Self-contained. Mirrors The Lab reader so the local file looks like the hosted
+     one. This block is NOT published: the hosted view uses The Lab's own reader
+     stylesheet, and only the article content below is published. */
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    background: #0a0a0a; color: #a1a1a1;
+    font-size: 15px; line-height: 1.7; letter-spacing: -0.006em;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 40px 24px 96px; }
+  a { color: #4e9bfa; text-decoration: none; } a:hover { text-decoration: underline; }
+  img { max-width: 100%; height: auto; }
+  h1 { font-size: 30px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.2; color: #ededed; margin-bottom: 8px; }
+  h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.015em; color: #ededed; margin: 56px 0 16px; padding-top: 24px; border-top: 1px solid #222; }
+  h3 { font-size: 14px; font-weight: 600; color: #ededed; margin: 32px 0 12px; }
+  p { margin: 0 0 12px; } strong { color: #ededed; font-weight: 600; }
+  ul, ol { margin: 0 0 12px 22px; } li { margin: 4px 0; }
+  .lede { color: #ededed; font-size: 16px; margin: 4px 0 8px; }
+  code { font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+  pre.code { background: #0d0d0d; border: 1px solid #222; border-radius: 6px; padding: 16px 20px; overflow-x: auto; overflow-wrap: normal; font-size: 12.5px; line-height: 1.65; color: #a1a1a1; tab-size: 2; margin: 16px 0; }
+  .callout { border: 1px solid #222; border-left: 2px solid #4e9bfa; border-radius: 0 6px 6px 0; padding: 14px 20px; margin: 20px 0; font-size: 13.5px; color: #a1a1a1; }
+  .callout strong { color: #ededed; }
+  figure { margin: 16px 0; } figcaption { font-size: 12px; color: #6b6b6b; padding-top: 8px; font-family: ui-monospace, Menlo, monospace; }
+  .fig-scroll { overflow-x: auto; border: 1px solid #222; border-radius: 6px; }
+  .fig-scroll svg { display: block; width: 100%; height: auto; }
+  .tbl-scroll { overflow-x: auto; }
+  table.data { width: 100%; border-collapse: collapse; font-size: 13.5px; margin: 12px 0; }
+  table.data th { text-align: left; font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.07em; color: #6b6b6b; padding: 10px 14px; border-bottom: 1px solid #222; }
+  table.data td { padding: 10px 14px; border-bottom: 1px solid #222; color: #a1a1a1; vertical-align: top; }
+  table.data tr:last-child td { border-bottom: 0; }
+  table.data td:first-child { color: #ededed; white-space: nowrap; }
+  .plan-links { margin: 16px 0 8px; }
+  .plan-links table.data td:first-child { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: #6b6b6b; width: 90px; }
+  .plan-links table.data td:nth-child(2) { color: #ededed; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; word-break: break-all; }
+  .status { display: inline-flex; align-items: center; gap: 7px; }
+  .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; }
+  .st-draft::before { border: 1px solid #6b6b6b; }
+  .st-active::before { background: #4e9bfa; }
+  .st-done::before { background: #ededed; }
+  .st-archived::before { background: #333; }
+  .score-controls { border: 1px solid #222; border-radius: 6px; padding: 16px 20px; margin: 16px 0; }
+  .score-grid { display: grid; grid-template-columns: 1fr 76px; gap: 8px 16px; align-items: center; }
+  .score-grid label { color: #ededed; font-size: 13px; }
+  .score-grid input { width: 100%; accent-color: #4e9bfa; }
+  .score-grid output { color: #ededed; font-family: ui-monospace, Menlo, monospace; text-align: right; }
+  .score-actions { display: flex; gap: 8px; margin-top: 16px; }
+  button { border: 1px solid #333; background: #141414; color: #ededed; border-radius: 5px; padding: 7px 11px; cursor: pointer; }
+  button:hover { border-color: #555; }
+  .rank { color: #ededed; font-variant-numeric: tabular-nums; }
+  .small { color: #6b6b6b; font-size: 12px; }
+  .decision { border-left-color: #ededed; }
+  @media (max-width: 600px) { .score-grid { grid-template-columns: 1fr 60px; } }
+</style>
+</head>
+<body>
+<main class="wrap">
+<article>
+  <h1>Trajectory Optimizer Strategy for Bordeaux</h1>
+
+  <!-- Plan meta: local-file chrome only — `lab publish` strips this whole section
+       from the published body (The Lab renders its own header + metadata rail). The
+       CLI fills the Version cell on publish (v1, v2, …). -->
+  <section class="plan-links">
+    <div class="tbl-scroll"><table class="data">
+      <tr><td>Project</td><td>bordeaux</td></tr>
+      <tr><td>Version</td><td id="thelab-version">v1</td></tr>
+      <tr><td>Status</td><td><span class="status st-active">active</span> · 2026-08-09</td></tr>
+    </table></div>
+  </section>
+
+  <p class="lede">Replace Bordeaux's current “optimized” smoothing pass with a deterministic, fixed-path, time-optimal parameterizer inspired by TOPP-RA; keep full nonlinear geometry optimization as an explicit later tool, not the default planner.</p>
+
+  <div class="callout decision"><strong>Verdict.</strong> Choreo's TrajoptLib + Sleipnir is the best complete open-source FRC trajectory optimizer, but a custom reachability parameterizer is the best product fit for Bordeaux. It preserves the path the user drew, solves in roughly linear time, and can distinguish invalid inputs from numerical failures instead of collapsing both into “unsolvable.”</div>
+
+  <h2>Executive findings</h2>
+  <ul>
+    <li><strong>Sleipnir is not inherently a bad solver.</strong> It is a sparse reverse-mode autodiff and interior-point NLP system. Choreo gives it a difficult, nonconvex, free-time direct-collocation problem with roughly 19 decision variables per swerve sample: pose representation, translational/angular velocity and acceleration, eight module-force components, and timestep. At Choreo's default 50 ms target interval, a normal autonomous path quickly becomes a problem with thousands of variables and constraints.</li>
+    <li><strong>“Unsolvable” often means solver failure, not physical impossibility.</strong> Current Sleipnir exposes distinct statuses for local/global infeasibility, factorization failure, line-search failure, feasibility-restoration failure, nonfinite guesses, divergence, iteration limit, and timeout. Choreo currently treats every negative status as generation failure. Choreo 2026.0.3 explicitly added a fallback for line-search failure and warns that the fallback may still end in feasibility-restoration failure.</li>
+    <li><strong>Bordeaux already owns the geometry.</strong> Its Bezier/line/arc/clothoid geometry, authored stops, heading laws, constraint ranges, rotation-priority behavior, stationary actions, migrations, and Java format are product invariants. A planner that silently moves that geometry is a mismatch.</li>
+    <li><strong>Bordeaux's existing “optimized” planner is not a nonlinear optimizer.</strong> <code>src/shared/planners/optimizedTrajectory.ts</code> starts with <code>profiledSpline</code>, smooths its velocity samples, reprojects acceleration/deceleration envelopes, and remaps timestamps. It does not alter geometry or solve a global optimum.</li>
+    <li><strong>The existing implementation is already computationally cheap, but not faster in trajectory time.</strong> An informal local baseline (30 warm runs, 57–1,345 samples) put the current optimized planner around 0.2–8.4 ms p95, yet its smoothed trajectories were 7–65% longer than <code>profiledSpline</code> in the synthetic cases. This is a baseline observation, not a production benchmark.</li>
+  </ul>
+
+  <h2>What Choreo actually solves</h2>
+  <p>Choreo's swerve generator minimizes the sum of variable timesteps while enforcing discrete kinematics, pose/waypoint constraints, per-module velocity and force norms, net-force dynamics, and net-torque dynamics. That formulation can find a different geometric path between waypoints and makes unusually complete use of the drivetrain. It is also nonconvex because heading is represented with sine/cosine, dynamics multiply state by variable timestep, and obstacle/region constraints reshape the feasible set.</p>
+  <div class="fig-scroll">
+    <svg viewBox="0 0 800 248" role="img" aria-label="Comparison of full nonlinear optimization and fixed-path reachability optimization">
+      <rect x="0" y="0" width="800" height="248" fill="#0d0d0d"/>
+      <text x="30" y="34" fill="#ededed" font-size="14" font-family="system-ui">Choreo / TrajoptLib</text>
+      <text x="430" y="34" fill="#ededed" font-size="14" font-family="system-ui">Recommended Bordeaux core</text>
+      <rect x="30" y="58" width="280" height="42" rx="5" fill="#141414" stroke="#333"/>
+      <text x="50" y="83" fill="#a1a1a1" font-size="12" font-family="system-ui">Waypoints + regions + drivetrain model</text>
+      <path d="M170 100v25" stroke="#555"/>
+      <path d="M165 120l5 7 5-7" fill="none" stroke="#555"/>
+      <rect x="30" y="128" width="280" height="50" rx="5" fill="#141414" stroke="#4e9bfa"/>
+      <text x="50" y="149" fill="#ededed" font-size="12" font-family="system-ui">Full nonlinear direct collocation</text>
+      <text x="50" y="166" fill="#6b6b6b" font-size="11" font-family="system-ui">geometry + heading + forces + time</text>
+      <path d="M170 178v25" stroke="#555"/>
+      <path d="M165 198l5 7 5-7" fill="none" stroke="#555"/>
+      <text x="50" y="226" fill="#a1a1a1" font-size="12" font-family="system-ui">Globally coupled; local numerical convergence</text>
+      <rect x="430" y="58" width="340" height="42" rx="5" fill="#141414" stroke="#333"/>
+      <text x="450" y="83" fill="#a1a1a1" font-size="12" font-family="system-ui">Authored curve + heading law (fixed)</text>
+      <path d="M600 100v25" stroke="#555"/>
+      <path d="M595 120l5 7 5-7" fill="none" stroke="#555"/>
+      <rect x="430" y="128" width="340" height="50" rx="5" fill="#141414" stroke="#4e9bfa"/>
+      <text x="450" y="149" fill="#ededed" font-size="12" font-family="system-ui">Backward reachable set + forward max profile</text>
+      <text x="450" y="166" fill="#6b6b6b" font-size="11" font-family="system-ui">one path-speed state + one acceleration control</text>
+      <path d="M600 178v25" stroke="#555"/>
+      <path d="M595 198l5 7 5-7" fill="none" stroke="#555"/>
+      <text x="450" y="226" fill="#a1a1a1" font-size="12" font-family="system-ui">O(mN); explicit feasible / infeasible result</text>
+    </svg>
+  </div>
+  <p class="small">Sources: Choreo's current <a href="https://github.com/SleipnirGroup/Choreo/blob/9beecedeadde4341ead9d31f409b9231abc944b9/trajoptlib/src/swerve_trajectory_generator.cpp">swerve formulation</a>, Sleipnir's current <a href="https://github.com/SleipnirGroup/Sleipnir/blob/9ad5652d4751f71be47535cc62fcf3e520783fa1/include/sleipnir/optimization/solver/exit_status.hpp">exit statuses</a> and <a href="https://github.com/SleipnirGroup/Sleipnir/blob/9ad5652d4751f71be47535cc62fcf3e520783fa1/include/sleipnir/optimization/solver/options.hpp">solver options</a>, and the <a href="https://github.com/SleipnirGroup/Choreo/releases/tag/v2026.0.3">Choreo 2026.0.3 release notes</a>.</p>
+
+  <h2>Candidate evaluation</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Candidate</th><th>Pros</th><th>Cons / mismatch</th><th>Decision</th></tr></thead>
+    <tbody>
+      <tr><td>TrajoptLib + Sleipnir</td><td>Purpose-built for FRC; swerve and differential dynamics; module force/velocity limits; obstacles; BSD-3-Clause; actively maintained.</td><td>Same solve latency and convergence class the owner dislikes; C++23/Rust native toolchain; per-platform binaries; large full-space problem; authored geometry can move.</td><td>Benchmark oracle and optional import/sidecar spike, not production core.</td></tr>
+      <tr><td>TOPPRA C++</td><td>MIT; active 0.6.9; fixed-path time optimum; reachability algorithm reported 100% success in the paper's experiments; built-in dependency-free 1D/2D Seidel LP solver.</td><td>C++/Eigen packaging; its built-in constraints target robot joints, so Bordeaux still owns swerve/tank constraint projection and likely a maintained adapter/fork.</td><td>Best open-source algorithm/library candidate; prototype against custom TS.</td></tr>
+      <tr><td>Custom TOPP-RA-style core</td><td>Small problem; deterministic; exact fit to Bordeaux ranges, stops, heading priority, and fallback semantics; no native dependency; easy browser/shared differential testing.</td><td>Bordeaux owns numerical edge cases, adaptive discretization, proofs-by-test, and future third-order/jerk work.</td><td><strong>Recommended production path.</strong></td></tr>
+      <tr><td>WPILib-style forward/backward parameterizer</td><td>Very simple, BSD/MIT lineage, predictable, and close to what Bordeaux already does.</td><td>Does not compute controllable sets; spatially varying coupled angular/module limits become ad hoc; less principled infeasibility reporting.</td><td>Fallback and regression baseline only.</td></tr>
+      <tr><td>Ruckig</td><td>MIT, dependency-free C++, sub-millisecond state-to-state jerk-limited motion, enormous randomized stability suite.</td><td>Optimizes independent degrees of freedom and target states, not a field curve with curvature, heading laws, constraint ranges, or drivetrain force allocation. Intermediate-waypoint path behavior is not Bordeaux geometry.</td><td>Potential stationary-action helper only; reject as main planner.</td></tr>
+      <tr><td>CasADi + IPOPT / acados</td><td>Mature autodiff and optimal-control ecosystem; flexible nonlinear models; acados is designed for fast OCP SQP.</td><td>Much larger native stack and build/release surface; still iterative nonlinear convergence; CasADi is LGPL-3.0; problem generation and bindings are a project of their own.</td><td>Reject for Bordeaux unless future MPC becomes a product goal.</td></tr>
+      <tr><td>OSQP / Clarabel sequential convex refinement</td><td>Apache-2.0, warm-startable convex solvers; explicit infeasibility; Clarabel supports SOCP constraints.</td><td>Geometry optimization remains nonconvex across iterations; trust regions, obstacle homotopy, and initial guesses reintroduce local failure modes.</td><td>Good later engine for an explicit “refine geometry” preview tool.</td></tr>
+    </tbody>
+  </table></div>
+  <p class="small">Primary references: <a href="https://arxiv.org/abs/1707.07239">TOPP-RA paper</a> and <a href="https://github.com/hungpham2511/toppra">implementation</a>; <a href="https://github.wpilib.org/allwpilib/docs/2027/java/src-html/edu/wpi/first/math/trajectory/TrajectoryParameterizer.html">WPILib parameterizer source</a>; <a href="https://github.com/pantor/ruckig">Ruckig</a>; <a href="https://web.casadi.org/docs/">CasADi</a> and <a href="https://docs.acados.org/">acados</a>; <a href="https://osqp.org/docs/">OSQP</a>; <a href="https://github.com/oxfordcontrol/Clarabel.rs">Clarabel.rs</a>.</p>
+
+  <h3>Interactive decision model (local file)</h3>
+  <p>Adjust the priorities. Scores are deliberately transparent and directional, not fake precision. The hosted reader does not run inline scripts; the controls work in the local artifact.</p>
+  <div class="score-controls">
+    <div class="score-grid" id="score-controls"></div>
+    <div class="score-actions"><button type="button" id="copy-score">Copy as JSON</button><span class="small" id="copy-status"></span></div>
+  </div>
+  <div class="tbl-scroll"><table class="data" id="score-table">
+    <thead><tr><th>Rank</th><th>Option</th><th>Weighted score</th><th>Interpretation</th></tr></thead><tbody></tbody>
+  </table></div>
+
+  <h2>Recommendation</h2>
+  <p>Build <strong>Optimizer v2</strong> as a path-parameterization engine, not a general-purpose nonlinear program:</p>
+  <ol>
+    <li>Keep the authored planar curve and heading law fixed.</li>
+    <li>Parameterize them by translation arc length <code>s</code>.</li>
+    <li>Use state <code>x = ṡ²</code> and control <code>u = s̈</code>, with discrete progress dynamics <code>x[i+1] = x[i] + 2 Δs u[i]</code>.</li>
+    <li>Project velocity, acceleration, deceleration, centripetal, angular, tank-wheel, and swerve-module constraints onto bounds in <code>(u, x)</code>.</li>
+    <li>Compute backward controllable intervals, then run a forward greedy pass choosing the greatest feasible progress speed. This is the TOPP-RA pattern and is roughly <code>O(mN)</code> for <code>m</code> inequalities and <code>N</code> grid points.</li>
+    <li>Independently validate a denser reconstruction. If a midpoint violates a limit, adaptively insert grid points and resolve. Never report success from solver status alone.</li>
+  </ol>
+  <p>For fixed geometry, several Bordeaux constraints are especially friendly to this formulation. Translation and angular acceleration are affine in <code>(u, x)</code>: <code>q̈ = q′u + q″x</code>. A norm limit on an affine function of the scalar <code>u</code> becomes a quadratic interval that can be solved analytically, so Phase 1 does not need a generic QP/SOCP library. Swerve module speed is proportional to <code>ṡ</code>, so its squared norm gives a direct upper bound on <code>x</code>. Tank left/right wheel speeds and accelerations have the same property.</p>
+  <div class="callout"><strong>Product boundary.</strong> Optimizer v2 optimizes timing and respects authored geometry. A future geometry optimizer must be an explicit clone/preview/apply action, consistent with Bordeaux's rule against silent geometry mutations. It should never be hidden behind the existing <code>optimizedTrajectory</code> planner ID.</div>
+
+  <h2>Result contract: eliminate the word “unsolvable”</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Status</th><th>Meaning</th><th>User behavior</th></tr></thead>
+    <tbody>
+      <tr><td>optimal</td><td>Reachability solution passed independent dense validation.</td><td>Use and export normally; show solve time and active limiting constraints.</td></tr>
+      <tr><td>feasible</td><td>A safe profile passed validation but missed the optimality/refinement budget.</td><td>Use it, label it “Feasible (not fully optimized),” and allow retry at higher quality.</td></tr>
+      <tr><td>invalid-input</td><td>A precise authored conflict exists: impossible boundary velocity, zero-length moving phase, stop/constraint contradiction, nonfinite geometry, etc.</td><td>Point to the exact waypoint/range and proposed manual remedy. Do not retry blindly.</td></tr>
+      <tr><td>infeasible</td><td>The backward reachable set becomes empty and the dense validator confirms the conflict.</td><td>Report the first empty interval, active constraints, and nearest feasible boundary value.</td></tr>
+      <tr><td>cancelled</td><td>A newer edit superseded the solve.</td><td>Silent replacement; never toast as an error.</td></tr>
+      <tr><td>internal-error</td><td>Invariant, arithmetic, worker, or serialization failure.</td><td>Keep the last valid trajectory; visibly fall back to <code>profiledSpline</code>; preserve diagnostics.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Implementation steps</h2>
+  <ol>
+    <li><strong>Phase 0 — freeze the contract and build the corpus (2–3 days).</strong> Add curated fixtures covering swerve/tank, every segment type, manual/targets/tangent/lookAt heading, reverse driving, all range anchors, short ranges between samples, authored interior stops, start/goal velocities, translation/heading priority, turns, waits, jiggles, self-overlaps, and degenerate/invalid cases. Add seeded fuzz generation. Capture current <code>profiledSpline</code> and <code>optimizedTrajectory</code> timing, output time, active limits, and diagnostics.</li>
+    <li><strong>Phase 0.5 — three bounded spikes (3–5 days total).</strong> Run the same corpus through: (a) current TrajoptLib/Sleipnir as a native CLI oracle, (b) TOPPRA C++ with one Bordeaux constraint adapter, and (c) a TypeScript reachability prototype for linear/arc/tangent-heading paths. Stop the comparison once one approach meets the gates below. Do not integrate UI or change project files during the spike.</li>
+    <li><strong>Phase 1 — canonical path-state model (3–4 days).</strong> Extract a typed, immutable sampled path boundary from the current planner: arc length, position, tangent, curvature, unwrapped heading, first/second derivatives, waypoint/sample mapping, effective ranges, stops, and priority policy. Keep geometry generation behavior unchanged. Add numeric differential fixtures for the static renderer mirror.</li>
+    <li><strong>Phase 2 — reachability solver (5–8 days).</strong> Implement velocity caps, forward/reverse acceleration bounds, controllable-interval propagation, forward time-optimal extraction, boundary velocities, authored stop sectioning, and deterministic active-constraint attribution. Start with existing aggregate robot hard limits; add exact tank wheel-speed projection and rectangular-swerve module-speed projection. Use tolerance and scaling constants in one module, not scattered magic numbers.</li>
+    <li><strong>Phase 3 — dense validator and adaptive grid (4–6 days).</strong> Reconstruct at midpoints and extrema; independently evaluate final velocity, acceleration, deceleration, curvature, angular velocity/acceleration, module/wheel speed, and every overlapping range. Refine only offending intervals. Put a strict sample/work ceiling before allocation. A candidate cannot be returned as <code>optimal</code> or <code>feasible</code> without this pass.</li>
+    <li><strong>Phase 4 — Bordeaux motion features (4–6 days).</strong> Preserve heading-priority slowdowns. For translation priority, parameterize translation first and pass timing to the existing bounded angular follower. Preserve the shared stationary postprocessor order <code>arrival → turn → jiggle → wait → departure</code>; do not optimize these phases twice. Remap markers by stable path fraction.</li>
+    <li><strong>Phase 5 — worker and preview integration (4–6 days).</strong> Keep the immediate synchronous <code>profiledSpline</code> preview while dragging, schedule optimized preview in a dedicated Web Worker with generation IDs and cancellation, then swap it in atomically. Use the same typed result contract in shared export/agent code. Route Java export through its existing worker and move any newly heavy analysis calls off Electron's main thread. Preserve only the two supported planner IDs.</li>
+    <li><strong>Phase 6 — mirrored renderer implementation (3–5 days).</strong> Mirror the numeric core in <code>public/renderer</code> only after the shared implementation is stable. Add randomized differential tests comparing position, heading, velocities, timestamps, stops, range attribution, status, and dense validation between the two boundaries.</li>
+    <li><strong>Phase 7 — shadow rollout (3–5 days plus soak).</strong> Behind a non-serialized developer flag, run v2 beside the current planner on the corpus and opt-in projects. Record only local aggregate timings/statuses unless telemetry is separately authorized. Promote v2 behind <code>optimizedTrajectory</code> when the gates pass; retain <code>profiledSpline</code> as a visible safety fallback for one release.</li>
+    <li><strong>Phase 8 — jerk and optional geometry refinement (separate projects).</strong> Treat nonzero translational jerk as a distinct third-order feature: either add a bounded jerk-smoothing pass that re-runs all checks, or explicitly reject it in Optimized until implemented. Explore Clarabel/OSQP sequential-convex geometry refinement only as an explicit cloned preview with Apply/Cancel.</li>
+  </ol>
+
+  <h3>Likely code boundaries</h3>
+  <pre class="code">src/shared/planners/
+  pathState.ts                 # canonical fixed geometry + heading derivatives
+  reachability.ts              # generic controllable interval propagation
+  drivetrainProjection.ts      # swerve/tank bounds in (u, x)
+  trajectoryValidation.ts      # independent dense checks
+  optimizedTrajectory.ts       # orchestration + result/status mapping
+
+src/electron/
+  trajectoryWorker.ts          # cancellation-safe off-thread jobs
+
+public/renderer/assets/
+  planner-worker.js            # async static renderer mirror
+
+tests/fixtures/trajectory-optimizer/
+tests/trajectoryOptimizer*.test.ts
+scripts/benchmark-planners.mts</pre>
+
+  <h2>Spike decision gates</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Gate</th><th>Target</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>Reliability</td><td>0 unexplained failures in curated corpus; ≥99.99% classified outcomes over at least 100,000 seeded fuzz cases.</td><td>“Invalid” must be reproducible and localizable; numerical failure is not ordinary UX.</td></tr>
+      <tr><td>Interactive latency</td><td>Common path p50 ≤10 ms, p95 ≤30 ms; 5,000-sample stress p95 ≤100 ms on each supported reference machine, excluding worker startup.</td><td>Fast enough to land after debounce without the editor feeling modal.</td></tr>
+      <tr><td>Cancellation</td><td>Superseded solve stops or is ignored within 50 ms; stale results never replace newer edits.</td><td>Drag interaction stays interruptible.</td></tr>
+      <tr><td>Constraint safety</td><td>Zero dense-validator violations beyond explicit absolute/relative tolerances; all final linear and angular limits independently checked.</td><td>Solver claims are not trusted without reconstruction.</td></tr>
+      <tr><td>Quality</td><td>Within 2% of a dense TrajoptLib/Sleipnir fixed-geometry oracle on the shared feasible subset; never slower than the current feasible baseline unless enforcing a constraint the baseline missed.</td><td>“Optimized” must have a measurable meaning.</td></tr>
+      <tr><td>Determinism</td><td>Byte-identical serialized trajectory for identical normalized input, platform-independent within serialization precision.</td><td>Stable saves, exports, tests, and debugging.</td></tr>
+      <tr><td>Packaging</td><td>No new native runtime for the preferred path. A native candidate must pass macOS arm64/x64 and Windows x64 packaging, signing, ASAR, crash isolation, and size budgets before it can win.</td><td>Native integration cost is part of solver cost.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Risks &amp; mitigations</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Risk</th><th>Likelihood</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr><td>Path derivatives are noisy at segment boundaries</td><td>medium</td><td>Preserve explicit stops/corners as phase boundaries; use analytic derivatives where available; unwrap heading before differentiation; adaptively refine and validate both sides of every boundary.</td></tr>
+      <tr><td>Aggregate drivetrain model is optimistic</td><td>medium</td><td>Phase 1 is no weaker than today's hard-limit contract. Add exact wheel/module speed first, then a conservative combined translational/angular force envelope. Compare against TrajoptLib oracle before claiming drivetrain-time optimality.</td></tr>
+      <tr><td>Fixed geometry gives a slower path than Choreo can discover</td><td>high</td><td>This is intentional product behavior. Offer explicit geometry refinement later and show predicted time improvement before Apply.</td></tr>
+      <tr><td>Reachability discretization misses a narrow range or peak</td><td>medium</td><td>Insert every authored boundary into the grid; use interval overlap semantics; dense midpoint/extrema checks; recursively refine offending intervals.</td></tr>
+      <tr><td>Renderer/shared copies drift</td><td>medium</td><td>One fixture schema, seeded numeric differential tests, identical rounding/status contracts, and release verification budgets.</td></tr>
+      <tr><td>Jerk limits make the state second-order</td><td>high when enabled</td><td>Do not pretend TOPP-RA's second-order result satisfies jerk. Gate nonzero jerk, add a separately validated smoother, or adopt a third-order reachability algorithm in a later plan.</td></tr>
+      <tr><td>Fallback hides a real defect</td><td>medium</td><td>Fallback only on <code>internal-error</code>; preserve v2 diagnostics and planner-used metadata; invalid/infeasible inputs never silently run another planner.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification</h2>
+  <ul>
+    <li>Focused unit tests for interval algebra, boundary scaling, swerve/tank projections, active-range overlap, stop sectioning, and every result status.</li>
+    <li>Property tests: monotonic <code>s</code>/<code>t</code>, finite samples, nonnegative speed, exact start/goal/stop velocities, tighter constraints never reduce trajectory time, and increased physical limits never increase optimal time.</li>
+    <li>Metamorphic tests: translation/rotation of the whole field, path reversal, uniform unit-safe scaling cases, path rename, duplicate, and serialization round trip.</li>
+    <li>Dense independent validation at 4× the solve grid plus analytic extrema where possible.</li>
+    <li>Cross-boundary randomized differential tests between <code>src/shared</code> and <code>public/renderer</code>.</li>
+    <li>Benchmarks on macOS arm64/x64 and Windows x64 with cold start, warm solve, edit-locality, cancellation, worst-case range count, and long path cases.</li>
+    <li>Before shipping: <code>npm test</code>, <code>npm run typecheck</code>, <code>npm run build</code>, <code>env -u ELECTRON_RUN_AS_NODE npm run test:smoke</code>, release packaging, and <code>npm run verify:package</code> against the packaged manifests.</li>
+  </ul>
+
+  <h2>Open questions</h2>
+  <ul>
+    <li>Should Optimized v2's first production contract be authored-geometry timing only (recommended), or must it be allowed to move the path?</li>
+    <li>Is a native solver acceptable if the spikes show a meaningful quality gain, or is the no-native TypeScript/browser boundary a firm product constraint?</li>
+    <li>Should nonzero translational jerk block Optimized v2 until a third-order method exists, or may the first release visibly return “Feasible, jerk smoothing applied”?</li>
+  </ul>
+
+  <h2>Sources and research snapshot</h2>
+  <ul>
+    <li><a href="https://sleipnirgroup.github.io/Sleipnir/">Sleipnir documentation</a> — reverse-mode autodiff, interior-point NLP DSL.</li>
+    <li><a href="https://github.com/SleipnirGroup/Choreo/blob/9beecedeadde4341ead9d31f409b9231abc944b9/trajoptlib/src/swerve_trajectory_generator.cpp">Choreo TrajoptLib swerve generator at 9beecede</a> — decision variables, objective, dynamics, module constraints, and solve tolerance.</li>
+    <li><a href="https://choreo.autos/usage/editing-paths/">Choreo path documentation</a> — optimizer intent, constraints, early conflicts, and keep-out-region caveats.</li>
+    <li><a href="https://github.com/SleipnirGroup/Choreo/releases/tag/v2026.0.3">Choreo 2026.0.3</a> — line-search fallback and feasibility-restoration behavior.</li>
+    <li><a href="https://arxiv.org/abs/1707.07239">Pham &amp; Pham, TOPP-RA</a> — <code>O(mN)</code> reachability method, generalized second-order constraints, robustness experiments, and asymptotic optimality.</li>
+    <li><a href="https://github.com/hungpham2511/toppra">toppra 0.6.9</a> — current MIT C++/Python implementation.</li>
+    <li><a href="https://github.wpilib.org/allwpilib/docs/2027/java/src-html/edu/wpi/first/math/trajectory/TrajectoryParameterizer.html">WPILib TrajectoryParameterizer source</a> — established FRC forward/backward baseline.</li>
+    <li><a href="https://github.com/pantor/ruckig">Ruckig 0.19.4</a> — MIT real-time jerk-limited state-to-state/intermediate-waypoint generation and numerical test claims.</li>
+    <li><a href="https://osqp.org/docs/">OSQP</a> and <a href="https://github.com/oxfordcontrol/Clarabel.rs">Clarabel.rs</a> — Apache-2.0 convex solver candidates for later refinement.</li>
+    <li><a href="https://web.casadi.org/docs/">CasADi</a> and <a href="https://docs.acados.org/">acados</a> — nonlinear optimal-control alternatives and integration/license tradeoffs.</li>
+  </ul>
+</article>
+</main>
+<script>
+  (() => {
+    const criteria = [
+      { id: "latency", label: "Interactive solve latency", weight: 25 },
+      { id: "reliability", label: "Reliability and diagnosability", weight: 25 },
+      { id: "quality", label: "Trajectory-time quality", weight: 15 },
+      { id: "fit", label: "Bordeaux feature fit", weight: 15 },
+      { id: "integration", label: "Desktop/browser integration", weight: 12 },
+      { id: "maintenance", label: "Long-term maintainability", weight: 8 }
+    ];
+    const options = [
+      { id: "custom-toppra", name: "Custom TOPP-RA-style core", note: "Recommended fixed-path production core", scores: [5, 5, 4.3, 4.5, 5, 3.3] },
+      { id: "toppra-cpp", name: "Adopt TOPPRA C++", note: "Strong algorithm; native adapter cost", scores: [5, 4.8, 4.3, 3.4, 2.5, 3.4] },
+      { id: "trajoptlib", name: "TrajoptLib + Sleipnir", note: "Most complete; same convergence class", scores: [2, 2.6, 5, 4.7, 1.7, 3.5] },
+      { id: "ruckig", name: "Ruckig", note: "Excellent OTG, wrong constraint model", scores: [5, 5, 3.5, 1.3, 2.7, 4.3] },
+      { id: "casadi", name: "CasADi / acados", note: "Powerful but excessive stack", scores: [3.2, 3.2, 5, 4.2, 1.2, 1.8] },
+      { id: "convex-refinement", name: "OSQP / Clarabel SCP", note: "Best reserved for explicit geometry refinement", scores: [3.8, 3.8, 4.7, 3.8, 2.2, 2.5] }
+    ];
+    const controls = document.getElementById("score-controls");
+    const tbody = document.querySelector("#score-table tbody");
+    const state = Object.fromEntries(criteria.map((criterion) => [criterion.id, criterion.weight]));
+    criteria.forEach((criterion) => {
+      const label = document.createElement("label");
+      label.htmlFor = `weight-${criterion.id}`;
+      label.textContent = criterion.label;
+      const row = document.createElement("div");
+      row.style.display = "grid";
+      row.style.gridTemplateColumns = "1fr 76px";
+      row.style.gap = "12px";
+      const input = document.createElement("input");
+      input.id = `weight-${criterion.id}`;
+      input.type = "range";
+      input.min = "0";
+      input.max = "40";
+      input.value = String(criterion.weight);
+      const output = document.createElement("output");
+      output.value = `${criterion.weight}%`;
+      row.append(input, output);
+      controls.append(label, row);
+      input.addEventListener("input", () => {
+        state[criterion.id] = Number(input.value);
+        output.value = `${input.value}%`;
+        render();
+      });
+    });
+    function ranked() {
+      const totalWeight = Math.max(1, criteria.reduce((sum, criterion) => sum + state[criterion.id], 0));
+      return options.map((option) => ({
+        ...option,
+        weighted: criteria.reduce((sum, criterion, index) => sum + option.scores[index] * state[criterion.id], 0) / totalWeight
+      })).sort((a, b) => b.weighted - a.weighted || a.name.localeCompare(b.name));
+    }
+    function render() {
+      tbody.replaceChildren(...ranked().map((option, index) => {
+        const tr = document.createElement("tr");
+        const cells = [String(index + 1), option.name, option.weighted.toFixed(2) + " / 5", option.note];
+        cells.forEach((value, cellIndex) => {
+          const td = document.createElement("td");
+          td.textContent = value;
+          if (cellIndex === 2) td.className = "rank";
+          tr.appendChild(td);
+        });
+        return tr;
+      }));
+    }
+    document.getElementById("copy-score").addEventListener("click", async () => {
+      const payload = JSON.stringify({ weights: state, ranking: ranked().map(({ id, weighted }) => ({ id, score: Number(weighted.toFixed(3)) })) }, null, 2);
+      await navigator.clipboard.writeText(payload);
+      const status = document.getElementById("copy-status");
+      status.textContent = "Copied";
+      setTimeout(() => { status.textContent = ""; }, 1500);
+    });
+    render();
+  })();
+</script>
+</body>
+</html>
