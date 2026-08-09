@@ -10,6 +10,7 @@
   const clampWorld = (p) => ({ x: Math.max(0, Math.min(FIELD_W, p.x)), y: Math.max(0, Math.min(FIELD_H, p.y)) });
   const pathId = () => 'path_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
   const markerId = () => 'event_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
+  const keepOutId = () => 'keepout_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
   const routineId = () => 'routine_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
   const pathLinkId = () => 'pathlink_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
   const blankRoutine = (name) => ({ id: routineId(), name: name || 'Autonomous Routine', nodes: [] });
@@ -487,9 +488,12 @@
         sourcePlannerId: selectedPlannerId,
         status: 'settings',
         corridorM: 0.05,
+        clearanceM: 0.05,
+        keepOuts: clone(doc.keepOuts || []),
+        drawingKeepOut: false,
       });
     }, [doc, robot, selectedPlannerId]);
-    const runGeometryRefinement = useCallback((corridorM) => {
+    const runGeometryRefinement = useCallback((corridorM, clearanceM, keepOuts) => {
       if (selectedPlannerId !== 'optimizedTrajectory') return;
       if (!geometryRefinementController.current && window.OptimizedPreviewController) {
         geometryRefinementController.current = new window.OptimizedPreviewController();
@@ -497,13 +501,38 @@
       const controller = geometryRefinementController.current;
       if (!controller) return;
       const boundedCorridorM = Math.max(0.03, Math.min(1.5, Number(corridorM) || 0.05));
-      setGeometryRefinement({ sourceDoc: doc, sourceRobot: robot, sourcePlannerId: selectedPlannerId, status: 'running', corridorM: boundedCorridorM });
+      const boundedClearanceM = Math.max(0, Math.min(0.5, Number(clearanceM) || 0));
+      const requestedKeepOuts = clone(keepOuts || []);
+      const requestedPath = { ...doc, keepOuts: requestedKeepOuts };
+      setGeometryRefinement({ sourceDoc: doc, sourceRobot: robot, sourcePlannerId: selectedPlannerId, status: 'running', corridorM: boundedCorridorM, clearanceM: boundedClearanceM, keepOuts: requestedKeepOuts });
       controller.request(
-        { operation: 'refineGeometry', path: doc, robot, perSegment: PERSEG, options: { corridorM: boundedCorridorM } },
-        (value) => setGeometryRefinement({ sourceDoc: doc, sourceRobot: robot, sourcePlannerId: selectedPlannerId, ...value }),
-        (error) => setGeometryRefinement({ sourceDoc: doc, sourceRobot: robot, sourcePlannerId: selectedPlannerId, status: 'error', reason: error.message || String(error) }),
+        { operation: 'refineGeometry', path: requestedPath, robot, perSegment: PERSEG, options: { corridorM: boundedCorridorM, clearanceM: boundedClearanceM } },
+        (value) => setGeometryRefinement({ sourceDoc: doc, sourceRobot: robot, sourcePlannerId: selectedPlannerId, keepOuts: requestedKeepOuts, ...value }),
+        (error) => setGeometryRefinement({ sourceDoc: doc, sourceRobot: robot, sourcePlannerId: selectedPlannerId, status: 'error', corridorM: boundedCorridorM, clearanceM: boundedClearanceM, keepOuts: requestedKeepOuts, reason: error.message || String(error) }),
       );
     }, [doc, robot, selectedPlannerId]);
+    const addGeometryKeepOut = useCallback((bounds) => setGeometryRefinement((current) => {
+      if (!current || current.status !== 'settings') return current;
+      const next = clone(current.keepOuts || []);
+      next.push({ id: keepOutId(), name: 'Keep-out ' + (next.length + 1), min: bounds.min, max: bounds.max });
+      return { ...current, keepOuts: next, drawingKeepOut: false };
+    }), []);
+    const removeGeometryKeepOut = useCallback((id) => setGeometryRefinement((current) => current && current.status === 'settings'
+      ? { ...current, keepOuts: (current.keepOuts || []).filter((region) => region.id !== id) }
+      : current), []);
+    const saveGeometryKeepOuts = useCallback(() => {
+      if (!geometryRefinement || geometryRefinement.status === 'running'
+        || geometryRefinement.sourceDoc !== doc || geometryRefinement.sourceRobot !== robot
+        || geometryRefinement.sourcePlannerId !== selectedPlannerId
+        || selectedPlannerId !== 'optimizedTrajectory') return;
+      const keepOuts = clone(geometryRefinement.keepOuts || []);
+      commit((next) => {
+        if (keepOuts.length) next.keepOuts = keepOuts;
+        else delete next.keepOuts;
+        return next;
+      });
+      setGeometryRefinement(null);
+    }, [commit, doc, geometryRefinement, robot, selectedPlannerId]);
     const applyGeometryRefinement = useCallback(() => {
       if (!geometryRefinement || geometryRefinement.status !== 'candidate'
         || geometryRefinement.sourceDoc !== doc || geometryRefinement.sourceRobot !== robot
@@ -527,6 +556,13 @@
       && geometryRefinement.sourcePlannerId === selectedPlannerId
       ? geometryRefinement
       : null;
+    const geometryKeepOutEditor = currentGeometryRefinement ? {
+      active: currentGeometryRefinement.status === 'settings' && currentGeometryRefinement.drawingKeepOut,
+      regions: currentGeometryRefinement.keepOuts || (currentGeometryRefinement.path && currentGeometryRefinement.path.keepOuts) || doc.keepOuts || [],
+      onCreate: addGeometryKeepOut,
+    } : null;
+    const geometryKeepOutsChanged = currentGeometryRefinement
+      && JSON.stringify(currentGeometryRefinement.keepOuts || []) !== JSON.stringify(doc.keepOuts || []);
 
     const undo = useCallback(() => {
       const H = hist.current;
@@ -1454,7 +1490,7 @@
               previewError && h('div', { className: 'insert-preview derivation-error', role: 'alert' },
                 h('div', { className: 'insert-preview-copy' }, h('b', null, selectedPlannerId === 'optimizedTrajectory' ? 'Optimized preview unavailable' : 'Path preview unavailable'), h('span', null, previewError.message || String(previewError))),
                 h('span', null, selectedPlannerId === 'optimizedTrajectory' ? 'Showing the immediate profiled preview.' : 'Showing the last valid preview. Undo or edit the selected geometry.')),
-              h(window.FieldView, { doc, derived, insertionPreview: waypointPreview, proposalPreviews: [
+              h(window.FieldView, { doc, derived, insertionPreview: waypointPreview, keepOutEditor: geometryKeepOutEditor, proposalPreviews: [
                 ...(agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : []),
                 ...(currentGeometryRefinement && currentGeometryRefinement.status === 'candidate' ? [{ id: 'geometry-refinement', selected: true, valid: true, derived: currentGeometryRefinement.derived }] : []),
               ], sel, tool, view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, playTime, playing, actions: fieldActions, onSelPos, showHandles: true }),
@@ -1470,11 +1506,11 @@
                 h('div', { className: 'insert-preview-copy' },
                   h('b', null, currentGeometryRefinement.status === 'settings' ? 'Optimize inside the authored route' : currentGeometryRefinement.status === 'running' ? 'Searching the route corridor' : currentGeometryRefinement.status === 'candidate' ? 'Faster route-preserving preview' : currentGeometryRefinement.status === 'error' ? 'Geometry refinement failed' : 'Authored geometry retained'),
                   h('span', null, currentGeometryRefinement.status === 'running'
-                    ? 'Searching fixed handle directions within ' + currentGeometryRefinement.corridorM.toFixed(2) + ' m of the authored centerline. The project has not changed.'
+                    ? 'Searching multiple handle-length starts within ' + currentGeometryRefinement.corridorM.toFixed(2) + ' m of the authored centerline. The project has not changed.'
                     : currentGeometryRefinement.status === 'settings'
                       ? 'The candidate must stay inside this corridor on every segment, so it cannot cut across the route you drew.'
                     : currentGeometryRefinement.status === 'candidate'
-                      ? currentGeometryRefinement.baselineTimeS.toFixed(3) + ' s → ' + currentGeometryRefinement.candidateTimeS.toFixed(3) + ' s · saves ' + currentGeometryRefinement.gainS.toFixed(3) + ' s · max shift ' + currentGeometryRefinement.maxDeviationM.toFixed(2) + ' m'
+                      ? currentGeometryRefinement.baselineTimeS.toFixed(3) + ' s → ' + currentGeometryRefinement.candidateTimeS.toFixed(3) + ' s · saves ' + currentGeometryRefinement.gainS.toFixed(3) + ' s · max shift ' + currentGeometryRefinement.maxDeviationM.toFixed(2) + ' m · clearance ' + currentGeometryRefinement.minimumClearanceM.toFixed(2) + ' m'
                       : currentGeometryRefinement.reason || 'No material time improvement was found.')),
                 currentGeometryRefinement.status === 'settings' && h('label', { className: 'geometry-corridor' },
                   h('span', null, 'Maximum centerline shift'),
@@ -1486,9 +1522,32 @@
                       'aria-label': 'Maximum centerline shift in meters',
                     }),
                     h('span', null, 'm'))),
+                currentGeometryRefinement.status === 'settings' && h('label', { className: 'geometry-corridor' },
+                  h('span', null, 'Target footprint clearance'),
+                  h('span', { className: 'geometry-corridor-input' },
+                    h('input', {
+                      type: 'number', min: 0, max: 0.5, step: 0.01,
+                      value: currentGeometryRefinement.clearanceM,
+                      onChange: (event) => setGeometryRefinement((current) => current && ({ ...current, clearanceM: event.target.value })),
+                      'aria-label': 'Target robot footprint clearance in meters',
+                    }),
+                    h('span', null, 'm'))),
+                currentGeometryRefinement.status === 'settings' && h('div', { className: 'geometry-keepouts' },
+                  h('div', { className: 'geometry-keepouts-head' },
+                    h('span', null, 'Keep-out regions'),
+                    h('button', {
+                      type: 'button', className: currentGeometryRefinement.drawingKeepOut ? 'selected' : '',
+                      onClick: () => setGeometryRefinement((current) => current && ({ ...current, drawingKeepOut: !current.drawingKeepOut })),
+                    }, currentGeometryRefinement.drawingKeepOut ? 'Drag on field…' : 'Draw region')),
+                  (currentGeometryRefinement.keepOuts || []).length === 0
+                    ? h('span', { className: 'geometry-keepouts-empty' }, 'None — official field obstacles are always enforced.')
+                    : h('div', { className: 'geometry-keepout-list' }, (currentGeometryRefinement.keepOuts || []).map((region) => h('span', { key: region.id, className: 'geometry-keepout-chip' },
+                      region.name,
+                      h('button', { type: 'button', 'aria-label': 'Remove ' + region.name, onClick: () => removeGeometryKeepOut(region.id) }, '×'))))),
                 h('div', { className: 'insert-preview-actions' },
                   h('button', { type: 'button', onClick: cancelGeometryRefinement }, currentGeometryRefinement.status === 'settings' || currentGeometryRefinement.status === 'running' ? 'Cancel' : 'Dismiss'),
-                  currentGeometryRefinement.status === 'settings' && h('button', { className: 'primary', type: 'button', onClick: () => runGeometryRefinement(currentGeometryRefinement.corridorM) }, 'Search fastest path'),
+                  geometryKeepOutsChanged && currentGeometryRefinement.status !== 'running' && h('button', { type: 'button', onClick: saveGeometryKeepOuts }, currentGeometryRefinement.status === 'candidate' ? 'Save regions only' : 'Save regions'),
+                  currentGeometryRefinement.status === 'settings' && h('button', { className: 'primary', type: 'button', onClick: () => runGeometryRefinement(currentGeometryRefinement.corridorM, currentGeometryRefinement.clearanceM, currentGeometryRefinement.keepOuts) }, 'Search fastest path'),
                   currentGeometryRefinement.status === 'candidate' && h('button', { className: 'primary', type: 'button', onClick: applyGeometryRefinement }, 'Apply faster path'))),
               agentProposal && h('div', { className: 'insert-preview agent-proposal', role: 'region', 'aria-label': 'Agent path proposal' },
                 h('div', { className: 'insert-preview-copy' },

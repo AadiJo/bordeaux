@@ -20,13 +20,14 @@
   const forwardExtent = (robot) => Math.max(...localFootprint(robot).map((point) => point.x)) * SX;
 
   function FieldView(props) {
-    const { doc, derived, insertionPreview, proposalPreviews, sel, tool, view, setView, alliance, showGrid, robot, drive, accent, metric, playTime, actions, onSelPos, routine, routinePose } = props;
+    const { doc, derived, insertionPreview, proposalPreviews, keepOutEditor, sel, tool, view, setView, alliance, showGrid, robot, drive, accent, metric, playTime, actions, onSelPos, routine, routinePose } = props;
     const showHandles = props.showHandles !== false;
     const svgRef = useRef(null);
     const [cw, setCw] = useState(1200);
     const [preview, setPreview] = useState(null);
     const [snap, setSnap] = useState(null);
     const [visitFocus, setVisitFocus] = useState(null);
+    const [keepOutDraft, setKeepOutDraft] = useState(null);
     const visitFocusRef = useRef(null);
     const actionsRef = useRef(actions);
     actionsRef.current = actions;
@@ -250,6 +251,11 @@
         return;
       }
       const world = clientToWorld(e.clientX, e.clientY);
+      if (e.button === 0 && keepOutEditor && keepOutEditor.active) {
+        drag.current = { role: 'keepout', startWorld: world, moved: false };
+        setKeepOutDraft({ min: world, max: world });
+        return;
+      }
       if (e.button === 0 && e.shiftKey) {
         const idx = parseInt(t.getAttribute && t.getAttribute('data-idx'), 10);
         let removed = false;
@@ -329,6 +335,14 @@
         if (Math.hypot(dx, dy) > 4) d.moved = true;
         return;
       }
+      if (d.role === 'keepout') {
+        d.moved = Math.hypot(world.x - d.startWorld.x, world.y - d.startWorld.y) >= 0.05;
+        setKeepOutDraft({
+          min: { x: Math.min(d.startWorld.x, world.x), y: Math.min(d.startWorld.y, world.y) },
+          max: { x: Math.max(d.startWorld.x, world.x), y: Math.max(d.startWorld.y, world.y) },
+        });
+        return;
+      }
       if (d.role === 'bg') {
         const dx = e.clientX - d.start.cx, dy = e.clientY - d.start.cy;
         if (!d.moved && Math.hypot(dx, dy) > 4) d.moved = true;
@@ -389,6 +403,16 @@
       setSnap(null);
       try { svgRef.current.releasePointerCapture(e.pointerId); } catch (_) {}
       if (!d) return;
+      if (d.role === 'keepout') {
+        const end = clientToWorld(e.clientX, e.clientY);
+        const bounds = {
+          min: { x: Math.min(d.startWorld.x, end.x), y: Math.min(d.startWorld.y, end.y) },
+          max: { x: Math.max(d.startWorld.x, end.x), y: Math.max(d.startWorld.y, end.y) },
+        };
+        setKeepOutDraft(null);
+        if (bounds.max.x - bounds.min.x >= 0.05 && bounds.max.y - bounds.min.y >= 0.05 && keepOutEditor.onCreate) keepOutEditor.onCreate(bounds);
+        return;
+      }
       if (d.role === 'newrange') {
         setPreview(null);
         const f0 = d.f0, f1 = d.f1;
@@ -439,7 +463,7 @@
 
     const onCancel = (event) => {
       if (moveFrame.current) cancelAnimationFrame(moveFrame.current);
-      moveFrame.current = 0; pendingMove.current = null; drag.current = null; setSnap(null);
+      moveFrame.current = 0; pendingMove.current = null; drag.current = null; setSnap(null); setKeepOutDraft(null);
       try { svgRef.current.releasePointerCapture(event.pointerId); } catch (_) {}
     };
     useEffect(() => {
@@ -1017,10 +1041,20 @@
         h('path', { d: path, fill: 'none', stroke: color, strokeOpacity: candidate.selected ? 0.96 : 0.48, strokeWidth: P(candidate.selected ? 3 : 2), strokeDasharray: `${P(candidate.selected ? 9 : 5)} ${P(6)}`, strokeLinecap: 'round', strokeLinejoin: 'round' }));
     });
 
+    const keepOutLayers = [...((keepOutEditor && keepOutEditor.regions) || doc.keepOuts || []), ...(keepOutDraft ? [{ id: 'draft', name: 'New keep-out', ...keepOutDraft }] : [])].map((region, index) => {
+      const first = W2P(region.min), second = W2P(region.max);
+      const x = Math.min(first.x, second.x), y = Math.min(first.y, second.y);
+      const width = Math.abs(second.x - first.x), height = Math.abs(second.y - first.y);
+      const draft = region.id === 'draft';
+      return h('g', { key: region.id || index, className: 'field-keepout', style: { pointerEvents: 'none' } },
+        h('rect', { x, y, width, height, rx: P(2), fill: draft ? 'rgba(210,101,95,0.20)' : 'rgba(210,101,95,0.13)', stroke: '#d2655f', strokeWidth: P(draft ? 2 : 1.4), strokeDasharray: `${P(7)} ${P(5)}` }),
+        width > P(52) && height > P(18) && h('text', { x: x + P(7), y: y + P(14), fill: '#e18a85', fontSize: P(10), fontFamily: 'JetBrains Mono, monospace', fontWeight: 600 }, draft ? 'NEW KEEP-OUT' : (region.name || 'KEEP-OUT').toUpperCase()));
+    });
+
     const snapEl = (snap && doc.waypoints[snap.idx]) ? (function () { const c = W2P(doc.waypoints[snap.idx]); return h('g', { transform: `translate(${c.x} ${c.y - P(34)})`, style: { pointerEvents: 'none' } }, h('rect', { x: -P(37), y: -P(11), width: P(74), height: P(20), rx: P(4), fill: 'rgba(11,12,14,0.95)', stroke: accent, strokeWidth: P(1) }), h('text', { x: 0, y: P(4), fill: accent, fontSize: P(11), fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, textAnchor: 'middle' }, snap.label)); })() : null;
 
     const vb = `${view.x} ${view.y} ${view.w} ${view.h}`;
-    const cursor = drag.current && drag.current.moved && drag.current.role === 'bg' ? 'grabbing' : (tool === 'waypoint' || tool === 'rotation' || tool === 'marker' || tool === 'range') ? 'crosshair' : 'default';
+    const cursor = drag.current && drag.current.moved && drag.current.role === 'bg' ? 'grabbing' : (keepOutEditor && keepOutEditor.active) || tool === 'waypoint' || tool === 'rotation' || tool === 'marker' || tool === 'range' ? 'crosshair' : 'default';
 
     return h('svg', {
       ref: svgRef, className: 'fieldsvg', viewBox: vb, preserveAspectRatio: 'xMidYMid meet',
@@ -1034,6 +1068,7 @@
         h('img', { src: (window.__resources && window.__resources.fieldImg) || 'uploads/FE-2026-_REBUILT_Playing_Field.png', width: IMG_W, height: IMG_H, draggable: false, style: { width: IMG_W + 'px', height: IMG_H + 'px', display: 'block', opacity: 0.9, filter: 'brightness(0.38) saturate(0.32) contrast(1.06)', WebkitUserDrag: 'none', userSelect: 'none', pointerEvents: 'none' } })),
       h('rect', { x: X0 - 6, y: Y0 - 6, width: (X1 - X0) + 12, height: (Y1 - Y0) + 12, rx: 4, fill: 'none', stroke: '#ffffff', strokeOpacity: 0.07, strokeWidth: P(1), style: { pointerEvents: 'none' } }),
       routine ? routineLayers : staticLayers,
+      routine ? null : keepOutLayers,
       routine ? null : visitFocusEl,
       routine ? null : previewEl,
       routine ? null : insertionGhost,
