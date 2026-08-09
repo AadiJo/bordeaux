@@ -1,5 +1,5 @@
 self.window = self;
-importScripts('trajectory-optimizer.js', 'path-math.js', 'trajectory-geometry-optimizer.js');
+importScripts('trajectory-optimizer.js', 'path-math.js', 'trajectory-clearance.js', 'trajectory-geometry-optimizer.js');
 
 self.onmessage = (event) => {
   const request = event.data || {};

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 import { getPlanner } from "../src/shared/planners";
+import { minimumPathClearance } from "../src/shared/agent/pathAnalysis";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
 import type { BordeauxProject, PathDoc } from "../src/shared/types";
 
@@ -40,14 +41,14 @@ function rendererMath() {
 function rendererGeometryOptimizer() {
   const window: Record<string, unknown> = {};
   const context = { window, console, Math, Number, Set, Map, Infinity, isFinite, Error, Array, Object, JSON };
-  for (const asset of ["trajectory-optimizer.js", "path-math.js", "trajectory-geometry-optimizer.js"]) {
+  for (const asset of ["trajectory-optimizer.js", "path-math.js", "trajectory-clearance.js", "trajectory-geometry-optimizer.js"]) {
     vm.runInNewContext(
       fs.readFileSync(new URL(`../public/renderer/assets/${asset}`, import.meta.url), "utf8"),
       context,
     );
   }
   return window.TrajectoryGeometryOptimizer as {
-    refine(path: PathDoc, robot: BordeauxProject["robot"], perSegment: number, options?: { corridorM?: number }): {
+    refine(path: PathDoc, robot: BordeauxProject["robot"], perSegment: number, options?: { corridorM?: number; clearanceM?: number }): {
       status: string;
       path?: PathDoc;
       baselineTimeS?: number;
@@ -55,6 +56,7 @@ function rendererGeometryOptimizer() {
       gainS?: number;
       corridorM?: number;
       maxDeviationM?: number;
+      minimumClearanceM?: number;
       reason?: string;
     };
   };
@@ -434,9 +436,9 @@ describe("explicit geometry refinement", () => {
     const path = project.paths[0];
     path.headingMode = "tangent";
     path.waypoints = buildWaypoints([
-      { x: 1, y: 1, nextC: { x: 2, y: 6 }, segType: "bezier" },
-      { x: 8, y: 6, prevC: { x: 2, y: 5 }, nextC: { x: 14, y: 7 }, segType: "bezier", stop: true },
-      { x: 16, y: 1, prevC: { x: 15, y: 6 } },
+      { x: 6, y: 1, nextC: { x: 6.5, y: 5 }, segType: "bezier" },
+      { x: 8.5, y: 6, prevC: { x: 6.8, y: 5 }, nextC: { x: 10.2, y: 7 }, segType: "bezier", stop: true },
+      { x: 11.5, y: 1, prevC: { x: 11, y: 5 } },
     ]);
     path.markers = [{ id: "score", f: 0.7, name: "Score" }];
     path.ranges = [{ anchor: "param", f0: 0.3, f1: 0.6, maxVel: 3, maxAccel: 4, maxDecel: 4, maxAngVel: 360, maxAngAccel: 720 }];
@@ -447,6 +449,7 @@ describe("explicit geometry refinement", () => {
     expect(result.candidateTimeS).toBeLessThan(result.baselineTimeS!);
     expect(result.corridorM).toBe(0.15);
     expect(result.maxDeviationM).toBeLessThanOrEqual(0.150001);
+    expect(result.minimumClearanceM).toBeGreaterThanOrEqual(0.05 - 1e-6);
     expect(result.path?.markers).toEqual(path.markers);
     expect(result.path?.ranges).toEqual(path.ranges);
     result.path?.waypoints.forEach((waypoint, index) => {
@@ -461,6 +464,72 @@ describe("explicit geometry refinement", () => {
         expect(first.x * second.y - first.y * second.x).toBeCloseTo(0, 8);
         expect(first.x * second.x + first.y * second.y).toBeGreaterThan(0);
       }
+    });
+  });
+
+  it("matches shared robot-footprint clearance for field obstacles and path keep-outs", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.waypoints = buildWaypoints([{ x: 6, y: 1 }, { x: 8.5, y: 2 }, { x: 11, y: 1 }]);
+    path.keepOuts = [{ id: "keepout_test", name: "Partner lane", min: { x: 8, y: 2.6 }, max: { x: 9, y: 3.2 } }];
+    const shared = getPlanner("optimizedTrajectory").generate({ path, robot: project.robot, samplesPerSegment: 56 });
+    const window: Record<string, any> = {};
+    vm.runInNewContext(
+      fs.readFileSync(new URL("../public/renderer/assets/trajectory-clearance.js", import.meta.url), "utf8"),
+      { window, Math, Number, Infinity, Array, Object },
+    );
+    const renderer = window.TrajectoryClearance.clearanceReport(path, project.robot, {
+      sample: { pts: shared.samples.map((sample) => ({ x: sample.x, y: sample.y })) },
+      metrics: { head: shared.samples.map((sample) => sample.headingRad) },
+    });
+    const canonical = minimumPathClearance(project, shared.samples, path.keepOuts);
+
+    expect(renderer.minimum).toBeCloseTo(canonical, 3);
+  });
+
+  it("never accepts a faster candidate whose footprint enters a keep-out region", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.waypoints = buildWaypoints([
+      { x: 6, y: 1, nextC: { x: 6.5, y: 5 }, segType: "bezier" },
+      { x: 8.5, y: 6, prevC: { x: 6.8, y: 5 }, nextC: { x: 10.2, y: 7 }, segType: "bezier", stop: true },
+      { x: 11.5, y: 1, prevC: { x: 11, y: 5 } },
+    ]);
+    path.keepOuts = [{ id: "keepout_curve", name: "No shortcut", min: { x: 7.6, y: 2.5 }, max: { x: 9.4, y: 4.5 } }];
+    const result = rendererGeometryOptimizer().refine(path, project.robot, 56, { corridorM: 0.15, clearanceM: 0.05 });
+
+    if (result.status === "candidate") expect(result.minimumClearanceM).toBeGreaterThanOrEqual(-1e-6);
+    else expect(result).toMatchObject({ status: "unchanged", path: undefined });
+  });
+
+  it("enforces the requested footprint clearance instead of weakening it to the baseline", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.waypoints = buildWaypoints([{ x: 6, y: 1 }, { x: 8.5, y: 2 }, { x: 11, y: 1 }]);
+
+    const result = rendererGeometryOptimizer().refine(path, project.robot, 56, { corridorM: 0.15, clearanceM: 0.4 });
+
+    if (result.status === "candidate") expect(result.minimumClearanceM).toBeGreaterThanOrEqual(0.4 - 1e-6);
+    else expect(result.status).toBe("unchanged");
+  });
+
+  it("rejects TRENCH candidates when the configured robot is too tall", () => {
+    const project = createDemoProject();
+    project.robot.heightM = 1;
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.waypoints = buildWaypoints([
+      { x: 14.2, y: 0.6, nextC: { x: 13.5, y: 0.6 }, segType: "bezier" },
+      { x: 12, y: 0.6, prevC: { x: 12.7, y: 0.6 }, nextC: { x: 11.3, y: 0.6 }, segType: "bezier" },
+      { x: 9.8, y: 0.6, prevC: { x: 10.5, y: 0.6 } },
+    ]);
+
+    expect(rendererGeometryOptimizer().refine(path, project.robot, 56, { corridorM: 0.15, clearanceM: 0 })).toMatchObject({
+      status: "unchanged",
+      reason: expect.stringContaining("too tall"),
     });
   });
 
