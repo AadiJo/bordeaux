@@ -7,10 +7,14 @@ import type {
   ValidationIssue,
 } from "../types";
 import { buildReachabilityInput, countLinearConstraintViolations } from "./optimizationConstraints";
+import { DEFAULT_SAMPLES_PER_SEGMENT, MAX_TRAJECTORY_SAMPLES } from "./limits";
 import { profiledSplinePlanner } from "./profiledSpline";
 import { solveReachabilityProfile, type ReachabilityStatus } from "./reachability";
+import { translationPriorityStartIndex } from "./rotationPriority";
+import { validateOptimizedTrajectory, type TrajectoryValidationResult } from "./trajectoryValidation";
 
 const R = (value: number, places = 4) => Number(value.toFixed(places));
+const MAX_REFINEMENT_PASSES = 2;
 
 function remapTiming(samples: TrajectorySample[], velocities: number[]): TrajectorySample[] {
   if (samples.length < 2) return samples;
@@ -67,6 +71,8 @@ function diagnostics(
   status: ReachabilityStatus | "feasible" | "internal-error",
   iterations: number,
   fallbackReason?: string,
+  validation?: TrajectoryValidationResult,
+  refinementPasses = 0,
 ): PlannerOptimizationDiagnostics {
   const maxVelocityMps = samples.reduce((max, sample) => Math.max(max, Math.abs(sample.velocityMps)), 0);
   const maxAccelerationMps2 = samples.reduce((max, sample) => Math.max(max, Math.abs(sample.accelerationMps2)), 0);
@@ -74,11 +80,14 @@ function diagnostics(
     plannerUsed: "optimizedTrajectory",
     status,
     iterations,
+    refinementPasses,
+    validatedPoints: validation?.checkedPoints,
+    activeConstraints: validation?.activeConstraints,
     solveTimeMs: R(solveTimeMs, 3),
     totalTimeS: R(samples[samples.length - 1]?.t ?? 0, 4),
     maxVelocityMps: R(maxVelocityMps, 4),
     maxAccelerationMps2: R(maxAccelerationMps2, 4),
-    constraintViolations: countLinearConstraintViolations(input, samples),
+    constraintViolations: validation?.violations.length ?? countLinearConstraintViolations(input, samples),
     fallback: Boolean(fallbackReason),
     fallbackReason,
   };
@@ -109,72 +118,119 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
       };
     }
 
-    try {
-      const reachability = solveReachabilityProfile(buildReachabilityInput(input, base.samples));
-      if (reachability.status !== "optimal") {
-        const reason = reachability.reason ?? "The fixed-path optimizer could not produce a trajectory.";
-        const issue: ValidationIssue = {
+    if ((input.path.constraints.maxJerk ?? 0) > 0) {
+      const reason = "Optimized trajectory does not yet support nonzero translational jerk.";
+      return {
+        ...base,
+        planner: "optimizedTrajectory",
+        diagnostics: [...base.diagnostics, {
           severity: "error",
-          path: `paths.${input.path.name}.planner`,
-          message: `Optimized trajectory is ${reachability.status}: ${reason}`,
-        };
-        return {
-          ...base,
-          planner: "optimizedTrajectory",
-          diagnostics: [...base.diagnostics, issue],
-          optimization: diagnostics(
-            input,
-            base.samples,
-            performance.now() - started,
-            reachability.status,
-            reachability.iterations,
-          ),
-        };
-      }
+          path: `paths.${input.path.name}.constraints.maxJerk`,
+          message: reason,
+        }],
+        optimization: diagnostics(input, base.samples, performance.now() - started, "invalid-input", 0),
+      };
+    }
 
-      const samples = remapTiming(base.samples, reachability.velocities);
-      const totalTimeS = R(samples[samples.length - 1]?.t ?? base.totalTimeS, 4);
-      const optimization = diagnostics(
-        input,
-        samples,
-        performance.now() - started,
-        "feasible",
-        reachability.iterations,
-      );
-      if (optimization.constraintViolations > 0) {
-        const fallbackReason = `Fixed-path optimizer produced ${optimization.constraintViolations} final linear constraint violation${optimization.constraintViolations === 1 ? "" : "s"}.`;
+    try {
+      let candidateBase = base;
+      let samplesPerSegment = input.samplesPerSegment ?? DEFAULT_SAMPLES_PER_SEGMENT;
+      let totalIterations = 0;
+      for (let refinementPasses = 0; refinementPasses <= MAX_REFINEMENT_PASSES; refinementPasses += 1) {
+        const reachability = solveReachabilityProfile(buildReachabilityInput(input, candidateBase.samples));
+        totalIterations += reachability.iterations;
+        if (reachability.status !== "optimal") {
+          const reason = reachability.reason ?? "The fixed-path optimizer could not produce a trajectory.";
+          const issue: ValidationIssue = {
+            severity: "error",
+            path: `paths.${input.path.name}.planner`,
+            message: `Optimized trajectory is ${reachability.status}: ${reason}`,
+          };
+          return {
+            ...candidateBase,
+            planner: "optimizedTrajectory",
+            diagnostics: [...candidateBase.diagnostics, issue],
+            optimization: diagnostics(
+              input,
+              candidateBase.samples,
+              performance.now() - started,
+              reachability.status,
+              totalIterations,
+              undefined,
+              undefined,
+              refinementPasses,
+            ),
+          };
+        }
+
+        const samples = remapTiming(candidateBase.samples, reachability.velocities);
+        const translationPriorityStart = translationPriorityStartIndex(
+          input.path,
+          samples,
+          candidateBase.totalDistanceM,
+        );
+        const validation = validateOptimizedTrajectory(input, samples, {
+          skipAngularFromIndex: translationPriorityStart ?? undefined,
+        });
+        if (validation.violations.length === 0) {
+          const totalTimeS = R(samples[samples.length - 1]?.t ?? candidateBase.totalTimeS, 4);
+          return {
+            planner: "optimizedTrajectory",
+            totalTimeS,
+            totalDistanceM: candidateBase.totalDistanceM,
+            samples,
+            markers: candidateBase.markers.map((marker) => ({ ...marker, timeS: R(timeAtFraction(samples, marker.fraction), 4) })),
+            diagnostics: candidateBase.diagnostics,
+            optimization: diagnostics(
+              input,
+              samples,
+              performance.now() - started,
+              translationPriorityStart !== null ? "feasible" : "optimal",
+              totalIterations,
+              undefined,
+              validation,
+              refinementPasses,
+            ),
+          };
+        }
+
+        const allRefinable = validation.violations.every((violation) => violation.refinable);
+        const segmentCount = Math.max(0, input.path.waypoints.length - 1);
+        const nextSamplesPerSegment = samplesPerSegment * 2;
+        const withinSampleLimit = segmentCount <= Math.floor((MAX_TRAJECTORY_SAMPLES - 1) / nextSamplesPerSegment);
+        if (allRefinable && refinementPasses < MAX_REFINEMENT_PASSES && withinSampleLimit) {
+          samplesPerSegment = nextSamplesPerSegment;
+          candidateBase = profiledSplinePlanner.generate({ ...input, samplesPerSegment });
+          continue;
+        }
+
+        const firstViolation = validation.violations[0];
+        const fallbackReason = `Dense validation found ${validation.violations.length} constraint violation${validation.violations.length === 1 ? "" : "s"}: ${firstViolation.message}`;
         const issue: ValidationIssue = {
           severity: "warning",
           path: `paths.${input.path.name}.planner`,
           message: `Optimized trajectory fell back to profiled spline: ${fallbackReason}`,
         };
         return {
-          ...base,
+          ...candidateBase,
           planner: "profiledSpline",
-          diagnostics: [...base.diagnostics, issue],
+          diagnostics: [...candidateBase.diagnostics, issue],
           optimization: {
             ...diagnostics(
               input,
-              base.samples,
+              candidateBase.samples,
               performance.now() - started,
               "internal-error",
-              reachability.iterations,
+              totalIterations,
               fallbackReason,
+              validation,
+              refinementPasses,
             ),
             plannerUsed: "profiledSpline",
           },
         };
       }
-
-      return {
-        planner: "optimizedTrajectory",
-        totalTimeS,
-        totalDistanceM: base.totalDistanceM,
-        samples,
-        markers: base.markers.map((marker) => ({ ...marker, timeS: R(timeAtFraction(samples, marker.fraction), 4) })),
-        diagnostics: base.diagnostics,
-        optimization,
-      };
+      throw new Error("Optimizer refinement loop ended without a result.");
     } catch (error) {
       const fallbackReason = error instanceof Error ? error.message : "Optimizer failed.";
       const issue: ValidationIssue = {
