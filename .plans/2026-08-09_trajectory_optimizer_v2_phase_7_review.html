@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- TheLab metadata (read by the `lab` CLI on publish; do not remove).
+     thelab:plan is the STABLE plan id — re-publishing this file updates the same
+     plan (bumping its version) even if the title changes. -->
+<meta name="thelab:project" content="bordeaux">
+<meta name="thelab:title" content="Trajectory Optimizer V2 Phase 7 Review">
+<meta name="thelab:plan" content="trajectory-optimizer-v2-phase-7-review">
+<meta name="thelab:kind" content="review">
+<meta name="thelab:status" content="active">
+<meta name="thelab:tags" content="trajectory-optimization,shadow-rollout,privacy,verification">
+<!-- Optional: issue numbers this plan closes on ship, e.g. content="3,7". They
+     auto-close when the plan is marked done (`lab done … --commit`). -->
+<meta name="thelab:addresses" content="">
+<meta name="thelab:version" content="1">
+<meta name="thelab:hosted-url" content="https://thelab.wilsonzach.com/project/bordeaux/review/trajectory-optimizer-v2-phase-7-review">
+<meta name="thelab:reviewof-commit" content="eb4ef77e">
+<meta name="thelab:reviewof-branch" content="feat/trajectory-optimizer-v2">
+<!-- Optional owner questions. Add 1–8 entries; each needs 2–8 options. -->
+<script type="application/json" id="thelab-questions">[]</script>
+<title>Trajectory Optimizer V2 Phase 7 Review</title>
+<style>
+  /* Self-contained. Mirrors The Lab reader so the local file looks like the hosted
+     one. This block is NOT published: the hosted view uses The Lab's own reader
+     stylesheet, and only the article content below is published. */
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    background: #0a0a0a; color: #a1a1a1;
+    font-size: 15px; line-height: 1.7; letter-spacing: -0.006em;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 40px 24px 96px; }
+  a { color: #4e9bfa; text-decoration: none; } a:hover { text-decoration: underline; }
+  img { max-width: 100%; height: auto; }
+  h1 { font-size: 30px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.2; color: #ededed; margin-bottom: 8px; }
+  h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.015em; color: #ededed; margin: 56px 0 16px; padding-top: 24px; border-top: 1px solid #222; }
+  h3 { font-size: 14px; font-weight: 600; color: #ededed; margin: 32px 0 12px; }
+  p { margin: 0 0 12px; } strong { color: #ededed; font-weight: 600; }
+  ul, ol { margin: 0 0 12px 22px; } li { margin: 4px 0; }
+  .lede { color: #ededed; font-size: 16px; margin: 4px 0 8px; }
+  code { font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; }
+  pre.code { background: #0d0d0d; border: 1px solid #222; border-radius: 6px; padding: 16px 20px; overflow-x: auto; font-size: 12.5px; line-height: 1.65; color: #a1a1a1; tab-size: 2; margin: 16px 0; }
+  .callout { border: 1px solid #222; border-left: 2px solid #4e9bfa; border-radius: 0 6px 6px 0; padding: 14px 20px; margin: 20px 0; font-size: 13.5px; color: #a1a1a1; }
+  .callout strong { color: #ededed; }
+  figure { margin: 16px 0; } figcaption { font-size: 12px; color: #6b6b6b; padding-top: 8px; font-family: ui-monospace, Menlo, monospace; }
+  .fig-scroll { overflow-x: auto; border: 1px solid #222; border-radius: 6px; }
+  .fig-scroll svg { display: block; width: 100%; height: auto; }
+  .tbl-scroll { overflow-x: auto; }
+  table.data { width: 100%; border-collapse: collapse; font-size: 13.5px; margin: 12px 0; }
+  table.data th { text-align: left; font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.07em; color: #6b6b6b; padding: 10px 14px; border-bottom: 1px solid #222; }
+  table.data td { padding: 10px 14px; border-bottom: 1px solid #222; color: #a1a1a1; vertical-align: top; }
+  table.data tr:last-child td { border-bottom: 0; }
+  table.data td:first-child { color: #ededed; white-space: nowrap; }
+  .plan-links { margin: 16px 0 8px; }
+  .plan-links table.data td:first-child { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: #6b6b6b; width: 90px; }
+  .plan-links table.data td:nth-child(2) { color: #ededed; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; word-break: break-all; }
+  .status { display: inline-flex; align-items: center; gap: 7px; }
+  .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; }
+  .st-draft::before { border: 1px solid #6b6b6b; }
+  .st-active::before { background: #4e9bfa; }
+  .st-done::before { background: #ededed; }
+  .st-archived::before { background: #333; }
+</style>
+</head>
+<body>
+<main class="wrap">
+<article>
+  <h1>Trajectory Optimizer V2 Phase 7 Review</h1>
+
+  <!-- Plan meta: local-file chrome only — `lab publish` strips this whole section
+       from the published body (The Lab renders its own header + metadata rail). The
+       CLI fills the Version cell on publish (v1, v2, …). -->
+  <section class="plan-links">
+    <div class="tbl-scroll"><table class="data">
+      <tr><td>Project</td><td>bordeaux</td></tr>
+      <tr><td>Version</td><td id="thelab-version">v1</td></tr>
+      <tr><td>Status</td><td><span class="status st-active">active</span> · 2026-08-09</td></tr>
+    </table></div>
+  </section>
+
+  <p class="lede">Phase 7 rollout infrastructure passes review: Bordeaux can now shadow optimized planning locally, enforce a deterministic corpus in CI, and evaluate latency without serializing developer state or retaining authored path data.</p>
+
+  <div class="callout"><strong>Verdict: implementation pass; default promotion remains pending soak.</strong> The safety and determinism gates pass on the checked-in corpus, while <code>profiledSpline</code> remains the default and visible fallback. Collect real opt-in aggregate observations before considering any default change.</div>
+
+  <h2>Scope</h2>
+  <p>This review covers Phase 7 code through <code>eb4ef77e</code> on <code>feat/trajectory-optimizer-v2</code>. It reviews the developer flag, renderer worker integration, aggregate storage contract, corpus command, benchmark reuse, CI/package gates, and developer documentation. No network telemetry or project-schema change is included.</p>
+
+  <h2>Implemented behavior</h2>
+  <ul>
+    <li><strong>Non-serialized opt-in:</strong> <code>BordeauxOptimizerShadow.setEnabled(true)</code> writes one machine-local flag. It never mutates <code>BordeauxProject</code>, save, autosave, Java export, or agent-session data.</li>
+    <li><strong>True shadow execution:</strong> when Profiled is selected and the flag is enabled, the existing cancellable worker computes Optimized but never replaces the visible Profiled preview. An Optimized-selected project records the same aggregate as an opt-in observation.</li>
+    <li><strong>Aggregate-only storage:</strong> fixed counters retain status, planner used, comparison direction, fallback/violation counts, summed/max timing, and a bounded solve-time histogram. There are no observation arrays, path IDs, names, geometry, project data, or error messages.</li>
+    <li><strong>Developer report:</strong> <code>snapshot()</code> returns aggregates plus average timing and p50/p95 histogram upper bounds; <code>clear()</code> removes the report.</li>
+    <li><strong>Release gate:</strong> <code>npm run shadow:optimizer</code> runs the production planner wrapper twice over the shared corpus, removes only nondeterministic solve duration from byte comparison, and fails on an unexpected status, accepted-output constraint violation, deterministic mismatch, or unexplained slower result.</li>
+  </ul>
+
+  <h2>Corpus evidence</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Gate</th><th>Result</th><th>Evidence</th></tr></thead>
+    <tbody>
+      <tr><td>Status classification</td><td>Pass</td><td>Nine cases: eight <code>optimal</code>, one expected <code>invalid-input</code> for unsupported translational jerk.</td></tr>
+      <tr><td>Accepted safety</td><td>Pass</td><td>Zero accepted-output constraint violations and zero fallbacks.</td></tr>
+      <tr><td>Determinism</td><td>Pass</td><td>Zero mismatches across repeated production-planner results after excluding diagnostic wall-clock duration.</td></tr>
+      <tr><td>Quality explanation</td><td>Pass</td><td>Eight outputs are slower because the independent validator finds violations in the corresponding Profiled baselines; zero are unexplained slower. The rejected jerk case is timing-equal.</td></tr>
+      <tr><td>Reliability stress</td><td>Pass</td><td>100,000 reachability fuzz cases produced zero unexplained failures.</td></tr>
+      <tr><td>Interactive latency</td><td>Pass on corpus</td><td>Warmed common-path p95 is at most 1.227 ms against the 30 ms gate; the 5,041-sample stress p95 is 86.056 ms against the 100 ms gate. Both thresholds fail CI if exceeded.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Privacy and resource review</h2>
+  <ul>
+    <li>Renderer CSP retains <code>connect-src 'none'</code>; the recorder has no network or Electron bridge call.</li>
+    <li>Stored JSON is constant-shape and capped at 1,000,000 aggregate records; malformed nested counters are normalized rather than trusted.</li>
+    <li>Worker errors increment one counter without persisting error text.</li>
+    <li>The renderer remains below the 700 KiB eager-JavaScript ceiling at 658,616 bytes.</li>
+  </ul>
+
+  <h2>Risks &amp; mitigations</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Risk</th><th>Likelihood</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr><td>Checked-in corpus is smaller than real team path diversity</td><td>high</td><td>Keep the default unchanged. Enable local shadowing during normal editing and add every discrepancy as a deterministic corpus fixture.</td></tr>
+      <tr><td>Histogram percentiles are bucket upper bounds</td><td>low</td><td>Bucket edges include the 10/20/30 ms rollout gates, so the conservative bound is sufficient for promotion decisions without retaining samples.</td></tr>
+      <tr><td>Local storage may be cleared or unavailable</td><td>low</td><td>Shadowing safely disables or returns an empty report; planner behavior and project files are unaffected.</td></tr>
+      <tr><td>Worker lifecycle test uses a fake Worker</td><td>low</td><td>Deterministic tests cover termination/stale messages, while packaged smoke covers the asset/CSP boundary. Add a real-worker smoke wait if field soak reveals lifecycle uncertainty.</td></tr>
+      <tr><td>Hosted-runner stress latency has limited headroom</td><td>medium</td><td>Local stress p95 is 86.056 ms against the 100 ms gate. Treat the threshold as provisional until both macOS and Windows package jobs demonstrate stable headroom; do not weaken it merely to clear a noisy runner.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification</h2>
+  <ul>
+    <li><code>npm test</code> — 208 tests passed across 22 files.</li>
+    <li><code>npm run typecheck</code> and <code>npm run build</code> passed.</li>
+    <li><code>npm run shadow:optimizer</code>, <code>npm run benchmark:planners</code>, and <code>npm run fuzz:optimizer</code> passed.</li>
+    <li><code>env -u ELECTRON_RUN_AS_NODE npm run test:smoke</code> passed against the canonical renderer.</li>
+    <li>Unpacked macOS arm64 packaging and packaged-manifest verification passed: 371 ASAR entries and 6,298,238 bytes.</li>
+    <li>An independent Codex re-review found no blocking issues after the latency, fallback, planner-attribution, and aggregate-integrity gates were added. It retained hosted-runner latency headroom as the operational risk above.</li>
+  </ul>
+
+  <h2>Promotion criterion</h2>
+  <p>Keep <code>profiledSpline</code> as the default until a real-project soak has enough observations to be representative and still shows zero <code>internal-error</code>, worker-error, fallback, or accepted-output violation counts, with p95 solve time at or below 30 ms. Phase 8 jerk or geometry work should not begin by silently weakening that gate.</p>
+</article>
+</main>
+</body>
+</html>
