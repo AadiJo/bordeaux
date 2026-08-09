@@ -434,6 +434,32 @@ function validateProjectInner(project: unknown): ValidationResult {
         if (!Array.isArray(value)) issues.push(issue(`${base}.${name}`, `${name[0].toUpperCase()}${name.slice(1)} must be an array`));
         else if (value.length > MAX_PATH_ITEMS) issues.push(issue(`${base}.${name}`, `Path cannot contain more than ${MAX_PATH_ITEMS} ${name}`));
       });
+      if (path.keepOuts !== undefined) {
+        if (!Array.isArray(path.keepOuts)) issues.push(issue(`${base}.keepOuts`, "Keep-out regions must be an array"));
+        else if (path.keepOuts.length > MAX_PATH_ITEMS) issues.push(issue(`${base}.keepOuts`, `Path cannot contain more than ${MAX_PATH_ITEMS} keep-out regions`));
+        else {
+          const keepOutIds = new Set<string>();
+          path.keepOuts.forEach((keepOut, index) => {
+            const keepOutBase = `${base}.keepOuts[${index}]`;
+            if (!isRecord(keepOut)) return issues.push(issue(keepOutBase, "Keep-out region must be an object"));
+            if (typeof keepOut.id !== "string" || !keepOut.id.trim()) issues.push(issue(`${keepOutBase}.id`, "Keep-out region ID is required"));
+            else if (keepOutIds.has(keepOut.id)) issues.push(issue(`${keepOutBase}.id`, "Keep-out region IDs must be unique within a path"));
+            else keepOutIds.add(keepOut.id);
+            if (typeof keepOut.name !== "string" || !keepOut.name.trim()) issues.push(issue(`${keepOutBase}.name`, "Keep-out region name is required"));
+            validatePoint(issues, keepOut.min, `${keepOutBase}.min`, "Keep-out minimum corner");
+            validatePoint(issues, keepOut.max, `${keepOutBase}.max`, "Keep-out maximum corner");
+            if (isRecord(keepOut.min) && isRecord(keepOut.max)
+              && finite(keepOut.min.x) && finite(keepOut.min.y) && finite(keepOut.max.x) && finite(keepOut.max.y)) {
+              if (keepOut.min.x < 0 || keepOut.min.y < 0 || keepOut.max.x > FIELD_W || keepOut.max.y > FIELD_H) {
+                issues.push(issue(keepOutBase, "Keep-out region must stay inside the FRC field bounds"));
+              }
+              if (keepOut.max.x - keepOut.min.x < 0.05 || keepOut.max.y - keepOut.min.y < 0.05) {
+                issues.push(issue(keepOutBase, "Keep-out region must be at least 0.05 meters wide and tall"));
+              }
+            }
+          });
+        }
+      }
       if (Array.isArray(path.targets) && path.targets.length <= MAX_PATH_ITEMS) path.targets.forEach((target, i) => {
         const targetBase = `${base}.targets[${i}]`;
         if (!isRecord(target)) return issues.push(issue(targetBase, "Rotation target must be an object"));

@@ -2,7 +2,7 @@ import { REBUILT_2026_FIELD, REBUILT_2026_FIELD_WIDTH_M, officialToAppPoint } fr
 import { FIELD_H, FIELD_W } from "../math/fieldBounds";
 import { getPlanner } from "../planners";
 import { clone } from "../project/defaults";
-import type { BordeauxProject, PathDoc, TrajectoryPlannerId, TrajectorySample, ValidationIssue } from "../types";
+import type { BordeauxProject, KeepOutRegion, PathDoc, TrajectoryPlannerId, TrajectorySample, ValidationIssue } from "../types";
 import { validateProject } from "../validation";
 import {
   boundsPolygon,
@@ -340,13 +340,20 @@ function requiredPortalSequenceFindings(project: BordeauxProject, path: PathDoc,
   }];
 }
 
-export function minimumPathClearance(project: BordeauxProject, samples: readonly TrajectorySample[]): number {
+export function minimumPathClearance(
+  project: BordeauxProject,
+  samples: readonly TrajectorySample[],
+  keepOuts: readonly KeepOutRegion[] = [],
+): number {
   let minimum = Number.POSITIVE_INFINITY;
   for (const sample of samples) {
     const footprint = robotFootprintAt(project.robot, sample);
     minimum = Math.min(minimum, footprintBoundsClearance(footprint, FIELD_W, FIELD_H));
     for (const obstacle of appObstacleBounds()) {
       minimum = Math.min(minimum, convexPolygonClearance(footprint, boundsPolygon(obstacle)));
+    }
+    for (const keepOut of keepOuts) {
+      minimum = Math.min(minimum, convexPolygonClearance(footprint, boundsPolygon(keepOut)));
     }
   }
   REBUILT_2026_FIELD.crossingBarriers.forEach((barrier) => {
@@ -445,12 +452,14 @@ function analyzeGeneratedPath(
     });
   });
 
-  const clearance = minimumPathClearance(project, samples);
+  const clearance = minimumPathClearance(project, samples, path.keepOuts);
   if (clearance < minimumClearanceM) {
     const closestIndex = samples.reduce((bestIndex, sample, index) => {
-      const singleton = minimumPathClearance(project, [sample]);
-      return singleton < minimumPathClearance(project, [samples[bestIndex]]) ? index : bestIndex;
+      const singleton = minimumPathClearance(project, [sample], path.keepOuts);
+      return singleton < minimumPathClearance(project, [samples[bestIndex]], path.keepOuts) ? index : bestIndex;
     }, 0);
+    const officialClearance = minimumPathClearance(project, samples);
+    const keepOutIsClosest = path.keepOuts?.length && clearance < officialClearance - EPSILON;
     retainedIndices.add(closestIndex);
     findings.push({
       id: "geometry:field-obstacle-clearance",
@@ -460,10 +469,10 @@ function analyzeGeneratedPath(
       limit: minimumClearanceM,
       unit: "m",
       sample: sampleReference(path, samples, closestIndex),
-      sourcePath: "field.2026-rebuilt.solidObstacles",
+      sourcePath: keepOutIsClosest ? `paths.${path.id}.keepOuts` : "field.2026-rebuilt.solidObstacles",
       message: clearance < 0
-        ? `The robot footprint intersects a solid field element by ${Math.abs(clearance).toFixed(3)} m.`
-        : `Minimum field-element clearance is ${clearance.toFixed(3)} m, below the requested ${minimumClearanceM.toFixed(3)} m.`,
+        ? `The robot footprint intersects ${keepOutIsClosest ? "an authored keep-out region" : "a solid field element"} by ${Math.abs(clearance).toFixed(3)} m.`
+        : `Minimum ${keepOutIsClosest ? "keep-out" : "field-element"} clearance is ${clearance.toFixed(3)} m, below the requested ${minimumClearanceM.toFixed(3)} m.`,
     });
   }
 

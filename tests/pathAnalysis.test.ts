@@ -35,4 +35,22 @@ describe("agent path analysis", () => {
     const analysis = analyzePath(project, path.id);
     expect(analysis.findings.some((finding) => finding.id.startsWith("geometry:illegal-barrier-touches") && finding.severity === "error")).toBe(true);
   });
+
+  it("treats path-local keep-outs as solid footprint obstacles", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([{ x: 7, y: 1 }, { x: 9, y: 1 }, { x: 11, y: 1 }]);
+    path.keepOuts = [{ id: "keepout_partner", name: "Partner lane", min: { x: 8.2, y: 0.6 }, max: { x: 9.2, y: 1.4 } }];
+
+    const analysis = analyzePath(project, path.id, { minimumClearanceM: 0 });
+
+    expect(analysis.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "geometry:field-obstacle-clearance",
+        severity: "error",
+        sourcePath: `paths.${path.id}.keepOuts`,
+        message: expect.stringContaining("keep-out region"),
+      }),
+    ]));
+  });
 });

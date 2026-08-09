@@ -297,6 +297,14 @@ export interface ConstraintRange {
   name?: string;
 }
 
+/** Path-local rectangular region the robot footprint must not enter. */
+export interface KeepOutRegion {
+  id: string;
+  name: string;
+  min: ControlPoint;
+  max: ControlPoint;
+}
+
 export interface PathDoc {
   id: string;
   name: string;
@@ -304,6 +312,8 @@ export interface PathDoc {
   targets: RotationTarget[];
   markers: Marker[];
   ranges: ConstraintRange[];
+  /** User-authored field regions excluded from geometry optimization and path analysis. */
+  keepOuts?: KeepOutRegion[];
   constraints: PathConstraints;
   headingMode?: HeadingMode;
   /** Robot-side following policy. Omitted for backwards-compatible time following. */

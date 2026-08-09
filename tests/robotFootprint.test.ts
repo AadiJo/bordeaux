@@ -11,6 +11,17 @@ import { createDemoProject } from "../src/shared/project/defaults";
 import { validateProject } from "../src/shared/validation";
 
 describe("robot footprint geometry", () => {
+  it("validates path-local keep-out bounds and stable IDs", () => {
+    const project = createDemoProject();
+    project.paths[0].keepOuts = [{ id: "keepout_one", name: "Partner lane", min: { x: 2, y: 2 }, max: { x: 3, y: 3 } }];
+    expect(validateProject(project).ok).toBe(true);
+
+    project.paths[0].keepOuts.push({ id: "keepout_one", name: "Too small", min: { x: 2, y: 2 }, max: { x: 2.01, y: 2.01 } });
+    expect(validateProject(project).issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "$.paths[0].keepOuts[1].id" }),
+      expect.objectContaining({ path: "$.paths[0].keepOuts[1]", message: expect.stringContaining("0.05") }),
+    ]));
+  });
   it("uses length forward and width laterally for the default rectangle", () => {
     const project = createDemoProject();
     project.robot.l = 1.2;

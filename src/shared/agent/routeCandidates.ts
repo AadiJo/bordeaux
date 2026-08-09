@@ -675,7 +675,7 @@ export function generateRouteCandidates(project: BordeauxProject, request: PlanP
     const shootingHeadingIssue = finishTarget && project.robot.planning?.shooter
       ? finishHeadingIssue(analysis.rawSamples, finishTarget, project.robot.planning.shooter.directionDeg, request.finishFacing?.maxHeadingErrorDeg ?? 5)
       : null;
-    const clearance = minimumPathClearance(analysisProject, analysis.rawSamples);
+    const clearance = minimumPathClearance(analysisProject, analysis.rawSamples, path.keepOuts);
     const collectionAreaM2 = estimatedCollectionArea(project, analysis.rawSamples, activeCollection);
     const shootingRangeM = finishTarget && analysis.rawSamples.length ? Math.hypot(finishTarget.x - analysis.rawSamples.at(-1)!.x, finishTarget.y - analysis.rawSamples.at(-1)!.y) : undefined;
     const preferredRangeM = project.robot.planning?.shooter?.preferredRangeM;
