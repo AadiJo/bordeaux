@@ -78,6 +78,8 @@ export function buildReachabilityInput(
     positions: samples.map((sample) => sample.s),
     velocityLimits: samples.map((sample, index) => Math.min(
       profile.points[index].velocity,
+      profile.intervals[index - 1]?.velocity ?? Number.POSITIVE_INFINITY,
+      profile.intervals[index]?.velocity ?? Number.POSITIVE_INFINITY,
       Math.max(0, sample.velocityMps),
     )),
     // Keep the rounded trajectory inside the independently checked authored

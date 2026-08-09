@@ -512,6 +512,8 @@ export interface TrajectoryPlanner {
 
 export interface PlannerOptimizationDiagnostics {
   plannerUsed: TrajectoryPlannerId;
+  status?: "optimal" | "feasible" | "invalid-input" | "infeasible" | "cancelled" | "internal-error";
+  iterations?: number;
   solveTimeMs: number;
   totalTimeS: number;
   maxVelocityMps: number;
