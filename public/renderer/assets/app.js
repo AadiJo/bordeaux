@@ -1,6 +1,6 @@
 // Bordeaux — app root. Needs React, ReactDOM, PM, UI, FieldView, ContextInspector, Panels, RobotPage.
 (function () {
-  const { useState, useRef, useEffect, useMemo, useCallback } = React;
+  const { useState, useRef, useEffect, useMemo, useCallback, useSyncExternalStore } = React;
   const h = React.createElement;
   const { FIELD_W, FIELD_H, IMG_W, IMG_H } = window.FIELD_DIMS;
   const PERSEG = 56;
@@ -39,7 +39,7 @@
     project.routine = project.routines.find((routine) => routine.id === project.activeRoutineId) || project.routines[0];
     project.pathLinks = Array.isArray(project.pathLinks) ? project.pathLinks.filter((link) => link && link.fromPathId && link.toPathId).map((link) => ({ ...link, id: link.id || pathLinkId() })) : [];
     project.plannerId = project.plannerId === 'optimizedTrajectory' ? 'optimizedTrajectory' : 'profiledSpline';
-    return project;
+    return window.PathLinks.reconcile(project);
   }
 
   const ACCENT = '#3f6fd0';
@@ -124,6 +124,69 @@
 
   const FIT = { x: 307, y: 7, w: 3285, h: 1569 };
 
+  function createPlaybackStore() {
+    let snapshot = { time: 0, playing: false, total: 0 };
+    let frame = 0, last = 0;
+    const listeners = new Set();
+    const emit = (patch) => { snapshot = { ...snapshot, ...patch }; listeners.forEach((listener) => listener()); };
+    const stopFrame = () => { if (frame) cancelAnimationFrame(frame); frame = 0; };
+    const tick = (now) => {
+      const time = Math.min(snapshot.total, snapshot.time + (now - last) / 1000); last = now;
+      const playing = time < snapshot.total - 1e-6;
+      emit({ time, playing });
+      frame = playing ? requestAnimationFrame(tick) : 0;
+    };
+    const startFrame = () => { if (frame || !snapshot.playing) return; last = performance.now(); frame = requestAnimationFrame(tick); };
+    return {
+      subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+      getSnapshot() { return snapshot; },
+      setTotal(total) { const next = Math.max(0, total || 0); emit({ total: next, time: Math.min(snapshot.time, next), playing: snapshot.playing && snapshot.time < next }); startFrame(); },
+      toggle() {
+        if (snapshot.playing) { stopFrame(); emit({ playing: false }); return; }
+        emit({ time: snapshot.time >= snapshot.total - 1e-3 ? 0 : snapshot.time, playing: snapshot.total > 0 }); startFrame();
+      },
+      play() { emit({ time: snapshot.time >= snapshot.total - 1e-6 ? 0 : snapshot.time, playing: snapshot.total > 0 }); startFrame(); },
+      restart() { stopFrame(); emit({ time: 0, playing: snapshot.total > 0 }); startFrame(); },
+      pause() { stopFrame(); if (snapshot.playing) emit({ playing: false }); },
+      seek(time) { stopFrame(); emit({ time: Math.max(0, Math.min(snapshot.total, time)), playing: false }); },
+      reset() { stopFrame(); emit({ time: 0, playing: false }); },
+      destroy() { stopFrame(); listeners.clear(); },
+    };
+  }
+
+  const usePlayback = (store) => useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+  function PlaybackField({ store, ...props }) {
+    const playback = usePlayback(store);
+    return h(window.FieldView, { ...props, playTime: playback.time });
+  }
+  function PlaybackTransport({ store, ...props }) {
+    const playback = usePlayback(store);
+    return h(window.Panels.Transport, { ...props, playTime: playback.time, playing: playback.playing,
+      togglePlayback: store.toggle, seek: store.seek, restart: store.restart });
+  }
+  function RoutinePanelPlayback({ store, ...props }) {
+    const playback = usePlayback(store);
+    return h(window.RoutinePanel, { ...props, time: playback.time, running: playback.playing || playback.time > 0.001 });
+  }
+  function RoutineFieldPlayback({ store, run, selectedId, robot, ...props }) {
+    const playback = usePlayback(store), running = playback.playing || playback.time > 0.001;
+    const overlay = useMemo(() => window.AUTO.fieldOverlay(run, { time: playback.time, running, selectedId }), [run, playback.time, running, selectedId]);
+    const pose = window.AUTO.poseAt(run, playback.time, robot);
+    return h(window.FieldView, { ...props, robot, playTime: 0, routine: overlay, routinePose: pose });
+  }
+  function RoutineTransportPlayback({ store, run, outcomes }) {
+    const playback = usePlayback(store), running = playback.playing || playback.time > 0.001;
+    const controls = useMemo(() => ({
+      toggle: store.toggle, play: store.play, reset: store.reset, seek: store.seek,
+      step: (direction) => {
+        const time = store.getSnapshot().time, index = window.AUTO.stepAt(run, time);
+        const next = run.steps[Math.max(0, Math.min(run.steps.length - 1, index + direction))];
+        store.seek(next ? next.t0 + (next.dur > 0 ? Math.min(0.05, next.dur / 2) : 0) : time);
+      },
+    }), [store, run]);
+    return h(window.RoutineTransport, { run, time: playback.time, playing: playback.playing, controls, running, outcomes });
+  }
+
   function App() {
     const [project, setProject] = useState(() => freshProject());
     const [activeIdx, setActiveIdx] = useState(0);
@@ -132,8 +195,6 @@
     const [alliance, setAlliance] = useState('blue');
     const [showGrid, setShowGrid] = useState(true);
     const [view, setView] = useState(FIT);
-    const [playTime, setPlayTime] = useState(0);
-    const [playing, setPlaying] = useState(false);
     const [graphOpen, setGraphOpen] = useState(false);
     const [outlineOpen, setOutlineOpen] = useState(true);
     const [inspectorOpen, setInspectorOpen] = useState(true);
@@ -152,9 +213,15 @@
     const [agentSessionId] = useState(() => 'session_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)));
     const agentRevision = useRef(-1);
     const [javaProjectState, setJavaProjectState] = useState({ status: 'unlinked', operation: null, catalog: null, integration: null, error: '', notice: '', bookmarkId: null, recentProjects: [] });
+    const [exportError, setExportError] = useState('');
+    const [unitSystem, setUnitSystemState] = useState(() => window.UnitPrefs.current());
+    const setUnitSystem = useCallback((next) => setUnitSystemState(window.UnitPrefs.set(next)), []);
     const javaRestoreGeneration = useRef(0);
     const skipDirty = useRef(true);
     const keyboardNavigation = useRef(false);
+    const playbackStore = useMemo(() => createPlaybackStore(), []);
+    const routinePlaybackStore = useMemo(() => createPlaybackStore(), []);
+    useEffect(() => () => { playbackStore.destroy(); routinePlaybackStore.destroy(); }, [playbackStore, routinePlaybackStore]);
 
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.listRecentJavaProjects !== 'function') return;
@@ -178,6 +245,7 @@
     }, []);
 
     const applyJavaProjectConnection = useCallback((result) => {
+      setExportError('');
       setJavaProjectState({
         status: 'ready',
         operation: null,
@@ -305,8 +373,6 @@
       return { ...state, routines: state.routines.map((candidate) => candidate.id === current.id ? value : candidate) };
     }), [commitRoutineState]);
     const [routineOutcomes, setRoutineOutcomes] = useState({});
-    const [routineTime, setRoutineTime] = useState(0);
-    const [routinePlaying, setRoutinePlaying] = useState(false);
     const [routineSel, setRoutineSel] = useState(null);
 
     const robot = project.robot;
@@ -400,7 +466,7 @@
     }, []);
     useEffect(() => {
       const pauseHiddenPlayback = () => {
-        if (document.hidden) { setPlaying(false); setRoutinePlaying(false); }
+        if (document.hidden) { playbackStore.pause(); routinePlaybackStore.pause(); }
       };
       document.addEventListener('visibilitychange', pauseHiddenPlayback);
       return () => document.removeEventListener('visibilitychange', pauseHiddenPlayback);
@@ -960,7 +1026,7 @@
       return base + ' ' + suffix;
     };
     const resetForPath = (i) => {
-      setActiveIdx(i); setSel({ kind: null, idx: -1 }); setPlayTime(0); setPlaying(false);
+      setActiveIdx(i); setSel({ kind: null, idx: -1 }); playbackStore.reset();
       hist.current = { past: [], future: [] }; setPage('plan');
     };
     const addPath = (folderId) => {
@@ -1008,7 +1074,7 @@
       if (!confirm('Delete path “' + target.name + '”? This cannot be undone.')) return false;
       setProject((pr) => { const paths = pr.paths.filter((_, k) => k !== i); return { ...pr, paths, pathLinks: (pr.pathLinks || []).filter((link) => link.fromPathId !== target.id && link.toPathId !== target.id) }; });
       setActiveIdx((a) => Math.max(0, a > i ? a - 1 : a === i ? Math.min(a, project.paths.length - 2) : a));
-      setSel({ kind: null, idx: -1 }); setPlayTime(0); setPlaying(false); hist.current = { past: [], future: [] };
+      setSel({ kind: null, idx: -1 }); playbackStore.reset(); hist.current = { past: [], future: [] };
       return true;
     };
     const renamePath = (i, name) => { const clean = (name || '').trim(); if (!clean) return false; setProject((pr) => { const paths = pr.paths.slice(); paths[i] = { ...paths[i], name: clean }; return { ...pr, paths }; }); return true; };
@@ -1035,7 +1101,7 @@
     }) }));
     const setActive = (i) => resetForPath(i);
     const resetForRoutine = () => {
-      setRoutineSel(null); setRoutineTime(0); setRoutinePlaying(false); setRoutineOutcomes({});
+      setRoutineSel(null); routinePlaybackStore.reset(); setRoutineOutcomes({});
     };
     const uniqueRoutineName = (base) => {
       const used = new Set(routines.map((candidate) => candidate.name.toLowerCase()));
@@ -1097,7 +1163,8 @@
         nextIndex = project.paths.findIndex((path) => path.id === agentProposal.targetPathId);
         if (nextIndex < 0) return;
         const replacement = clone(agentCandidate.path); replacement.id = project.paths[nextIndex].id;
-        const paths = project.paths.slice(); paths[nextIndex] = replacement; nextProject = { ...project, paths };
+        const paths = project.paths.slice(), beforePath = paths[nextIndex]; paths[nextIndex] = replacement;
+        nextProject = window.PathLinks.sync({ ...project, paths }, replacement.id, beforePath);
       } else {
         nextIndex = project.paths.length;
         nextProject = { ...project, paths: [...project.paths, clone(agentCandidate.path)] };
@@ -1108,23 +1175,8 @@
       setAgentProposal({ ...agentProposal, status: 'applied', appliedRevision: agentRevision.current + 1 });
     }, [agentProposal, agentCandidate, project, activeIdx, agentSessionId]);
 
-    // ---- playback loop ----
     const total = derived.prof.totalTime || 0;
-    const totalRef = useRef(0); totalRef.current = total;
-    const playRef = useRef(0); playRef.current = playTime;
-    const togglePlayback = useCallback(() => {
-      const totalNow = totalRef.current;
-      if (playRef.current >= totalNow - 1e-3) { setPlayTime(0); setPlaying(true); }
-      else setPlaying((value) => !value);
-    }, []);
-    useEffect(() => {
-      if (!playing) return; let raf, last = performance.now();
-      const tick = (now) => { const dt = (now - last) / 1000; last = now; setPlayTime((t) => { let nt = t + dt; if (nt >= total) { nt = total; setPlaying(false); } return nt; }); raf = requestAnimationFrame(tick); };
-      raf = requestAnimationFrame(tick); return () => cancelAnimationFrame(raf);
-    }, [playing, total]);
-    useEffect(() => { if (playTime > total) setPlayTime(total); }, [total]);
-    const restart = () => { setPlayTime(0); setPlaying(true); };
-    const seek = (t) => { setPlaying(false); setPlayTime(Math.max(0, Math.min(total, t))); };
+    useEffect(() => playbackStore.setTotal(total), [playbackStore, total]);
 
     // ---- routine run engine ----
     const lastRun = useRef({ steps: [], total: 0 });
@@ -1134,13 +1186,8 @@
       lastRun.current = nextRun;
       return nextRun;
     }, [page, routine, project.paths, robot, routineOutcomes, plannerId]);
-    useEffect(() => {
-      if (page !== 'auto' || !routinePlaying) return;
-      let raf, last = performance.now();
-      const tick = (now) => { const dt = (now - last) / 1000; last = now; setRoutineTime((t) => { let nt = t + dt; if (nt >= run.total) { nt = run.total; setRoutinePlaying(false); } return nt; }); raf = requestAnimationFrame(tick); };
-      raf = requestAnimationFrame(tick); return () => cancelAnimationFrame(raf);
-    }, [page, routinePlaying, run.total]);
-    useEffect(() => { if (routineTime > run.total) setRoutineTime(run.total); }, [run.total]);
+    useEffect(() => routinePlaybackStore.setTotal(run.total), [routinePlaybackStore, run.total]);
+    useEffect(() => { if (page !== 'plan') playbackStore.pause(); if (page !== 'auto') routinePlaybackStore.pause(); }, [page, playbackStore, routinePlaybackStore]);
 
     const acq = useMemo(() => ({
       outcomes: routineOutcomes,
@@ -1161,16 +1208,6 @@
       setOutcome: (id, br) => setRoutineOutcomes((o) => ({ ...o, [id]: br })),
       openInEditor: (id) => { const idx = project.paths.findIndex((path) => path.id === id); if (idx >= 0) { setActive(idx); setPage('plan'); } },
     }), [routineOutcomes, routine, project.paths]);
-    const routineControls = useMemo(() => ({
-      toggle: () => { if (routineTime >= run.total - 1e-6) setRoutineTime(0); setRoutinePlaying((p) => !p); },
-      play: () => { if (routineTime >= run.total - 1e-6) setRoutineTime(0); setRoutinePlaying(true); },
-      reset: () => { setRoutinePlaying(false); setRoutineTime(0); },
-      seek: (t) => { setRoutinePlaying(false); setRoutineTime(Math.max(0, Math.min(run.total, t))); },
-      step: (dir) => { setRoutinePlaying(false); const idx = window.AUTO.stepAt(run, routineTime); const ni = Math.max(0, Math.min(run.steps.length - 1, idx + dir)); const s = run.steps[ni]; if (s) setRoutineTime(s.t0 + (s.dur > 0 ? Math.min(0.05, s.dur / 2) : 0)); },
-    }), [run, routineTime]);
-    const routineRunning = routinePlaying || routineTime > 0.001;
-    const routineOverlay = useMemo(() => page === 'auto' ? window.AUTO.fieldOverlay(run, { time: routineTime, running: routineRunning, selectedId: routineSel }) : null, [page, run, routineTime, routineRunning, routineSel]);
-    const routinePose = page === 'auto' ? window.AUTO.poseAt(run, routineTime, robot) : null;
     const autoFieldActions = useMemo(() => ({ selectNode: (id) => setRoutineSel((s) => s === id ? null : id), select: () => setRoutineSel(null) }), []);
 
     // ---- view ----
@@ -1197,13 +1234,16 @@
       setProject(next);
       setPlannerId(next.plannerId || 'profiledSpline');
       setActiveIdx(requestedPathIndex >= 0 ? requestedPathIndex : 0); setSel({ kind: null, idx: -1 }); setRoutineSel(null);
+      playbackStore.reset();
+      routinePlaybackStore.reset();
+      setExportError('');
       hist.current = { past: [], future: [] };
       routineHist.current = { past: [], future: [] };
       projectHist.current = { past: [], future: [] };
       setDirty(false);
       setJavaProjectState((current) => ({ ...current, status: 'unlinked', operation: null, catalog: null, integration: null, bookmarkId: null, error: '', notice: '' }));
       if (next.editor && next.editor.javaProjectBookmarkId) void openRecentJavaProject(next.editor.javaProjectBookmarkId, javaGeneration);
-    }, [openRecentJavaProject]);
+    }, [openRecentJavaProject, playbackStore, routinePlaybackStore]);
     useEffect(() => {
       let active = true;
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.restoreLastProject !== 'function') return undefined;
@@ -1239,13 +1279,14 @@
 
     const onExportJava = useCallback(async (destination) => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.exportJava !== 'function') {
-        alert('Java trajectory export is available in the Bordeaux desktop app.');
+        setExportError('Java trajectory export is available in the Bordeaux desktop app.');
         return;
       }
       if (!javaProjectState.catalog) {
-        alert('Link a Java robot project before exporting Java trajectory JSON.');
+        setExportError('Link a Java robot project before exporting Java trajectory JSON.');
         return;
       }
+      setExportError('');
       setJavaProjectState((current) => ({ ...current, operation: 'export', error: '', notice: '' }));
       try {
         const result = await window.bordeauxAPI.exportJava({ schemaVersion: '1.0', ...project, routine, plannerId }, destination === 'saveAs' ? 'saveAs' : 'linked');
@@ -1254,8 +1295,11 @@
           operation: null,
           notice: result && result.exported ? 'Exported Java trajectory to ' + result.relativePath + '.' : '',
         }));
+        setExportError('');
       } catch (error) {
-        setJavaProjectState((current) => ({ ...current, operation: null, error: error && error.message ? error.message : String(error) }));
+        const message = error && error.message ? error.message : String(error);
+        setJavaProjectState((current) => ({ ...current, operation: null }));
+        setExportError(message);
       }
     }, [project, routine, plannerId, javaProjectState.catalog]);
 
@@ -1288,10 +1332,10 @@
           e.preventDefault();
           if (e.repeat) return;
           if (typeof e.target.blur === 'function') e.target.blur();
-          togglePlayback();
+          playbackStore.toggle();
           return;
         }
-        const toolShortcut = !e.metaKey && !e.ctrlKey && !e.altKey && !textEditing && ({ v: 'select', w: 'waypoint', r: 'rotation', m: 'marker', c: 'range' })[k];
+        const toolShortcut = !e.metaKey && !e.ctrlKey && !e.altKey && !textEditing && ({ '1': 'select', '2': 'waypoint', '3': 'rotation', '4': 'marker', '5': 'range', v: 'select', w: 'waypoint', r: 'rotation', m: 'marker', c: 'range' })[k];
         if (page === 'plan' && toolShortcut) {
           e.preventDefault();
           if (typeof e.target.blur === 'function') e.target.blur();
@@ -1325,22 +1369,22 @@
       };
       window.addEventListener('keydown', onKey);
       return () => window.removeEventListener('keydown', onKey);
-    }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, nudgeWp, nudgeFrac, alliance, togglePlayback]);
+    }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, nudgeWp, nudgeFrac, alliance, playbackStore]);
 
     const selNode = (page === 'auto' && routineSel) ? window.AUTO.findNode(routine, routineSel) : null;
 
     return h('div', { className: 'app' },
-      h(window.Panels.Toolbar, { project, page, setPage, alliance, setAlliance, onNew: newProject, onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo, onExportJava: () => onExportJava('linked'), javaProject: javaProjectState, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
+      h(window.Panels.Toolbar, { project, page, setPage, alliance, setAlliance, exportError, unitSystem, setUnitSystem, onNew: newProject, onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo, onExportJava: () => onExportJava('linked'), javaProject: javaProjectState, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
         routines, activeRoutineId: routine.id, setActiveRoutine, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine }),
       page === 'robot'
         ? h('main', { className: 'page-main' }, h(window.RobotPage, { robot, setRobot, accent, mcpEnabled, agentProposal: agentProposal && agentProposal.operation === 'configureRobot' ? agentProposal : null, onApplyProposal: applyAgentProposal, onRejectProposal: rejectAgentProposal }))
         : page === 'auto'
         ? h('main', { className: 'stage stage-auto' },
             h('nav', { className: 'rail rail-l', 'aria-label': 'Autonomous routine steps' },
-              h(window.RoutinePanel, { routine, run, paths: project.paths, selId: routineSel, onSelect: setRoutineSel, acq, time: routineTime, running: routineRunning })),
+              h(RoutinePanelPlayback, { store: routinePlaybackStore, routine, run, paths: project.paths, selId: routineSel, onSelect: setRoutineSel, acq })),
             h('div', { className: 'fieldcol' },
-              h(window.FieldView, { doc, derived, sel: { kind: null, idx: -1 }, tool: 'select', view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, playTime: 0, actions: autoFieldActions, onSelPos: () => {}, routine: routineOverlay, routinePose }),
-              h(window.RoutineTransport, { run, time: routineTime, playing: routinePlaying, controls: routineControls, running: routineRunning, outcomes: routineOutcomes }),
+              h(RoutineFieldPlayback, { store: routinePlaybackStore, run, selectedId: routineSel, doc, derived, sel: { kind: null, idx: -1 }, tool: 'select', view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, actions: autoFieldActions, onSelPos: () => {} }),
+              h(RoutineTransportPlayback, { store: routinePlaybackStore, run, outcomes: routineOutcomes }),
               h(window.Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
             h('aside', { className: 'rail rail-r' + (selNode ? '' : ' collapsed'), 'aria-label': 'Routine step inspector' },
               selNode && h(window.StepInspector, { node: selNode, paths: project.paths, acq, run, javaProject: { ...javaProjectState, link: linkJavaProject } })))
@@ -1349,10 +1393,13 @@
               h(window.Panels.Outline, { open: outlineOpen, setOpen: setOutlineOpen, doc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot })),
             h('div', { className: 'fieldcol' },
               h(window.Panels.ToolRail, { tool, setTool }),
+              exportError && h('div', { className: 'insert-preview export-error-banner', role: 'alert' },
+                h('div', { className: 'insert-preview-copy' }, h('b', null, 'Export failed'), h('span', null, exportError)),
+                h('button', { type: 'button', 'aria-label': 'Dismiss export error', onClick: () => setExportError('') }, '\u00d7')),
               derivation.error && h('div', { className: 'insert-preview derivation-error', role: 'alert' },
                 h('div', { className: 'insert-preview-copy' }, h('b', null, 'Path preview unavailable'), h('span', null, derivation.error.message || String(derivation.error))),
                 h('span', null, 'Showing the last valid preview. Undo or edit the selected geometry.')),
-              h(window.FieldView, { doc, derived, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, playTime, playing, actions: fieldActions, onSelPos, showHandles: true }),
+              h(PlaybackField, { store: playbackStore, doc, derived, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, actions: fieldActions, onSelPos, showHandles: true }),
               tool !== 'select' && !waypointPreview && h('div', { className: 'stage-hint', dangerouslySetInnerHTML: { __html: toolHint(tool) } }),
               waypointPreview && h('div', { className: 'insert-preview', role: 'region', 'aria-label': 'Preview waypoint insertion' },
                 h('div', { className: 'insert-preview-copy' },
@@ -1367,7 +1414,7 @@
                   h('span', null, agentProposal.intent),
                   h('span', { className: 'agent-proposal-status' }, agentProposal.status === 'ready' ? 'Preview only — the project has not changed.' : agentProposal.status === 'stale' ? 'Stale — the project changed. Ask the agent to regenerate.' : agentProposal.status === 'applied' ? 'Applied as one undoable project change.' : 'Rejected.'),
                   agentProposal.status === 'ready' && h('div', { className: 'agent-candidates', role: 'radiogroup', 'aria-label': 'Agent proposal candidates' }, agentCandidates.map((candidate) => h('button', { key: candidate.id, type: 'button', role: 'radio', 'aria-checked': agentCandidate && candidate.id === agentCandidate.id, className: agentCandidate && candidate.id === agentCandidate.id ? 'selected' : '', onClick: () => setAgentCandidateId(candidate.id) }, candidate.label + (candidate.valid === false ? ' · invalid' : candidate.metrics ? ' · ' + candidate.metrics.totalTimeS.toFixed(2) + ' s' : '')))),
-                  agentCandidate && agentCandidate.metrics && h('span', null, agentCandidate.metrics.totalDistanceM.toFixed(2) + ' m · ' + agentCandidate.metrics.minimumClearanceM.toFixed(2) + ' m modeled clearance'),
+                  agentCandidate && agentCandidate.metrics && h('span', null, window.UnitPrefs.format(agentCandidate.metrics.totalDistanceM, 'm', 2) + ' · ' + window.UnitPrefs.format(agentCandidate.metrics.minimumClearanceM, 'm', 2) + ' modeled clearance'),
                   agentCandidate && agentCandidate.valid === false && agentCandidate.rejectionReason && h('span', { className: 'agent-proposal-status' }, 'Blocked: ' + agentCandidate.rejectionReason),
                   agentProposal.recommendationReason && h('span', null, agentProposal.recommendationReason),
                   agentProposal.advisories && agentProposal.advisories.map((notice, index) => h('span', { key: 'advisory-' + index, className: 'agent-proposal-status' }, notice)),
@@ -1376,7 +1423,7 @@
                   agentProposal.status === 'ready' && h('button', { type: 'button', onClick: rejectAgentProposal }, 'Reject'),
                   agentProposal.status === 'ready' && h('button', { className: 'primary', type: 'button', disabled: !agentCandidate || agentCandidate.valid === false || (agentProposal.blockingIssues && agentProposal.blockingIssues.length > 0), onClick: applyAgentProposal }, agentProposal.operation === 'replace' ? 'Apply repair' : 'Add path'))),
               h(window.Panels.ConstraintBar, { c: doc.constraints, robot, onOpen: () => select(null, -1) }),
-              h(window.Panels.Transport, { derived, doc, metric, setMetric, playTime, playing, togglePlayback, seek, restart, graphOpen, setGraphOpen, plannerId: selectedPlannerId }),
+              h(PlaybackTransport, { store: playbackStore, derived, doc, metric, setMetric, graphOpen, setGraphOpen, plannerId: selectedPlannerId }),
               h(window.Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid, graphOpen })),
             h('aside', { className: 'rail rail-r' + (inspectorOpen ? '' : ' collapsed'), 'aria-label': 'Path inspector' },
               inspectorOpen

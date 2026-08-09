@@ -479,7 +479,7 @@
       body = h(React.Fragment, null,
         Stat3([
           { v: (derived.prof.totalTime || 0).toFixed(2) + 's', k: 'Time' },
-          { v: (derived.totalDistance || derived.sample.length || 0).toFixed(2) + 'm', k: 'Length' },
+          { v: window.UnitPrefs.format(derived.totalDistance || derived.sample.length || 0, 'm', 2), k: 'Length' },
           { v: issues.length ? String(issues.length) : '\u2713', k: issues.length ? 'Issues' : 'Clear', color: issues.length ? (errors ? 'var(--bad)' : 'var(--warn)') : 'var(--good)' },
         ]),
         h('div', { className: 'qrow', style: { marginTop: '10px' } },
@@ -653,8 +653,8 @@
       body = h(React.Fragment, null,
         h('div', { className: 'fieldlabel first' }, wpName(i, n) + ' \u2192 ' + wpName(i + 1, n)),
         Stat3([
-          { v: segLen.toFixed(2) + 'm', k: 'Length' },
-          { v: isFinite(minR) ? minR.toFixed(2) + 'm' : '\u221e', k: 'Min radius', color: isFinite(minR) && minR < 0.7 ? 'var(--bad)' : null },
+          { v: window.UnitPrefs.format(segLen, 'm', 2), k: 'Length' },
+          { v: isFinite(minR) ? window.UnitPrefs.format(minR, 'm', 2) : '\u221e', k: 'Min radius', color: isFinite(minR) && minR < 0.7 ? 'var(--bad)' : null },
           { v: dur.toFixed(2) + 's', k: 'Duration' },
         ]),
         h('div', { className: 'fieldlabel' }, 'Path type'),
@@ -915,7 +915,7 @@
       const rangeAnchor = rg.anchor === 'dist' ? 'dist' : rg.anchor === 'wp' ? 'wp' : 'param';
       const anchorOptions = [{ v: 'param', label: 'Proportional' }, { v: 'wp', label: 'Local' }].concat(rangeAnchor === 'dist' ? [{ v: 'dist', label: 'Distance (legacy)' }] : []);
       icon = 'gauge'; title = 'Constraint Range';
-      tag = (loF * len).toFixed(1) + '\u2013' + (hiF * len).toFixed(1) + ' m';
+      tag = window.UnitPrefs.fromCanonical(loF * len, 'm').toFixed(1) + '\u2013' + window.UnitPrefs.format(hiF * len, 'm', 1);
       body = h(React.Fragment, null,
         h(Num, { label: 'Max velocity', value: rg.maxVel, unit: 'm/s', min: 0, max: pathLimits.maxVel, onChange: (v) => actions.setRange(sel.idx, { maxVel: v }) }),
         h('section', { className: 'range-anchor-editor', 'aria-label': 'Range position lock' },

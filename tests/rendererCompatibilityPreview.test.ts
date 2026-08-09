@@ -17,6 +17,16 @@ function rendererMath() {
   };
 }
 
+function rendererPathLinks() {
+  const window: Record<string, unknown> = {};
+  const source = fs.readFileSync(new URL("../public/renderer/assets/path-links.js", import.meta.url), "utf8");
+  vm.runInNewContext(source, { window, JSON });
+  return window.PathLinks as {
+    reconcile(project: any): any;
+    sync(project: any, changedId: string, before: any): any;
+  };
+}
+
 describe("renderer application", () => {
   it("derives finite previews with each maintained planner", () => {
     const project = createDemoProject();
@@ -57,6 +67,40 @@ describe("renderer application", () => {
     expect(app).toContain("window.bordeauxAPI.autosaveProject");
   });
 
+  it("keeps linked path endpoints synchronized in both directions", () => {
+    const links = rendererPathLinks();
+    const project = createDemoProject();
+    const source = structuredClone(project.paths[0]);
+    const target = structuredClone(source);
+    source.id = "path_source";
+    target.id = "path_target";
+    target.waypoints[0].x = 8;
+    target.waypoints[0].prevC.x += 3;
+    target.waypoints[0].nextC.x += 3;
+    const linked = { ...project, paths: [source, target], pathLinks: [{ id: "link_1", fromPathId: source.id, toPathId: target.id }] };
+
+    const reconciled = links.reconcile(linked);
+    expect(reconciled.paths[1].waypoints[0]).toMatchObject({
+      x: source.waypoints.at(-1)!.x,
+      y: source.waypoints.at(-1)!.y,
+      theta: source.waypoints.at(-1)!.theta,
+      thetaOn: source.waypoints.at(-1)!.thetaOn,
+    });
+    expect(reconciled.paths[1].waypoints[0].stop).toBe(target.waypoints[0].stop);
+
+    const beforeSource = structuredClone(reconciled.paths[0]);
+    const movedSource = structuredClone(beforeSource);
+    movedSource.waypoints.at(-1)!.x += 1;
+    const forward = links.sync({ ...reconciled, paths: [movedSource, reconciled.paths[1]] }, movedSource.id, beforeSource);
+    expect(forward.paths[1].waypoints[0].x).toBe(movedSource.waypoints.at(-1)!.x);
+
+    const beforeTarget = structuredClone(forward.paths[1]);
+    const movedTarget = structuredClone(beforeTarget);
+    movedTarget.waypoints[0].y += 1;
+    const reverse = links.sync({ ...forward, paths: [forward.paths[0], movedTarget] }, movedTarget.id, beforeTarget);
+    expect(reverse.paths[0].waypoints.at(-1)!.y).toBe(movedTarget.waypoints[0].y);
+  });
+
   it("contains planner failures and retains the last valid preview", () => {
     const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
     expect(app).toContain("const lastDerived = useRef(null)");
@@ -71,6 +115,30 @@ describe("renderer application", () => {
     expect(field).toContain("onPointerCancel: onCancel");
     expect(field).toContain("onLostPointerCapture: onCancel");
     expect(field).toContain("removeEventListener('blur', onCancel)");
+    const pointerDrag = fs.readFileSync(new URL("../public/renderer/assets/pointer-drag.js", import.meta.url), "utf8");
+    expect(pointerDrag).toContain("lostpointercapture");
+    expect(pointerDrag).toContain("pointercancel");
+    for (const file of ["panels.js", "robot-page.js", "routine-panel.js", "ui-primitives.js"]) {
+      const source = fs.readFileSync(new URL(`../public/renderer/assets/${file}`, import.meta.url), "utf8");
+      expect(source).not.toContain("addEventListener('pointermove'");
+    }
+  });
+
+  it("keeps animation-frame playback below the root editor render", () => {
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
+    expect(app).toContain("function createPlaybackStore()");
+    expect(app).toContain("useSyncExternalStore");
+    expect(app).not.toContain("const [playTime, setPlayTime]");
+    expect(app).not.toContain("const [routineTime, setRoutineTime]");
+  });
+
+  it("offers clustered tool aliases and preserves the established shortcuts", () => {
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
+    const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
+    expect(app).toContain("'1': 'select', '2': 'waypoint', '3': 'rotation', '4': 'marker', '5': 'range'");
+    expect(app).toContain("v: 'select', w: 'waypoint', r: 'rotation', m: 'marker', c: 'range'");
+    expect(panels).toContain("legacy: 'V'");
+    expect(panels).toContain("legacy: 'C'");
   });
 
   it("keeps dormant Chap assets out of the application shell", () => {

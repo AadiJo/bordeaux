@@ -20,6 +20,52 @@ function snapshot(revision = 0) {
 }
 
 describe("agent session and private bridge", () => {
+  it("cancels an in-flight planning job when the editor revision changes", async () => {
+    let aborted = false;
+    const service = new AgentSessionService(() => {}, () => null, (_job, signal) => new Promise((_resolve, reject) => {
+      signal?.addEventListener("abort", () => {
+        aborted = true;
+        reject(new Error("planning worker aborted"));
+      }, { once: true });
+    }));
+    const initial = snapshot();
+    service.publishSnapshot(initial);
+
+    const pending = service.request({ method: "analyze_path", params: {} });
+    service.publishSnapshot({ ...initial, revision: 1 });
+
+    await expect(pending).rejects.toThrow("planning worker aborted");
+    expect(aborted).toBe(true);
+  });
+
+  it("does not start planning for an already-canceled request", async () => {
+    let invoked = false;
+    const service = new AgentSessionService(() => {}, () => null, async () => {
+      invoked = true;
+      return { findings: [] };
+    });
+    service.publishSnapshot(snapshot());
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(service.request({ method: "analyze_path", params: {} }, controller.signal)).rejects.toThrow("Agent planning was canceled");
+    expect(invoked).toBe(false);
+  });
+
+  it("keeps field orientation separate from physical alliance ownership", async () => {
+    const service = new AgentSessionService(() => {}, () => null);
+    const initial = snapshot();
+    service.publishSnapshot(initial);
+    const uncolored: any[] = await service.request({ method: "resolve_field_terms", params: { phrases: ["left trench"] } }) as any[];
+    expect(uncolored[0].status).toBe("unresolved");
+
+    const blue: any[] = await service.request({ method: "resolve_field_terms", params: { phrases: ["left trench"], alliance: "blue" } }) as any[];
+    service.publishSnapshot({ ...initial, revision: 1, allianceView: "red" });
+    const flippedBlue: any[] = await service.request({ method: "resolve_field_terms", params: { phrases: ["left trench"], alliance: "blue" } }) as any[];
+    expect(flippedBlue[0].matches[0].point).toEqual(blue[0].matches[0].point);
+    expect(flippedBlue[0].matches[0].displayPoint).not.toEqual(blue[0].matches[0].displayPoint);
+  });
+
   it("ignores invalid transient snapshots without replacing the last valid session", async () => {
     const service = new AgentSessionService(() => {}, () => null);
     const initial = snapshot();

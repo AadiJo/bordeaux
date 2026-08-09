@@ -1,0 +1,167 @@
+name: Publish beta prerelease
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Checked-in beta version, such as 0.2.0-beta.1
+        required: true
+        type: string
+      notes:
+        description: Optional prerelease notes; leave blank to generate them from commits
+        required: false
+        type: string
+
+concurrency:
+  group: bordeaux-beta-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/wrapper-validation@v4
+      - uses: gradle/actions/setup-gradle@v4
+      - run: npm ci
+      - name: Require the main branch
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Beta releases must be dispatched from main; selected ref is $GITHUB_REF."
+          exit 1
+      - name: Validate checked-in prerelease version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: node scripts/verify-prerelease-version.mjs
+      - name: Require a new Git tag
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set +e
+          git ls-remote --exit-code --tags origin "refs/tags/v$RELEASE_VERSION" >/dev/null
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "Tag v$RELEASE_VERSION already exists. Increment the checked-in beta version."
+            exit 1
+          fi
+          if [ "$status" -ne 2 ]; then exit "$status"; fi
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Configure Electron sandbox
+        run: |
+          node node_modules/electron/install.js
+          sudo chown root:root node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+      - run: xvfb-run -a npm run test:smoke:built
+
+  build:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: mac
+            os: macos-15
+            artifact: bordeaux-beta-macos
+          - platform: windows
+            os: windows-latest
+            artifact: bordeaux-beta-windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/wrapper-validation@v4
+      - uses: gradle/actions/setup-gradle@v4
+      - run: npm ci
+      - name: Validate checked-in prerelease version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: node scripts/verify-prerelease-version.mjs
+      - name: Require macOS signing and notarization credentials
+        if: matrix.platform == 'mac'
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: node scripts/verify-signing-env.mjs mac
+      - name: Require Windows signing credentials
+        if: matrix.platform == 'windows'
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: node scripts/verify-signing-env.mjs windows
+      - name: Build signed and notarized macOS packages
+        if: matrix.platform == 'mac'
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run package:mac:ci -- --config.mac.notarize=true --config.forceCodeSigning=true
+      - name: Build signed Windows packages
+        if: matrix.platform == 'windows'
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: npm run package:win -- --config.forceCodeSigning=true
+      - run: npm run verify:package -- release
+      - name: Verify public beta update manifest
+        run: node scripts/verify-update-manifest.mjs ${{ matrix.platform }} release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
+            release/*.blockmap
+            release/beta*.yml
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bordeaux-beta-*
+          path: release-assets
+          merge-multiple: true
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_NOTES: ${{ inputs.notes }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/v$RELEASE_VERSION" -f sha="$GITHUB_SHA" >/dev/null
+          if [ -n "$RELEASE_NOTES" ]; then
+            gh release create "v$RELEASE_VERSION" release-assets/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "Bordeaux v$RELEASE_VERSION" --notes "$RELEASE_NOTES" --prerelease
+          else
+            gh release create "v$RELEASE_VERSION" release-assets/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "Bordeaux v$RELEASE_VERSION" --generate-notes --prerelease
+          fi

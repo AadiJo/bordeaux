@@ -13,6 +13,7 @@
     const [drag, setDrag] = useState(null);   // { id }
     const [over, setOver] = useState(null);    // { id, before }
     const overRef = useRef(null);
+    const pointerDrag = window.PointerDrag.useController();
     const start = (id, e) => {
       e.preventDefault(); e.stopPropagation();
       setDrag({ id }); overRef.current = null; setOver(null);
@@ -24,14 +25,11 @@
         overRef.current = o; setOver(o);
       };
       const up = () => {
-        window.removeEventListener('pointermove', move);
-        window.removeEventListener('pointerup', up);
         const o = overRef.current;
         if (o && o.id) acq.reorder(id, o.id, o.before);
         overRef.current = null; setDrag(null); setOver(null);
       };
-      window.addEventListener('pointermove', move);
-      window.addEventListener('pointerup', up);
+      pointerDrag.start(e, { move, end: up, cancel: () => { overRef.current = null; setDrag(null); setOver(null); } });
     };
     return { drag, over, start };
   }
@@ -94,7 +92,7 @@
     let icon, color, meta, tag, kindCls;
     if (node.type === 'path') {
       const doc = paths.find((path) => path.id === node.ref); icon = 'route'; color = 'var(--accent)'; kindCls = 'path';
-      meta = seg ? (fmt(seg.t1 - seg.t0) + '  ·  ' + seg.deriv.sample.length.toFixed(2) + ' m') : (doc ? 'not in run path' : 'unbound');
+      meta = seg ? (fmt(seg.t1 - seg.t0) + '  ·  ' + window.UnitPrefs.format(seg.deriv.sample.length, 'm', 2)) : (doc ? 'not in run path' : 'unbound');
     } else if (node.type === 'decision') {
       icon = 'branch'; color = '#9aa3b0'; kindCls = 'decision'; meta = 'routes the run';
     } else {

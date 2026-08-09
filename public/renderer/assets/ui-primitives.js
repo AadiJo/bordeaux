@@ -231,30 +231,33 @@
   }
 
   // numeric field with drag-to-scrub
-  function Num({ label, value, onChange, unit, step = 0.01, min, max, precision = 2, accentDrag }) {
+  function Num({ label, value, onChange, unit, imperialUnit, step = 0.01, min, max, precision = 2, accentDrag }) {
     const id = useId();
     const [edit, setEdit] = useState(null);
     const ref = useRef(null);
+    const pointerDrag = window.PointerDrag.useController();
+    const unitSystem = window.UnitPrefs.current();
+    useEffect(() => setEdit(null), [unitSystem]);
     const start = () => (down) => {
       down.preventDefault();
       const sx = down.clientX, v0 = (typeof value === 'number' ? value : 0);
       const sens = step * 8;
       const mv = (e) => { let nv = v0 + (e.clientX - sx) * sens; if (min != null) nv = Math.max(min, nv); if (max != null) nv = Math.min(max, nv); onChange(Math.round(nv / step) * step); };
-      const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); document.body.style.cursor = ''; };
-      window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up); document.body.style.cursor = 'ew-resize';
+      pointerDrag.start(down, { move: mv, cursor: 'ew-resize' });
     };
-    const disp = edit != null ? edit : (typeof value === 'number' ? value.toFixed(precision) : value);
+    const displayValue = typeof value === 'number' ? window.UnitPrefs.fromCanonical(value, unit, imperialUnit) : value;
+    const disp = edit != null ? edit : (typeof displayValue === 'number' ? displayValue.toFixed(precision) : displayValue);
     return h('div', { className: 'numrow' },
       label != null && h('label', { className: 'numlbl', htmlFor: id, onPointerDown: start() }, label),
       h('div', { className: 'numbox' },
         h('input', {
           id, ref, className: 'numinput', value: disp, inputMode: 'decimal', 'aria-describedby': unit ? id + '-unit' : undefined,
           onChange: (e) => setEdit(e.target.value),
-          onFocus: (e) => { setEdit(typeof value === 'number' ? String(value) : value); requestAnimationFrame(() => e.target.select()); },
-          onBlur: (e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) onChange(n); setEdit(null); },
+          onFocus: (e) => { setEdit(typeof displayValue === 'number' ? String(displayValue) : displayValue); requestAnimationFrame(() => e.target.select()); },
+          onBlur: (e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) onChange(window.UnitPrefs.toCanonical(n, unit, imperialUnit)); setEdit(null); },
           onKeyDown: (e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { setEdit(null); e.target.blur(); } },
         }),
-        unit && h('span', { id: id + '-unit', className: 'numunit' }, unit)),
+        unit && h('span', { id: id + '-unit', className: 'numunit' }, window.UnitPrefs.label(unit, imperialUnit))),
     );
   }
 
@@ -294,9 +297,9 @@
     const c = window.PM.effectiveConstraints(constraints || {}, robot);
     const velocityBase = Math.min(c.maxVel || Infinity, robot && robot.maxSpeed > 0 ? robot.maxSpeed : Infinity);
     const candidates = [
-      { key: 'maxVel', base: velocityBase, order: 0, text: (v) => 'v \u2264 ' + v.toFixed(1) + ' m/s', aria: (v) => 'maximum velocity ' + v.toFixed(1) + ' meters per second' },
-      { key: 'maxAccel', base: c.maxAccel, order: 1, text: (v) => 'a \u2264 ' + v.toFixed(1) + ' m/s\u00b2', aria: (v) => 'maximum acceleration ' + v.toFixed(1) + ' meters per second squared' },
-      { key: 'maxDecel', base: c.maxDecel != null ? c.maxDecel : c.maxAccel, order: 2, text: (v) => 'decel \u2264 ' + v.toFixed(1) + ' m/s\u00b2', aria: (v) => 'maximum deceleration ' + v.toFixed(1) + ' meters per second squared' },
+      { key: 'maxVel', base: velocityBase, order: 0, text: (v) => 'v \u2264 ' + window.UnitPrefs.format(v, 'm/s', 1), aria: (v) => 'maximum velocity ' + window.UnitPrefs.format(v, 'm/s', 1) },
+      { key: 'maxAccel', base: c.maxAccel, order: 1, text: (v) => 'a \u2264 ' + window.UnitPrefs.format(v, 'm/s²', 1), aria: (v) => 'maximum acceleration ' + window.UnitPrefs.format(v, 'm/s²', 1) },
+      { key: 'maxDecel', base: c.maxDecel != null ? c.maxDecel : c.maxAccel, order: 2, text: (v) => 'decel \u2264 ' + window.UnitPrefs.format(v, 'm/s²', 1), aria: (v) => 'maximum deceleration ' + window.UnitPrefs.format(v, 'm/s²', 1) },
       { key: 'maxAngVel', base: c.maxAngVel, order: 3, text: (v) => '\u03c9 \u2264 ' + v.toFixed(0) + '\u00b0/s', aria: (v) => 'maximum angular velocity ' + v.toFixed(0) + ' degrees per second' },
       { key: 'maxAngAccel', base: c.maxAngAccel, order: 4, text: (v) => '\u03b1 \u2264 ' + v.toFixed(0) + '\u00b0/s\u00b2', aria: (v) => 'maximum angular acceleration ' + v.toFixed(0) + ' degrees per second squared' },
     ].filter((candidate) => {

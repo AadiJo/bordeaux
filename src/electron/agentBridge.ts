@@ -91,7 +91,9 @@ export class AgentBridgeServer {
       void readOne(socket, REQUEST_TIMEOUT_MS).then(async (raw) => {
         const envelope = raw as Partial<BridgeEnvelope>;
         if (!envelope || envelope.token !== descriptor.token || typeof envelope.id !== "string" || !envelope.request) throw new Error("Agent bridge authentication failed");
-        const result = await this.sessions.request(envelope.request);
+        const controller = new AbortController();
+        socket.once("close", () => controller.abort());
+        const result = await this.sessions.request(envelope.request, controller.signal);
         socket.end(encode({ id: envelope.id, result }));
       }).catch((error) => {
         const message = error instanceof Error ? error.message : String(error);

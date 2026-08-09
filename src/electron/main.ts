@@ -1,4 +1,5 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu } from "electron";
+import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, clipboard, dialog, ipcMain, Menu } from "electron";
+import { autoUpdater as updateClient } from "electron-updater";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -26,7 +27,9 @@ import {
   runJavaCatalogBuild,
 } from "./javaSupport";
 import { AgentBridgeClient, AgentBridgeServer } from "./agentBridge";
+import { AppUpdateController } from "./appUpdates";
 import { AgentSessionService } from "./agentSession";
+import { runAgentPlanningInWorker } from "./agentPlanningWorkerClient";
 import { serveBordeauxMcp } from "../mcp/server";
 
 function ignoreClosedStandardStream(error: NodeJS.ErrnoException): void {
@@ -41,6 +44,8 @@ let recentFiles: string[] = [];
 let currentProjectPath: string | null = null;
 let dirty = false;
 let allowClose = false;
+let appUpdates: AppUpdateController | null = null;
+let updateCheckTimer: NodeJS.Timeout | null = null;
 
 function buildJavaTrajectoryOffThread(project: BordeauxProject, catalog: JavaCommandCatalog): Promise<BuiltJavaTrajectory> {
   return new Promise((resolve, reject) => {
@@ -110,10 +115,75 @@ const agentSessions = new AgentSessionService(
     return receipt;
   },
   () => linkedJavaCatalog,
+  runAgentPlanningInWorker,
 );
 
 app.setName("Bordeaux");
 app.setAppUserModelId("org.frc2468.bordeaux");
+
+function showUpdateMessage(options: Electron.MessageBoxOptions): Promise<Electron.MessageBoxReturnValue> {
+  const window = mainWindow;
+  return window && !window.isDestroyed() ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
+}
+
+function createAppUpdateController(): AppUpdateController {
+  nativeAutoUpdater.on("before-quit-for-update", () => { allowClose = true; });
+  return new AppUpdateController(updateClient, {
+    unavailable: (currentVersion) => showUpdateMessage({
+      type: "info",
+      title: "Bordeaux updates",
+      message: "Update checks are available in installed builds.",
+      detail: `This development build is Bordeaux ${currentVersion}. Package and install a release before testing over-the-air updates.`,
+      buttons: ["OK"],
+    }).then(() => undefined),
+    downloading: (version) => showUpdateMessage({
+      type: "info",
+      title: "Bordeaux update found",
+      message: `Downloading Bordeaux ${version}…`,
+      detail: "Bordeaux will let you know when the update is ready to install.",
+      buttons: ["OK"],
+    }).then(() => undefined),
+    upToDate: (currentVersion) => showUpdateMessage({
+      type: "info",
+      title: "Bordeaux updates",
+      message: "Bordeaux is up to date.",
+      detail: `You are running Bordeaux ${currentVersion} on the beta channel.`,
+      buttons: ["OK"],
+    }).then(() => undefined),
+    failed: (message) => showUpdateMessage({
+      type: "error",
+      title: "Bordeaux update failed",
+      message: "Bordeaux could not check for updates.",
+      detail: message,
+      buttons: ["OK"],
+    }).then(() => undefined),
+    ready: async (version, projectDirty) => {
+      const result = await showUpdateMessage(projectDirty ? {
+        type: "info",
+        title: "Bordeaux update ready",
+        message: `Bordeaux ${version} has been downloaded.`,
+        detail: "Save or discard the current project first. The update will install after Bordeaux exits cleanly.",
+        buttons: ["Later"],
+      } : {
+        type: "info",
+        title: "Bordeaux update ready",
+        message: `Restart to install Bordeaux ${version}?`,
+        detail: "Bordeaux will close, install the downloaded update, and reopen.",
+        buttons: ["Later", "Restart and Update"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      });
+      return !projectDirty && result.response === 1 ? "restart" : "later";
+    },
+  }, {
+    packaged: app.isPackaged,
+    supported: process.platform === "darwin" || process.platform === "win32",
+    currentVersion: app.getVersion(),
+    isProjectDirty: () => dirty,
+    warn: (message, error) => console.warn(message, error),
+  });
+}
 
 async function rememberFile(filePath: string, saveTarget: string | null = filePath) {
   currentProjectPath = saveTarget;
@@ -262,7 +332,16 @@ function createWindow() {
   });
 
   const window = mainWindow;
-  window.once("ready-to-show", () => window.show());
+  window.once("ready-to-show", () => {
+    window.show();
+    if (appUpdates?.available && !updateCheckTimer) {
+      updateCheckTimer = setTimeout(() => {
+        updateCheckTimer = null;
+        void appUpdates?.check(false);
+      }, 10_000);
+      updateCheckTimer.unref();
+    }
+  });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("did-start-loading", () => {
     rejectProposalReceipts("The Bordeaux editor reloaded before acknowledging the proposal.");
@@ -512,7 +591,12 @@ function buildMenu() {
     : [{ label: "No Recent Projects", enabled: false }];
 
   const template: Electron.MenuItemConstructorOptions[] = [
-    ...(process.platform === "darwin" ? [{ label: app.name, submenu: [{ role: "about" }, { type: "separator" }, { role: "quit" }] } as Electron.MenuItemConstructorOptions] : []),
+    ...(process.platform === "darwin" ? [{ label: app.name, submenu: [
+      { role: "about" },
+      { label: "Check for Updates…", click: () => { void appUpdates?.check(true); } },
+      { type: "separator" },
+      { role: "quit" },
+    ] } as Electron.MenuItemConstructorOptions] : []),
     {
       label: "File",
       submenu: [
@@ -575,6 +659,11 @@ function buildMenu() {
       ],
     },
     { label: "View", submenu: [{ role: "reload" }, { role: "forceReload" }, { role: "toggleDevTools" }, { type: "separator" }, { role: "resetZoom" }, { role: "zoomIn" }, { role: "zoomOut" }, { type: "separator" }, { role: "togglefullscreen" }] },
+    ...(process.platform === "darwin" ? [] : [{ label: "Help", submenu: [
+      { label: "Check for Updates…", click: () => { void appUpdates?.check(true); } },
+      { type: "separator" },
+      { label: `Bordeaux ${app.getVersion()}`, enabled: false },
+    ] } as Electron.MenuItemConstructorOptions]),
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
@@ -846,12 +935,16 @@ app.whenReady().then(async () => {
   }
   agentBridge = new AgentBridgeServer(app.getPath("userData"), agentSessions);
   if (enableMcpAccessOnLaunch) await agentBridge.start();
+  appUpdates = createAppUpdateController();
+  appUpdates.start();
   buildMenu();
   createWindow();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 
 app.on("before-quit", () => {
+  if (updateCheckTimer) clearTimeout(updateCheckTimer);
+  updateCheckTimer = null;
   cancelJavaCatalogBuild(true);
   if (agentBridge?.enabled) void agentBridge.stop();
 });

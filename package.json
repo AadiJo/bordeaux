@@ -1,6 +1,6 @@
 {
   "name": "bordeaux",
-  "version": "0.1.0",
+  "version": "0.2.0-beta.1",
   "private": true,
   "productName": "Bordeaux",
   "author": "FRC Team 2468",
@@ -19,6 +19,7 @@
     "test:smoke:built": "node scripts/electron-smoke.mjs",
     "verify:renderer": "node scripts/verify-renderer.mjs",
     "verify:package": "node scripts/verify-package.mjs",
+    "verify:prerelease": "node scripts/verify-prerelease-version.mjs",
     "verify:release-tag": "node scripts/verify-release-tag.mjs",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit --pretty false",
     "package:dir": "npm run build && electron-builder --dir",
@@ -32,6 +33,7 @@
     "@types/node": "^22.10.2",
     "electron": "^43.3.0",
     "electron-builder": "^26.15.3",
+    "js-yaml": "4.3.1",
     "typescript": "^5.7.2",
     "vitest": "^4.1.10"
   },
@@ -42,6 +44,14 @@
     "appId": "org.frc2468.bordeaux",
     "productName": "Bordeaux",
     "asar": true,
+    "electronUpdaterCompatibility": ">=2.16",
+    "publish": {
+      "provider": "github",
+      "owner": "Zw96042",
+      "repo": "bordeaux",
+      "channel": "beta",
+      "releaseType": "prerelease"
+    },
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -79,7 +89,6 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "build/Bordeaux.icon",
-      "identity": null,
       "target": [
         {
           "target": "dmg",
@@ -129,6 +138,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",
+    "electron-updater": "6.8.9",
     "zod": "4.4.3"
   }
 }

@@ -27,6 +27,27 @@ export type AgentRequest =
   | { method: "plan_path"; params: PlanPathRequest }
   | { method: "get_proposal"; params: { proposalId: string } };
 
+export type AgentPlanningJob =
+  | { kind: "analyze"; snapshot: AgentSessionSnapshot; pathId: string; sampleLimit?: number; minimumClearanceM?: number }
+  | { kind: "repair"; snapshot: AgentSessionSnapshot; pathId: string; findingIds: string[]; minimumClearanceM?: number }
+  | { kind: "route"; snapshot: AgentSessionSnapshot; request: PlanPathRequest };
+
+export type AgentPlanningRunner = (job: AgentPlanningJob, signal?: AbortSignal) => Promise<unknown>;
+
+export async function runAgentPlanningJobDirect(job: AgentPlanningJob): Promise<unknown> {
+  if (job.kind === "analyze") {
+    return analyzePath(job.snapshot.project, job.pathId, {
+      plannerId: job.snapshot.plannerId,
+      sampleLimit: job.sampleLimit,
+      minimumClearanceM: job.minimumClearanceM,
+    });
+  }
+  if (job.kind === "repair") {
+    return generateRepairCandidates(job.snapshot.project, job.pathId, job.findingIds, job.snapshot.plannerId, job.minimumClearanceM);
+  }
+  return generateRouteCandidates(job.snapshot.project, job.request, job.snapshot.plannerId);
+}
+
 function requireSnapshot(snapshot: AgentSessionSnapshot | null): AgentSessionSnapshot {
   if (!snapshot) throw new Error("Open a Bordeaux project and wait for the editor to finish loading, then retry.");
   return snapshot;
@@ -77,13 +98,17 @@ function routeRecommendationReason(candidates: ReturnType<typeof generateRouteCa
 export class AgentSessionService {
   private snapshot: AgentSessionSnapshot | null = null;
   private readonly proposals = new Map<string, AgentProposal>();
+  private planningAbort: AbortController | null = null;
 
   constructor(
     private readonly sendProposal: (proposal: AgentProposal, requireReceipt: boolean) => void | Promise<void>,
     private readonly getJavaCatalog: () => JavaCommandCatalog | null,
+    private readonly runPlanning: AgentPlanningRunner = runAgentPlanningJobDirect,
   ) {}
 
   clearSnapshot(): void {
+    this.planningAbort?.abort();
+    this.planningAbort = null;
     this.snapshot = null;
     for (const proposal of this.proposals.values()) {
       if (proposal.status === "ready") proposal.status = "stale";
@@ -98,6 +123,8 @@ export class AgentSessionService {
     const previous = this.snapshot;
     this.snapshot = value;
     if (!previous || previous.sessionId !== value.sessionId || previous.revision !== value.revision) {
+      this.planningAbort?.abort();
+      this.planningAbort = null;
       for (const proposal of this.proposals.values()) {
         if (proposal.status === "ready" && (proposal.baseSessionId !== value.sessionId || proposal.baseRevision !== value.revision)) {
           proposal.status = "stale";
@@ -161,7 +188,27 @@ export class AgentSessionService {
     return proposal;
   }
 
-  async request(request: AgentRequest): Promise<unknown> {
+  private async executePlanning<T>(job: AgentPlanningJob, snapshot: AgentSessionSnapshot, signal?: AbortSignal): Promise<T> {
+    if (signal?.aborted) throw new Error("Agent planning was canceled.");
+    this.planningAbort?.abort();
+    const controller = new AbortController();
+    this.planningAbort = controller;
+    const onAbort = () => controller.abort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      const result = await this.runPlanning(job, controller.signal) as T;
+      if (controller.signal.aborted) throw new Error("Agent planning was canceled.");
+      if (!this.snapshot || this.snapshot.sessionId !== snapshot.sessionId || this.snapshot.revision !== snapshot.revision) {
+        throw new Error("The Bordeaux editor session changed while planning. Retry against the current session.");
+      }
+      return result;
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+      if (this.planningAbort === controller) this.planningAbort = null;
+    }
+  }
+
+  async request(request: AgentRequest, signal?: AbortSignal): Promise<unknown> {
     this.expireProposals();
     if (request.method === "field_pack") return REBUILT_2026_FIELD;
     if (request.method === "get_proposal") {
@@ -231,7 +278,6 @@ export class AgentSessionService {
       if (!Array.isArray(request.params.phrases) || request.params.phrases.length < 1 || request.params.phrases.length > 24) throw new Error("Provide between 1 and 24 field phrases.");
       return request.params.phrases.map((phrase) => withAllianceView(resolveProjectFieldTerm(phrase, snapshot.project.strategy, {
         alliance: request.params.alliance,
-        defaultAlliance: snapshot.allianceView,
         allianceView: snapshot.allianceView,
         pose: request.params.pose,
         relativeDistanceM: request.params.relativeDistanceM,
@@ -240,14 +286,18 @@ export class AgentSessionService {
     }
     const pathId = "pathId" in request.params && request.params.pathId ? request.params.pathId : snapshot.activePathId;
     if (request.method === "analyze_path") {
-      return analyzePath(snapshot.project, pathId, {
-        plannerId: snapshot.plannerId,
+      return this.executePlanning({
+        kind: "analyze", snapshot: clone(snapshot), pathId,
         sampleLimit: request.params.sampleLimit,
         minimumClearanceM: request.params.minimumClearanceM,
-      });
+      }, snapshot, signal);
     }
     if (request.method === "repair_path") {
-      const candidates = generateRepairCandidates(snapshot.project, pathId, request.params.findingIds, snapshot.plannerId, request.params.minimumClearanceM);
+      const candidates = await this.executePlanning<ReturnType<typeof generateRepairCandidates>>({
+        kind: "repair", snapshot: clone(snapshot), pathId,
+        findingIds: request.params.findingIds,
+        minimumClearanceM: request.params.minimumClearanceM,
+      }, snapshot, signal);
       if (candidates.length === 0) throw new Error("Bordeaux could not generate a targeted repair for those findings without changing unrelated intent.");
       const valid = candidates.filter((candidate) => candidate.valid);
       const proposal: PathProposal = {
@@ -273,7 +323,9 @@ export class AgentSessionService {
     if (endSemanticTag === "shoot-fuel" && snapshot.project.robot.planning?.shooter?.requiresTargetFacing && !request.params.finishFacing) {
       throw new Error("This robot profile requires target-facing shooter alignment. Add finishFacing with an official HUB reference before requesting shoot-fuel.");
     }
-    const candidates = generateRouteCandidates(snapshot.project, request.params, snapshot.plannerId);
+    const candidates = await this.executePlanning<ReturnType<typeof generateRouteCandidates>>({
+      kind: "route", snapshot: clone(snapshot), request: clone(request.params),
+    }, snapshot, signal);
     if (candidates.length === 0) throw new Error("Bordeaux could not generate route candidates for that request.");
     if (request.params.endAction) {
       const catalog = this.getJavaCatalog();

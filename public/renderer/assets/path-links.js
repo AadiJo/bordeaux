@@ -32,5 +32,18 @@
     return { ...project, paths };
   }
 
-  window.PathLinks = { copyPose, sync };
+  function reconcile(project) {
+    const paths = project.paths.slice();
+    (project.pathLinks || []).forEach((link) => {
+      const source = paths.find((path) => path.id === link.fromPathId);
+      const targetIndex = paths.findIndex((path) => path.id === link.toPathId);
+      if (!source || targetIndex < 0 || !source.waypoints.length || !paths[targetIndex].waypoints.length) return;
+      const target = clone(paths[targetIndex]);
+      target.waypoints[0] = copyPose(target.waypoints[0], source.waypoints[source.waypoints.length - 1]);
+      paths[targetIndex] = target;
+    });
+    return { ...project, paths };
+  }
+
+  window.PathLinks = { copyPose, sync, reconcile };
 })();

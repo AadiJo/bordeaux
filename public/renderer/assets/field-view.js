@@ -13,6 +13,11 @@
   // muted semantic colors (reserved for meaning, low saturation)
   const C_START = '#4bbf86', C_END = '#d2655f', C_NODE = '#8b94a2', C_NEUTRAL = '#9aa3b0';
 
+  function wheelZoomFactor(deltaY, deltaMode, viewportHeight) {
+    const pixels = deltaY * (deltaMode === 1 ? 16 : deltaMode === 2 ? Math.max(1, viewportHeight) : 1);
+    return Math.exp(Math.max(-120, Math.min(120, pixels)) * 0.0006);
+  }
+
   const localFootprint = (robot) => robot.footprint && robot.footprint.kind === 'polygon' && Array.isArray(robot.footprint.verticesM)
     ? robot.footprint.verticesM
     : [{ x: -robot.l / 2, y: -robot.w / 2 }, { x: robot.l / 2, y: -robot.w / 2 }, { x: robot.l / 2, y: robot.w / 2 }, { x: -robot.l / 2, y: robot.w / 2 }];
@@ -264,7 +269,7 @@
       const candidateInspectDouble = inspectItem && pendingInspect.key === inspectItem.pressKey
         && performance.now() - pendingInspect.at <= 550;
       if (!inspectItem) lastInspectPress.current = { key: null, at: 0 };
-      if (e.button === 0 && tool === 'waypoint' && !e.altKey) {
+      if (e.button === 0 && tool === 'waypoint' && !e.altKey && (role === 'bg' || role === 'seg' || role === 'ins')) {
         drag.current = { role: 'bg', insertWaypoint: false, start: { cx: e.clientX, cy: e.clientY }, vb0: { ...view }, world, moved: false, mid: false };
         return;
       }
@@ -452,7 +457,7 @@
       const svg = svgRef.current; const ctm = svg.getScreenCTM();
       const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
       const u = pt.matrixTransform(ctm.inverse());
-      const factor = e.deltaY > 0 ? 1.12 : 1 / 1.12;
+      const factor = wheelZoomFactor(e.deltaY, e.deltaMode, svg.clientHeight || window.innerHeight);
       let nw = view.w * factor;
       nw = Math.max(IMG_W * 0.12, Math.min(IMG_W * 1.6, nw)); const nh = nw * (IMG_H / IMG_W);
       const k = nw / view.w;
@@ -912,7 +917,7 @@
       const c = W2P(pose);
       const degHead = pose.heading * 180 / Math.PI + (flip ? 180 : 0);
       const front = forwardExtent(robot);
-      const bump = alliance === 'red' ? '#c75450' : '#4271c0';
+      const bump = accent;
       return h('g', { transform: `translate(${c.x} ${c.y}) rotate(${-degHead})`, style: { pointerEvents: 'none' } },
         h('polygon', { points: footprintPoints(robot, 1), fill: 'rgba(14,16,20,0.82)', stroke: bump, strokeWidth: P(3), strokeLinejoin: 'round' }),
         h('polygon', { points: footprintPoints(robot, 0.86), fill: 'none', stroke: 'rgba(255,255,255,0.10)', strokeWidth: P(1), strokeLinejoin: 'round' }),
@@ -976,7 +981,7 @@
       const c = W2P(routinePose);
       const degHead = (routinePose.heading || 0) * 180 / Math.PI + (flip ? 180 : 0);
       const front = forwardExtent(robot);
-      const bump = alliance === 'red' ? '#c75450' : '#4271c0';
+      const bump = accent;
       return h('g', { transform: `translate(${c.x} ${c.y}) rotate(${-degHead})`, style: { pointerEvents: 'none' } },
         h('polygon', { points: footprintPoints(robot, 1), fill: 'rgba(14,16,20,0.85)', stroke: bump, strokeWidth: P(3), strokeLinejoin: 'round' }),
         h('line', { x1: 0, y1: 0, x2: front + P(3), y2: 0, stroke: '#e8ecf2', strokeWidth: P(2.5) }),
@@ -1044,5 +1049,6 @@
   }
 
   window.FieldView = FieldView;
+  window.FieldZoom = { wheelZoomFactor };
   window.FIELD_DIMS = { FIELD_W, FIELD_H, IMG_W, IMG_H };
 })();

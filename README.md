@@ -26,6 +26,10 @@ env -u ELECTRON_RUN_AS_NODE npm run test:smoke
 
 Run `npm run verify:package` after producing an unpacked package. Release tags must match `package.json`; CI enforces this with `npm run verify:release-tag`.
 
+Large local installers should be archived outside the worktree instead of discarded. See [local artifact hygiene](docs/packaging.md#local-artifact-hygiene) for recoverable archive/restore commands and safe Git cleanup boundaries.
+
+Signed beta builds can update from GitHub prereleases. See [beta prereleases and automatic updates](docs/packaging.md#beta-prereleases-and-automatic-updates) for the release workflow and required signing credentials.
+
 ## Java robot integration
 
 Link a GradleRIO project in Bordeaux and use **Install Java Support**. This is the sole supported setup path: it installs bounded runtime/processor jars and a managed Gradle script in the robot project. See [java/README.md](java/README.md) for the generated command catalog and runtime APIs.

@@ -7,14 +7,17 @@ const repositoryManifest = JSON.parse(fs.readFileSync(path.resolve("package.json
 const requiredEntries = [
   "package.json",
   repositoryManifest.main,
+  "dist-electron/electron/agentPlanningWorker.js",
   "dist-electron/electron/javaTrajectoryWorker.js",
   "public/renderer/index.html",
   "public/renderer/assets/react.production.min.js",
   "public/renderer/assets/react-dom.production.min.js",
   "node_modules/@modelcontextprotocol/server/package.json",
+  "node_modules/electron-updater/package.json",
   "node_modules/zod/package.json",
 ];
 const requiredResources = [
+  "app-update.yml",
   "java/bordeaux-processor.jar",
   "java/bordeaux-runtime.jar",
 ];
@@ -80,6 +83,13 @@ for (const archive of archives) {
     const file = path.join(resourcesDirectory, resource);
     if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
       throw new Error(`${archive} is missing packaged resource: ${resource}`);
+    }
+  }
+
+  const updateConfig = fs.readFileSync(path.join(resourcesDirectory, "app-update.yml"), "utf8");
+  for (const [field, value] of Object.entries({ provider: "github", owner: "Zw96042", repo: "bordeaux", channel: "beta", releaseType: "prerelease" })) {
+    if (!new RegExp(`^${field}:\\s*${value}\\s*$`, "m").test(updateConfig)) {
+      throw new Error(`${archive} app-update.yml has unexpected ${field}`);
     }
   }
 
