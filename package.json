@@ -11,6 +11,7 @@
     "build": "npm run verify:renderer && npm run build:java && npm run build:electron",
     "build:java": "node scripts/build-java.mjs build",
     "build:electron": "tsc -p tsconfig.electron.build.json",
+    "benchmark:planners": "npm run build:electron && node scripts/benchmark-planners.mjs",
     "test": "vitest run",
     "test:java": "node scripts/build-java.mjs test",
     "test:java-integration": "npm run build && npm run test:java-integration:built",
