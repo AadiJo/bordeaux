@@ -20,6 +20,7 @@ export interface CanonicalPathPoint {
   segmentIndex: number;
   segmentFraction: number;
   waypointIndex?: number;
+  authoredStop: boolean;
   stop: boolean;
 }
 
@@ -145,6 +146,7 @@ export function buildCanonicalPathState(
       segmentIndex: segment,
       segmentFraction: segmentEnd > segmentStart ? (index - segmentStart) / (segmentEnd - segmentStart) : 0,
       ...(waypointIndex !== undefined ? { waypointIndex } : {}),
+      authoredStop: stoppedSamples.has(index),
       stop: stoppedSamples.has(index) || syntheticStops.has(index),
     };
   });
@@ -184,8 +186,9 @@ export function interpolatePathPoint(
 ): CanonicalPathPoint {
   const t = Math.max(0, Math.min(1, fraction));
   const mix = (first: number, second: number) => first + (second - first) * t;
-  const phasePoint = after.stop ? before : before.stop ? after : undefined;
-  const tangentRad = phasePoint?.tangentRad ?? mix(before.tangentRad, after.tangentRad);
+  const geometryPhasePoint = after.authoredStop ? before : before.authoredStop ? after : undefined;
+  const headingPhasePoint = after.stop ? before : before.stop ? after : undefined;
+  const tangentRad = geometryPhasePoint?.tangentRad ?? mix(before.tangentRad, after.tangentRad);
   return {
     sourceIndex: before.sourceIndex,
     s: mix(before.s, after.s),
@@ -197,14 +200,15 @@ export function interpolatePathPoint(
     tangentY: Math.sin(tangentRad),
     normalX: -Math.sin(tangentRad),
     normalY: Math.cos(tangentRad),
-    curvatureInvM: phasePoint?.curvatureInvM ?? mix(before.curvatureInvM, after.curvatureInvM),
-    headingRad: phasePoint?.headingRad ?? mix(before.headingRad, after.headingRad),
-    headingDerivativeRadPerM: phasePoint?.headingDerivativeRadPerM
+    curvatureInvM: geometryPhasePoint?.curvatureInvM ?? mix(before.curvatureInvM, after.curvatureInvM),
+    headingRad: headingPhasePoint?.headingRad ?? mix(before.headingRad, after.headingRad),
+    headingDerivativeRadPerM: headingPhasePoint?.headingDerivativeRadPerM
       ?? mix(before.headingDerivativeRadPerM, after.headingDerivativeRadPerM),
-    headingSecondDerivativeRadPerM2: phasePoint?.headingSecondDerivativeRadPerM2
+    headingSecondDerivativeRadPerM2: headingPhasePoint?.headingSecondDerivativeRadPerM2
       ?? mix(before.headingSecondDerivativeRadPerM2, after.headingSecondDerivativeRadPerM2),
     segmentIndex: before.segmentIndex,
     segmentFraction: mix(before.segmentFraction, after.segmentFraction),
+    authoredStop: false,
     stop: false,
   };
 }

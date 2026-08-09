@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- TheLab metadata (read by the `lab` CLI on publish; do not remove).
+     thelab:plan is the STABLE plan id — re-publishing this file updates the same
+     plan (bumping its version) even if the title changes. -->
+<meta name="thelab:project" content="bordeaux">
+<meta name="thelab:title" content="Corridor-Constrained Optimizer Review">
+<meta name="thelab:plan" content="corridor-constrained-optimizer-review">
+<meta name="thelab:kind" content="review">
+<meta name="thelab:status" content="done">
+<meta name="thelab:tags" content="trajectory,review,geometry">
+<!-- Optional: issue numbers this plan closes on ship, e.g. content="3,7". They
+     auto-close when the plan is marked done (`lab done … --commit`). -->
+<meta name="thelab:addresses" content="">
+<meta name="thelab:version" content="1">
+<meta name="thelab:hosted-url" content="https://thelab.wilsonzach.com/project/bordeaux/review/corridor-constrained-optimizer-review">
+<meta name="thelab:reviewof-branch" content="feat/trajectory-optimizer-v2">
+<script type="application/json" id="thelab-findings">[]</script>
+<!-- Optional owner questions. Add 1–8 entries; each needs 2–8 options. -->
+<script type="application/json" id="thelab-questions">[]</script>
+<title>Corridor-Constrained Optimizer Review</title>
+<style>
+  /* Self-contained. Mirrors The Lab reader so the local file looks like the hosted
+     one. This block is NOT published: the hosted view uses The Lab's own reader
+     stylesheet, and only the article content below is published. */
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    background: #0a0a0a; color: #a1a1a1;
+    font-size: 15px; line-height: 1.7; letter-spacing: -0.006em;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 40px 24px 96px; }
+  a { color: #4e9bfa; text-decoration: none; } a:hover { text-decoration: underline; }
+  img { max-width: 100%; height: auto; }
+  h1 { font-size: 30px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.2; color: #ededed; margin-bottom: 8px; }
+  h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.015em; color: #ededed; margin: 56px 0 16px; padding-top: 24px; border-top: 1px solid #222; }
+  h3 { font-size: 14px; font-weight: 600; color: #ededed; margin: 32px 0 12px; }
+  p { margin: 0 0 12px; } strong { color: #ededed; font-weight: 600; }
+  ul, ol { margin: 0 0 12px 22px; } li { margin: 4px 0; }
+  .lede { color: #ededed; font-size: 16px; margin: 4px 0 8px; }
+  code { font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; }
+  pre.code { background: #0d0d0d; border: 1px solid #222; border-radius: 6px; padding: 16px 20px; overflow-x: auto; font-size: 12.5px; line-height: 1.65; color: #a1a1a1; tab-size: 2; margin: 16px 0; }
+  .callout { border: 1px solid #222; border-left: 2px solid #4e9bfa; border-radius: 0 6px 6px 0; padding: 14px 20px; margin: 20px 0; font-size: 13.5px; color: #a1a1a1; }
+  .callout strong { color: #ededed; }
+  figure { margin: 16px 0; } figcaption { font-size: 12px; color: #6b6b6b; padding-top: 8px; font-family: ui-monospace, Menlo, monospace; }
+  .fig-scroll { overflow-x: auto; border: 1px solid #222; border-radius: 6px; }
+  .fig-scroll svg { display: block; width: 100%; height: auto; }
+  .tbl-scroll { overflow-x: auto; }
+  table.data { width: 100%; border-collapse: collapse; font-size: 13.5px; margin: 12px 0; }
+  table.data th { text-align: left; font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.07em; color: #6b6b6b; padding: 10px 14px; border-bottom: 1px solid #222; }
+  table.data td { padding: 10px 14px; border-bottom: 1px solid #222; color: #a1a1a1; vertical-align: top; }
+  table.data tr:last-child td { border-bottom: 0; }
+  table.data td:first-child { color: #ededed; white-space: nowrap; }
+  .plan-links { margin: 16px 0 8px; }
+  .plan-links table.data td:first-child { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: #6b6b6b; width: 90px; }
+  .plan-links table.data td:nth-child(2) { color: #ededed; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; word-break: break-all; }
+  .status { display: inline-flex; align-items: center; gap: 7px; }
+  .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; }
+  .st-draft::before { border: 1px solid #6b6b6b; }
+  .st-active::before { background: #4e9bfa; }
+  .st-done::before { background: #ededed; }
+  .st-archived::before { background: #333; }
+</style>
+</head>
+<body>
+<main class="wrap">
+<article>
+  <h1>Corridor-Constrained Optimizer Review</h1>
+
+  <!-- Plan meta: local-file chrome only — `lab publish` strips this whole section
+       from the published body (The Lab renders its own header + metadata rail). The
+       CLI fills the Version cell on publish (v1, v2, …). -->
+  <section class="plan-links">
+    <div class="tbl-scroll"><table class="data">
+      <tr><td>Project</td><td>bordeaux</td></tr>
+      <tr><td>Version</td><td id="thelab-version">v1</td></tr>
+      <tr><td>Status</td><td><span class="status st-done">done</span> · 2026-08-09</td></tr>
+    </table></div>
+  </section>
+
+  <p class="lede">No blocking or medium findings: the correction makes geometry refinement route-preserving, resolves shared/static validation disagreement, and retains explicit preview/apply safety.</p>
+
+  <h2>Context</h2>
+  <p>This review covers the uncommitted correction after <code>471241c2</code>. The reported path showed raw Optimized at <code>4.520 s</code>, Profiled at <code>4.484 s</code>, and an unconstrained geometry preview that saved time by visibly cutting the authored route.</p>
+
+  <h2>Verdict</h2>
+  <p><strong>Ship.</strong> The shorter Profiled result is not a valid physical optimum; the valid fixed-path result now matches across shared and renderer implementations. Geometry candidates are bounded by a symmetric, same-segment corridor, preserve authored metadata, remain preview-only, and cannot apply from stale state.</p>
+
+  <h2>Review coverage</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Area</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>Corridor correctness</td><td>Accepted candidates remain within the selected limit; the comparison is symmetric and restricted to corresponding segments.</td></tr>
+      <tr><td>Reported deviation</td><td>A 2,000-samples-per-segment audit measured <code>0.14798 m</code> for a <code>0.15 m</code> request; the UI reported <code>0.14813 m</code>.</td></tr>
+      <tr><td>State safety</td><td>Path, robot, and planner identity guard display and Apply. Dismiss/Cancel leave the document untouched.</td></tr>
+      <tr><td>Validation parity</td><td>Synthetic stops affect heading phase only; authored stops retain geometric one-sided interpolation. Shared/static tests agree.</td></tr>
+      <tr><td>Product clarity</td><td>The user chooses maximum centerline shift before search and sees corridor, time saved, and measured shift before Apply.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Residual boundary</h2>
+  <p>The corridor preserves an authored route; it is not yet an obstacle model. A future nonlinear phase should subtract explicit keep-out polygons inflated by the robot footprint and use multi-start trust-region/SQP geometry search. Until then, the product should describe this as corridor-constrained refinement rather than a globally optimal free-space planner.</p>
+
+  <h2>Verification</h2>
+  <ul>
+    <li><code>npm test</code> — 23 files, 227 tests passed.</li>
+    <li>Focused renderer/optimizer suite — 30 tests passed.</li>
+    <li><code>npm run typecheck</code>, renderer verification, build, Electron smoke, shadow gate, benchmark, package, and manifest verification passed.</li>
+    <li>Corridor audits at 0.03, 0.05, 0.10, 0.15, and 1.50 m stayed within bounds or correctly returned unchanged.</li>
+  </ul>
+
+  <h2>Findings</h2>
+  <p>No blocking or medium findings.</p>
+</article>
+</main>
+</body>
+</html>

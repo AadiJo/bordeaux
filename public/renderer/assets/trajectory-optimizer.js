@@ -78,6 +78,7 @@
         headingDerivative: headingDerivatives[index],
         headingSecondDerivative: headingSecondDerivatives[index],
         waypointIndex: waypointBySample.get(index),
+        authoredStop: stopped.has(index),
         stop: stopped.has(index) || (syntheticStops && syntheticStops.has(index)),
       };
     });
@@ -99,9 +100,10 @@
   }
 
   function interpolate(before, after) {
-    const phase = after.stop ? before : before.stop ? after : null;
+    const geometryPhase = after.authoredStop ? before : before.authoredStop ? after : null;
+    const headingPhase = after.stop ? before : before.stop ? after : null;
     const mix = (first, second) => (first + second) * 0.5;
-    const tangent = phase ? phase.tangentRad : mix(before.tangentRad, after.tangentRad);
+    const tangent = geometryPhase ? geometryPhase.tangentRad : mix(before.tangentRad, after.tangentRad);
     return {
       s: mix(before.s, after.s),
       f: mix(before.f, after.f),
@@ -112,10 +114,11 @@
       tangentY: Math.sin(tangent),
       normalX: -Math.sin(tangent),
       normalY: Math.cos(tangent),
-      curvature: phase ? phase.curvature : mix(before.curvature, after.curvature),
-      heading: phase ? phase.heading : mix(before.heading, after.heading),
-      headingDerivative: phase ? phase.headingDerivative : mix(before.headingDerivative, after.headingDerivative),
-      headingSecondDerivative: phase ? phase.headingSecondDerivative : mix(before.headingSecondDerivative, after.headingSecondDerivative),
+      curvature: geometryPhase ? geometryPhase.curvature : mix(before.curvature, after.curvature),
+      heading: headingPhase ? headingPhase.heading : mix(before.heading, after.heading),
+      headingDerivative: headingPhase ? headingPhase.headingDerivative : mix(before.headingDerivative, after.headingDerivative),
+      headingSecondDerivative: headingPhase ? headingPhase.headingSecondDerivative : mix(before.headingSecondDerivative, after.headingSecondDerivative),
+      authoredStop: false,
       stop: false,
     };
   }

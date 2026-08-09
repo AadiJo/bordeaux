@@ -631,6 +631,9 @@ input,select{font-family:inherit}
 .insert-preview-actions button:hover{background:var(--bg-3);color:var(--txt)}
 .insert-preview-actions .primary{background:var(--accent-surface);color:#fff}
 .insert-preview-actions .primary:hover{filter:brightness(1.08)}
+.geometry-corridor{display:flex;align-items:center;gap:8px;color:var(--txt-3);font-size:10px;white-space:nowrap}
+.geometry-corridor-input{display:flex;align-items:center;gap:4px;color:var(--txt-2)}
+.geometry-corridor-input input{width:58px;height:28px;padding:0 7px;border:1px solid var(--line);border-radius:5px;background:var(--bg-2);color:var(--txt);font:500 11px var(--mono)}
 .agent-proposal{top:68px;max-width:min(860px,calc(100% - 32px));align-items:flex-end}
 .agent-proposal .insert-preview-copy{gap:4px;max-width:690px}
 .agent-proposal .agent-proposal-status{color:var(--txt-2);white-space:normal;line-height:1.35}

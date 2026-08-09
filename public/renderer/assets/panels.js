@@ -258,7 +258,7 @@
         plan && h(React.Fragment, null,
           h('div', { className: 'tbdiv' }),
           h(PlannerFamily, { plannerId, onChange: setPlannerFamily }),
-          plannerId === 'optimizedTrajectory' && h('button', { className: 'qbtn geometry-refine-btn', type: 'button', disabled: geometryRefining, onClick: onRefineGeometry, title: 'Search for a faster all-Bezier handle layout and preview it before applying' }, geometryRefining ? 'Refining…' : 'Refine path')),
+          plannerId === 'optimizedTrajectory' && h('button', { className: 'qbtn geometry-refine-btn', type: 'button', disabled: geometryRefining, onClick: onRefineGeometry, title: 'Search for a faster all-Bezier path inside a route corridor you choose' }, geometryRefining ? 'Refining…' : 'Refine path')),
         (plan || page === 'auto') && h(React.Fragment, null,
           h('button', { className: 'alliance', type: 'button', onClick: () => setAlliance(alliance === 'blue' ? 'red' : 'blue'), title: 'Switch to ' + (alliance === 'blue' ? 'red' : 'blue') + ' alliance', 'aria-label': 'Alliance view: ' + alliance + '. Switch to ' + (alliance === 'blue' ? 'red' : 'blue') },
             h('span', { className: 'alliance-side blue' + (alliance === 'blue' ? ' on' : '') }, 'B'),

@@ -9,7 +9,7 @@ import {
   insertOptimizationBoundaries,
 } from "../src/shared/planners/optimizationConstraints";
 import { profiledSplineOptimizationSeed } from "../src/shared/planners/profiledSpline";
-import { buildCanonicalPathState, type CanonicalPathPoint } from "../src/shared/planners/pathState";
+import { buildCanonicalPathState, interpolatePathPoint, type CanonicalPathPoint } from "../src/shared/planners/pathState";
 import { accelerationBoundsForSpeedSquared, solveReachabilityProfile } from "../src/shared/planners/reachability";
 import { validateOptimizedTrajectory } from "../src/shared/planners/trajectoryValidation";
 import type { PlannerResult, RobotConfig, TrajectorySample } from "../src/shared/types";
@@ -32,6 +32,7 @@ function point(overrides: Partial<CanonicalPathPoint> = {}): CanonicalPathPoint 
     headingSecondDerivativeRadPerM2: 0,
     segmentIndex: 0,
     segmentFraction: 0,
+    authoredStop: false,
     stop: false,
     ...overrides,
   };
@@ -87,6 +88,23 @@ describe("canonical optimizer path state", () => {
     expect(state.points[1]).toMatchObject({ waypointIndex: 1, stop: true });
     expect(state.points[1].headingRad).toBeGreaterThan(state.points[0].headingRad);
     expect(state.points.every((sample) => sample.tangentX > 0.999)).toBe(true);
+  });
+
+  it("uses synthetic stops only as heading phase boundaries", () => {
+    const before = point({ curvatureInvM: 1, headingDerivativeRadPerM: 2 });
+    const after = point({
+      s: 1,
+      f: 1,
+      curvatureInvM: 5,
+      headingDerivativeRadPerM: 8,
+      stop: true,
+      authoredStop: false,
+    });
+
+    const midpoint = interpolatePathPoint(before, after);
+
+    expect(midpoint.curvatureInvM).toBe(3);
+    expect(midpoint.headingDerivativeRadPerM).toBe(2);
   });
 });
 

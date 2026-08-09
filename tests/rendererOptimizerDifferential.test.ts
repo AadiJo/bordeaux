@@ -47,12 +47,14 @@ function rendererGeometryOptimizer() {
     );
   }
   return window.TrajectoryGeometryOptimizer as {
-    refine(path: PathDoc, robot: BordeauxProject["robot"], perSegment: number): {
+    refine(path: PathDoc, robot: BordeauxProject["robot"], perSegment: number, options?: { corridorM?: number }): {
       status: string;
       path?: PathDoc;
       baselineTimeS?: number;
       candidateTimeS?: number;
       gainS?: number;
+      corridorM?: number;
+      maxDeviationM?: number;
       reason?: string;
     };
   };
@@ -340,6 +342,55 @@ describe("static renderer optimizer mirror", () => {
       expect(velocity, `tank velocity ${index}`).toBeCloseTo(shared.samples[index].velocityMps, 3);
     });
   });
+
+  it("matches a curved look-at path with a translation-priority tangent transition", () => {
+    const renderer = rendererMath();
+    const project = createDemoProject();
+    project.robot = { drive: "swerve", w: 0.84, l: 0.84, maxSpeed: 5 };
+    const path = project.paths[0];
+    path.headingMode = "targets";
+    path.constraints = {
+      ...path.constraints,
+      maxVel: 4.2,
+      maxAccel: 6.5,
+      maxDecel: 6.5,
+      maxAngVel: 540,
+      maxAngAccel: 720,
+      maxAngDecel: 720,
+    };
+    path.waypoints = buildWaypoints([
+      {
+        x: 3.581065084352355, y: 5.339468715198096,
+        prevC: { x: 2.989372773457702, y: 5.853818993926654 },
+        nextC: { x: 2.5998220188110155, y: 6.197864180826471 },
+        segmentHeadingMode: "lookAt", segmentLookAt: { x: 5.216716597159319, y: 3.993602884972327 },
+      },
+      {
+        x: 3.9615519819029283, y: 7.436356983423748,
+        prevC: { x: 3.071616099599939, y: 7.459918521625691 },
+        nextC: { x: 5.548085121345798, y: 7.394352652643313 },
+        segmentHeadingMode: "tangent",
+        headingTransition: { placement: "after", rotationPriority: "translation", distanceM: 0.75 },
+      },
+      {
+        x: 8.481210467617753, y: 5.520387163792521,
+        prevC: { x: 8.472842864488978, y: 7.683499888343893 },
+        nextC: { x: 8.48381450722119, y: 4.847215753205544 },
+        segmentHeadingMode: "tangent",
+      },
+      {
+        x: 7.923694504516405, y: 2.6969745555902405,
+        prevC: { x: 6.162558609790157, y: 5.365733079420055 },
+      },
+    ]);
+
+    const preview = renderer.derivePath(path, project.robot, 56, "optimizedTrajectory");
+    const shared = getPlanner("optimizedTrajectory").generate({ path, robot: project.robot, samplesPerSegment: 56 });
+
+    expect(preview.optimization).toMatchObject({ status: "optimal", plannerUsed: "optimizedTrajectory", constraintViolations: 0 });
+    expect(shared.optimization).toMatchObject({ status: "optimal", plannerUsed: "optimizedTrajectory", constraintViolations: 0 });
+    expect(preview.prof.totalTime).toBeCloseTo(shared.totalTimeS, 4);
+  });
 });
 
 describe("optimized preview worker controller", () => {
@@ -389,11 +440,13 @@ describe("explicit geometry refinement", () => {
     ]);
     path.markers = [{ id: "score", f: 0.7, name: "Score" }];
     path.ranges = [{ anchor: "param", f0: 0.3, f1: 0.6, maxVel: 3, maxAccel: 4, maxDecel: 4, maxAngVel: 360, maxAngAccel: 720 }];
-    const result = rendererGeometryOptimizer().refine(path, project.robot, 56);
+    const result = rendererGeometryOptimizer().refine(path, project.robot, 56, { corridorM: 0.15 });
 
     expect(result.status).toBe("candidate");
     expect(result.gainS).toBeGreaterThanOrEqual(Math.max(0.02, result.baselineTimeS! * 0.005));
     expect(result.candidateTimeS).toBeLessThan(result.baselineTimeS!);
+    expect(result.corridorM).toBe(0.15);
+    expect(result.maxDeviationM).toBeLessThanOrEqual(0.150001);
     expect(result.path?.markers).toEqual(path.markers);
     expect(result.path?.ranges).toEqual(path.ranges);
     result.path?.waypoints.forEach((waypoint, index) => {
