@@ -38,6 +38,7 @@ jobs:
       - run: npm run verify:release-tag
       - run: npm test
       - run: npm run typecheck
+      - run: npm run shadow:optimizer
       - run: npm run ${{ matrix.command }}
       - run: npm run verify:package -- release
       - uses: actions/upload-artifact@v4

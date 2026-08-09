@@ -23,6 +23,7 @@ jobs:
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
+      - run: npm run shadow:optimizer
       - run: npm run test:java-integration:built
       - run: npm audit --audit-level=high
       - name: Configure Electron sandbox
