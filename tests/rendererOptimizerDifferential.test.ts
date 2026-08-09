@@ -55,6 +55,7 @@ function rendererGeometryOptimizer() {
       candidateTimeS?: number;
       gainS?: number;
       corridorM?: number;
+      clearanceM?: number;
       maxDeviationM?: number;
       minimumClearanceM?: number;
       reason?: string;
@@ -448,8 +449,9 @@ describe("explicit geometry refinement", () => {
     expect(result.gainS).toBeGreaterThanOrEqual(Math.max(0.02, result.baselineTimeS! * 0.005));
     expect(result.candidateTimeS).toBeLessThan(result.baselineTimeS!);
     expect(result.corridorM).toBe(0.15);
+    expect(result.clearanceM).toBe(0);
     expect(result.maxDeviationM).toBeLessThanOrEqual(0.150001);
-    expect(result.minimumClearanceM).toBeGreaterThanOrEqual(0.05 - 1e-6);
+    expect(result.minimumClearanceM).toBeGreaterThanOrEqual(-1e-6);
     expect(result.path?.markers).toEqual(path.markers);
     expect(result.path?.ranges).toEqual(path.ranges);
     result.path?.waypoints.forEach((waypoint, index) => {

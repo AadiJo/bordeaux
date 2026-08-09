@@ -488,7 +488,7 @@
         sourcePlannerId: selectedPlannerId,
         status: 'settings',
         corridorM: 0.05,
-        clearanceM: 0.05,
+        clearanceM: 0,
         keepOuts: clone(doc.keepOuts || []),
         drawingKeepOut: false,
       });

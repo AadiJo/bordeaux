@@ -9,7 +9,7 @@
   const DEFAULT_CORRIDOR_M = 0.05;
   const MIN_CORRIDOR_M = 0.03;
   const MAX_CORRIDOR_M = 1.5;
-  const DEFAULT_CLEARANCE_M = 0.05;
+  const DEFAULT_CLEARANCE_M = 0;
   const MIN_CLEARANCE_M = 0;
   const MAX_CLEARANCE_M = 0.5;
 
@@ -225,7 +225,7 @@
       return {
         status: 'unchanged', corridorM, clearanceM, baselineTimeS: baseline.prof.totalTime,
         candidateTimeS: baseline.prof.totalTime, gainS: 0,
-        reason: 'No collision-free path was found inside the route corridor and keep-out regions.',
+        reason: `No candidate met the ${clearanceM.toFixed(2)} m footprint clearance inside the route corridor and keep-out regions.`,
       };
     }
 
