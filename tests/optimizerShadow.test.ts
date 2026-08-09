@@ -23,11 +23,12 @@ interface ShadowApi {
     statuses: Record<string, number>;
     plannerUsed: Record<string, number>;
     comparisons: Record<string, number>;
-    solveTimeMs: { sum: number; max: number };
+    solveTimeMs: { sum: number; max: number; histogram: Record<string, number> };
     deltaTimeS: { sum: number; min: number; max: number };
     constraintViolations: number;
     workerErrors: number;
     averages: Record<string, number>;
+    percentiles: Record<string, number | null>;
   };
   clear(): boolean;
 }
@@ -77,11 +78,12 @@ describe("optimizer shadow metrics", () => {
       statuses: { optimal: 1 },
       plannerUsed: { optimizedTrajectory: 1 },
       comparisons: { faster: 1, equal: 0, slower: 0 },
-      solveTimeMs: { sum: 3.25, max: 3.25 },
+      solveTimeMs: { sum: 3.25, max: 3.25, histogram: { "5": 1 } },
       deltaTimeS: { sum: -0.5, min: -0.5, max: -0.5 },
       constraintViolations: 0,
       workerErrors: 0,
       averages: { solveTimeMs: 3.25, profiledTimeS: 2, optimizedTimeS: 1.5, deltaTimeS: -0.5 },
+      percentiles: { solveTimeP50UpperBoundMs: 5, solveTimeP95UpperBoundMs: 5 },
     });
     expect(storage.getItem(METRICS_KEY)).not.toMatch(/do-not-store|secret-path|project|path/);
   });

@@ -5,6 +5,8 @@
   const MAX_RECORDS = 1000000;
   const STATUSES = ['optimal', 'feasible', 'invalid-input', 'infeasible', 'cancelled', 'internal-error', 'worker-error', 'missing'];
   const MODES = ['profiled-shadow', 'optimized-opt-in'];
+  const SOLVE_BUCKETS_MS = [1, 2, 5, 10, 20, 30, 50, 100, 250, 1000];
+  const SOLVE_BUCKET_KEYS = SOLVE_BUCKETS_MS.map(String).concat('overflow');
 
   function empty() {
     return {
@@ -14,7 +16,7 @@
       statuses: Object.fromEntries(STATUSES.map((status) => [status, 0])),
       plannerUsed: { profiledSpline: 0, optimizedTrajectory: 0, missing: 0 },
       comparisons: { faster: 0, equal: 0, slower: 0 },
-      solveTimeMs: { sum: 0, max: 0 },
+      solveTimeMs: { sum: 0, max: 0, histogram: Object.fromEntries(SOLVE_BUCKET_KEYS.map((key) => [key, 0])) },
       profiledTimeS: { sum: 0 },
       optimizedTimeS: { sum: 0 },
       deltaTimeS: { sum: 0, min: 0, max: 0 },
@@ -61,7 +63,11 @@
         statuses: Object.fromEntries(STATUSES.map((status) => [status, count(parsed.statuses && parsed.statuses[status])])),
         plannerUsed: Object.fromEntries(Object.keys(base.plannerUsed).map((planner) => [planner, count(parsed.plannerUsed && parsed.plannerUsed[planner])])),
         comparisons: Object.fromEntries(Object.keys(base.comparisons).map((key) => [key, count(parsed.comparisons && parsed.comparisons[key])])),
-        solveTimeMs: { sum: number(parsed.solveTimeMs && parsed.solveTimeMs.sum), max: number(parsed.solveTimeMs && parsed.solveTimeMs.max) },
+        solveTimeMs: {
+          sum: number(parsed.solveTimeMs && parsed.solveTimeMs.sum),
+          max: number(parsed.solveTimeMs && parsed.solveTimeMs.max),
+          histogram: Object.fromEntries(SOLVE_BUCKET_KEYS.map((key) => [key, count(parsed.solveTimeMs && parsed.solveTimeMs.histogram && parsed.solveTimeMs.histogram[key])])),
+        },
         profiledTimeS: { sum: number(parsed.profiledTimeS && parsed.profiledTimeS.sum) },
         optimizedTimeS: { sum: number(parsed.optimizedTimeS && parsed.optimizedTimeS.sum) },
         deltaTimeS: {
@@ -113,6 +119,8 @@
     const solveTime = finite(diagnostics && diagnostics.solveTimeMs, 1000000);
     metrics.solveTimeMs.sum += solveTime;
     metrics.solveTimeMs.max = Math.max(metrics.solveTimeMs.max, solveTime);
+    const solveBucket = SOLVE_BUCKETS_MS.find((upperBound) => solveTime <= upperBound) || 'overflow';
+    metrics.solveTimeMs.histogram[String(solveBucket)] += 1;
     metrics.profiledTimeS.sum += profiledTime;
     metrics.optimizedTimeS.sum += optimizedTime;
     metrics.deltaTimeS.sum += delta;
@@ -139,6 +147,15 @@
   function snapshot() {
     const metrics = read();
     const divisor = Math.max(1, metrics.records - Math.min(metrics.records, metrics.workerErrors));
+    const percentileUpperBound = (fraction) => {
+      const target = Math.max(1, Math.ceil(divisor * fraction));
+      let count = 0;
+      for (const key of SOLVE_BUCKET_KEYS) {
+        count += metrics.solveTimeMs.histogram[key];
+        if (count >= target) return key === 'overflow' ? null : Number(key);
+      }
+      return null;
+    };
     return {
       ...metrics,
       averages: {
@@ -146,6 +163,10 @@
         profiledTimeS: metrics.profiledTimeS.sum / divisor,
         optimizedTimeS: metrics.optimizedTimeS.sum / divisor,
         deltaTimeS: metrics.deltaTimeS.sum / divisor,
+      },
+      percentiles: {
+        solveTimeP50UpperBoundMs: percentileUpperBound(0.5),
+        solveTimeP95UpperBoundMs: percentileUpperBound(0.95),
       },
     };
   }
