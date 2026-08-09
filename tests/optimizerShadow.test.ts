@@ -3,7 +3,8 @@ import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 
 const ENABLED_KEY = "bordeaux.dev.optimizerShadow.enabled";
-const METRICS_KEY = "bordeaux.dev.optimizerShadow.metrics.v1";
+const METRICS_KEY = "bordeaux.dev.optimizerShadow.metrics.v2";
+const LEGACY_METRICS_KEY = "bordeaux.dev.optimizerShadow.metrics.v1";
 
 class MemoryStorage {
   values = new Map<string, string>();
@@ -15,10 +16,12 @@ class MemoryStorage {
 interface ShadowApi {
   enabled(): boolean;
   setEnabled(value: boolean): boolean;
+  policy(plannerId: string): { run: boolean; publish: boolean; record: boolean; mode: string };
   record(input: unknown): boolean;
   recordWorkerError(mode: string): boolean;
   snapshot(): {
     records: number;
+    timedRecords: number;
     modes: Record<string, number>;
     statuses: Record<string, number>;
     plannerUsed: Record<string, number>;
@@ -74,6 +77,7 @@ describe("optimizer shadow metrics", () => {
     const snapshot = api.snapshot();
     expect(snapshot).toMatchObject({
       records: 1,
+      timedRecords: 1,
       modes: { "profiled-shadow": 1, "optimized-opt-in": 0 },
       statuses: { optimal: 1 },
       plannerUsed: { optimizedTrajectory: 1 },
@@ -101,12 +105,39 @@ describe("optimizer shadow metrics", () => {
     expect(storage.getItem(METRICS_KEY)).not.toContain("message");
   });
 
+  it("keeps timing extrema correct after an earlier worker failure", () => {
+    const { api } = shadowApi();
+    api.setEnabled(true);
+    api.recordWorkerError("profiled-shadow");
+    api.record({
+      mode: "profiled-shadow",
+      profiled: { prof: { totalTime: 1 } },
+      optimized: { prof: { totalTime: 2 }, optimization: { status: "optimal", plannerUsed: "optimizedTrajectory" } },
+    });
+    expect(api.snapshot()).toMatchObject({
+      records: 2,
+      timedRecords: 1,
+      deltaTimeS: { sum: 1, min: 1, max: 1 },
+      averages: { deltaTimeS: 1 },
+    });
+  });
+
+  it("uses an executable policy for disabled, shadow, and published previews", () => {
+    const { api } = shadowApi();
+    expect(api.policy("profiledSpline")).toEqual({ run: false, publish: false, record: false, mode: "profiled-shadow" });
+    expect(api.policy("optimizedTrajectory")).toEqual({ run: true, publish: true, record: false, mode: "optimized-opt-in" });
+    api.setEnabled(true);
+    expect(api.policy("profiledSpline")).toEqual({ run: true, publish: false, record: true, mode: "profiled-shadow" });
+    expect(api.policy("optimizedTrajectory")).toEqual({ run: true, publish: true, record: true, mode: "optimized-opt-in" });
+  });
+
   it("recovers from malformed nested counters and enforces the record ceiling", () => {
     const { api, storage } = shadowApi();
     api.setEnabled(true);
     storage.setItem(METRICS_KEY, JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       records: 1_000_000,
+      timedRecords: 0,
       statuses: { optimal: "many" },
       modes: null,
       solveTimeMs: { sum: "fast", max: null },
@@ -115,5 +146,14 @@ describe("optimizer shadow metrics", () => {
     expect(api.record({})).toBe(false);
     expect(api.clear()).toBe(true);
     expect(api.snapshot().records).toBe(0);
+  });
+
+  it("does not mix legacy observations into the histogram schema", () => {
+    const storage = new MemoryStorage();
+    storage.setItem(LEGACY_METRICS_KEY, JSON.stringify({ schemaVersion: 1, records: 50 }));
+    const { api } = shadowApi(storage);
+    expect(api.snapshot()).toMatchObject({ records: 0, timedRecords: 0 });
+    expect(api.clear()).toBe(true);
+    expect(storage.getItem(LEGACY_METRICS_KEY)).toBeNull();
   });
 });

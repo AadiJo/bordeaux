@@ -66,7 +66,7 @@ describe("renderer application", () => {
     expect(app).toContain("new window.OptimizedPreviewController()");
     expect(app).toContain("derivePath(doc, robot, PERSEG, 'profiledSpline')");
     expect(app).toContain("currentOptimizedPreview.value.optimization.status !== 'optimal'");
-    expect(app).toContain("shadow.record({ mode: shadowMode, profiled: derivation.value, optimized: value })");
+    expect(app).toContain("shadow.policy(selectedPlannerId)");
     expect(app).toContain("class AppErrorBoundary");
   });
 

@@ -419,23 +419,24 @@
       }
       const controller = optimizedPreviewController.current;
       const shadow = window.BordeauxOptimizerShadow;
-      const shadowEnabled = !!(shadow && shadow.enabled());
-      if ((selectedPlannerId !== 'optimizedTrajectory' && !shadowEnabled) || !controller) {
+      const shadowPolicy = shadow
+        ? shadow.policy(selectedPlannerId)
+        : { run: selectedPlannerId === 'optimizedTrajectory', publish: selectedPlannerId === 'optimizedTrajectory', record: false, mode: 'profiled-shadow' };
+      if (!shadowPolicy.run || !controller) {
         if (controller) controller.cancel();
         setOptimizedPreview(null);
         return undefined;
       }
       setOptimizedPreview(null);
-      const shadowMode = selectedPlannerId === 'optimizedTrajectory' ? 'optimized-opt-in' : 'profiled-shadow';
       controller.request(
         { path: doc, robot, perSegment: PERSEG },
         (value) => {
-          if (shadowEnabled) shadow.record({ mode: shadowMode, profiled: derivation.value, optimized: value });
-          if (selectedPlannerId === 'optimizedTrajectory') setOptimizedPreview({ sourceDoc: doc, sourceRobot: robot, value, error: null });
+          if (shadowPolicy.record) shadow.record({ mode: shadowPolicy.mode, profiled: derivation.value, optimized: value });
+          if (shadowPolicy.publish) setOptimizedPreview({ sourceDoc: doc, sourceRobot: robot, value, error: null });
         },
         (error) => {
-          if (shadowEnabled) shadow.recordWorkerError(shadowMode);
-          if (selectedPlannerId === 'optimizedTrajectory') setOptimizedPreview({ sourceDoc: doc, sourceRobot: robot, value: null, error });
+          if (shadowPolicy.record) shadow.recordWorkerError(shadowPolicy.mode);
+          if (shadowPolicy.publish) setOptimizedPreview({ sourceDoc: doc, sourceRobot: robot, value: null, error });
         },
       );
       return () => controller.cancel();

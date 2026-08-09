@@ -1,7 +1,8 @@
 // Local-only developer shadow metrics. No path or project data is retained.
 (function () {
   const ENABLED_KEY = 'bordeaux.dev.optimizerShadow.enabled';
-  const METRICS_KEY = 'bordeaux.dev.optimizerShadow.metrics.v1';
+  const METRICS_KEY = 'bordeaux.dev.optimizerShadow.metrics.v2';
+  const LEGACY_METRICS_KEY = 'bordeaux.dev.optimizerShadow.metrics.v1';
   const MAX_RECORDS = 1000000;
   const STATUSES = ['optimal', 'feasible', 'invalid-input', 'infeasible', 'cancelled', 'internal-error', 'worker-error', 'missing'];
   const MODES = ['profiled-shadow', 'optimized-opt-in'];
@@ -10,8 +11,9 @@
 
   function empty() {
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       records: 0,
+      timedRecords: 0,
       modes: { 'profiled-shadow': 0, 'optimized-opt-in': 0 },
       statuses: Object.fromEntries(STATUSES.map((status) => [status, 0])),
       plannerUsed: { profiledSpline: 0, optimizedTrajectory: 0, missing: 0 },
@@ -52,13 +54,14 @@
     if (!target) return empty();
     try {
       const parsed = JSON.parse(target.getItem(METRICS_KEY) || 'null');
-      if (!parsed || parsed.schemaVersion !== 1 || !Number.isInteger(parsed.records) || parsed.records < 0 || parsed.records > MAX_RECORDS) return empty();
+      if (!parsed || parsed.schemaVersion !== 2 || !Number.isInteger(parsed.records) || parsed.records < 0 || parsed.records > MAX_RECORDS) return empty();
       const base = empty();
       const count = (value) => Number.isInteger(value) && value >= 0 && value <= MAX_RECORDS ? value : 0;
       const number = (value) => Number.isFinite(value) ? value : 0;
       return {
         ...base,
         records: parsed.records,
+        timedRecords: Math.min(parsed.records, count(parsed.timedRecords)),
         modes: Object.fromEntries(MODES.map((mode) => [mode, count(parsed.modes && parsed.modes[mode])])),
         statuses: Object.fromEntries(STATUSES.map((status) => [status, count(parsed.statuses && parsed.statuses[status])])),
         plannerUsed: Object.fromEntries(Object.keys(base.plannerUsed).map((planner) => [planner, count(parsed.plannerUsed && parsed.plannerUsed[planner])])),
@@ -110,6 +113,7 @@
     const delta = optimizedTime - profiledTime;
 
     metrics.records += 1;
+    metrics.timedRecords += 1;
     metrics.modes[mode] += 1;
     metrics.statuses[status] += 1;
     metrics.plannerUsed[plannerUsed] += 1;
@@ -124,8 +128,8 @@
     metrics.profiledTimeS.sum += profiledTime;
     metrics.optimizedTimeS.sum += optimizedTime;
     metrics.deltaTimeS.sum += delta;
-    metrics.deltaTimeS.min = metrics.records === 1 ? delta : Math.min(metrics.deltaTimeS.min, delta);
-    metrics.deltaTimeS.max = metrics.records === 1 ? delta : Math.max(metrics.deltaTimeS.max, delta);
+    metrics.deltaTimeS.min = metrics.timedRecords === 1 ? delta : Math.min(metrics.deltaTimeS.min, delta);
+    metrics.deltaTimeS.max = metrics.timedRecords === 1 ? delta : Math.max(metrics.deltaTimeS.max, delta);
     metrics.constraintViolations += Math.max(0, Math.floor(finite(diagnostics && diagnostics.constraintViolations, 1000000)));
     if (diagnostics && diagnostics.fallback) metrics.fallbacks += 1;
     return write(metrics);
@@ -146,7 +150,7 @@
 
   function snapshot() {
     const metrics = read();
-    const divisor = Math.max(1, metrics.records - Math.min(metrics.records, metrics.workerErrors));
+    const divisor = Math.max(1, metrics.timedRecords);
     const percentileUpperBound = (fraction) => {
       const target = Math.max(1, Math.ceil(divisor * fraction));
       let count = 0;
@@ -174,9 +178,20 @@
   function clear() {
     const target = storage();
     if (!target) return false;
-    try { target.removeItem(METRICS_KEY); return true; }
+    try { target.removeItem(METRICS_KEY); target.removeItem(LEGACY_METRICS_KEY); return true; }
     catch (_) { return false; }
   }
 
-  window.BordeauxOptimizerShadow = Object.freeze({ enabled, setEnabled, record, recordWorkerError, snapshot, clear });
+  function policy(plannerId) {
+    const publish = plannerId === 'optimizedTrajectory';
+    const recordEnabled = enabled();
+    return Object.freeze({
+      run: publish || recordEnabled,
+      publish,
+      record: recordEnabled,
+      mode: publish ? 'optimized-opt-in' : 'profiled-shadow',
+    });
+  }
+
+  window.BordeauxOptimizerShadow = Object.freeze({ enabled, setEnabled, policy, record, recordWorkerError, snapshot, clear });
 })();
