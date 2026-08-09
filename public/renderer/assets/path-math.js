@@ -392,12 +392,18 @@
         if (!changed) break;
       }
     }
+    if (Array.isArray(opts.velocityOverride) && opts.velocityOverride.length === n) {
+      for (let i = 0; i < n; i++) v[i] = Math.max(0, opts.velocityOverride[i]);
+    }
     // time
     const t = new Array(n).fill(0);
     for (let i = 1; i < n; i++) {
       const ds = pts[i].s - pts[i - 1].s;
       const vm = (v[i] + v[i - 1]) / 2;
       t[i] = t[i - 1] + (vm > 1e-4 ? ds / vm : 0);
+    }
+    if (Array.isArray(opts.timeOverride) && opts.timeOverride.length === n) {
+      for (let i = 0; i < n; i++) t[i] = Math.max(0, opts.timeOverride[i]);
     }
     // Stationary turns happen after arrival and before any wait.
     const turns = [], turnDelay = new Map(); let terminalDelay = 0;
@@ -907,10 +913,10 @@
         maxDecel = Math.min(maxDecel, range.maxAngAccel * D2R);
       });
       const error = desired[i] - actual;
-      const desiredOmega = Math.max(-maxOmega, Math.min(maxOmega, (desired[i] - desired[i - 1]) / dt));
-      const brakingOmega = Math.max(0, Math.sqrt(2 * Math.max(1e-9, maxDecel) * Math.abs(error)) - Math.max(1e-9, maxDecel) * dt);
-      const catchUpOmega = Math.sign(error) * brakingOmega;
-      let target = Math.max(-maxOmega, Math.min(maxOmega, desiredOmega + catchUpOmega));
+      const nextDt = i + 1 < desired.length ? prof.t[i + 1] - prof.t[i] : dt;
+      const brakingDt = Math.max(dt, nextDt);
+      const brakingOmega = Math.max(0, Math.sqrt(2 * Math.max(1e-9, maxDecel) * Math.abs(error)) - Math.max(1e-9, maxDecel) * brakingDt);
+      let target = Math.sign(error) * Math.min(maxOmega, brakingOmega);
       const exactOmega = error / dt;
       const exactReversing = Math.sign(exactOmega) !== 0 && Math.sign(omega) !== 0 && Math.sign(exactOmega) !== Math.sign(omega);
       const exactRate = exactReversing ? Math.min(maxAccel, maxDecel) : Math.abs(exactOmega) > Math.abs(omega) ? maxAccel : maxDecel;
@@ -1021,8 +1027,10 @@
   }
 
   // ---- one-call derivation: everything the field + panels need for a path ----
-  function derivePath(doc, robot, perSeg, plannerId) {
+  function derivePath(doc, robot, perSeg, plannerId, internal) {
     perSeg = perSeg || 56;
+    internal = internal || { refinementPasses: 0, iterations: 0, startedAt: Date.now() };
+    const optimizationStarted = internal.startedAt || Date.now();
     const hardLimits = robotHardLimits(robot);
     if (hardLimits) {
       robot = { ...robot, maxSpeed: hardLimits.maxSpeed };
@@ -1100,11 +1108,58 @@
         jiggles.push({ idx: wpIdx[nWp - 1], baseRad, config: endpoint.jiggle });
       } else invalidJiggle = true;
     }
-    const prof = profile(pts, doc.constraints, sv, gv, { stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, dwell, turns, jiggles, freeSpeed: cap, motorMaxSpeed: hardLimits ? cap : 0 });
-    const trackedHead = headingWithTranslationPriority(doc, robot, pts, prof, head, effRanges, headingTransitions);
+    const profileOptions = { stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, dwell, turns, jiggles, freeSpeed: cap, motorMaxSpeed: hardLimits ? cap : 0 };
+    const profiled = profile(pts, doc.constraints, sv, gv, profileOptions);
+    let prof = profiled;
+    let optimization;
+    if (plannerId === 'optimizedTrajectory' && window.TrajectoryOptimizer) {
+      const result = window.TrajectoryOptimizer.optimize(doc, robot, pts, head, profiled, effRanges, wpIdx, headingTransitions);
+      if (result.status === 'optimal' || result.status === 'feasible') {
+        prof = profile(pts, doc.constraints, sv, gv, { ...profileOptions, velocityOverride: result.velocities, timeOverride: result.times });
+        optimization = { ...result, iterations: internal.iterations + result.iterations, refinementPasses: internal.refinementPasses, validatedPoints: pts.length * 2 - 1, constraintViolations: 0, fallback: false };
+      } else if (result.refinable && internal.refinementPasses < 2
+        && (nWp - 1) <= Math.floor((250000 - 1) / (perSeg * 2))) {
+        return derivePath(doc, robot, perSeg * 2, plannerId, { refinementPasses: internal.refinementPasses + 1, iterations: internal.iterations + (result.iterations || 0), startedAt: optimizationStarted });
+      } else {
+        optimization = {
+          ...result,
+          refinementPasses: internal.refinementPasses,
+          validatedPoints: pts.length * 2 - 1,
+          constraintViolations: (result.violations || []).length,
+          fallback: result.status === 'internal-error',
+          fallbackReason: result.reason || (result.violations && result.violations.length ? 'Dense renderer validation found ' + result.violations.length + ' violations.' : undefined),
+        };
+      }
+    }
+    let trackedHead = headingWithTranslationPriority(doc, robot, pts, prof, head, effRanges, headingTransitions);
+    if (optimization && optimization.status === 'feasible') {
+      const violations = window.TrajectoryOptimizer.validateFollowed(doc, robot, pts, trackedHead, prof, effRanges, wpIdx);
+      if (violations.length) {
+        prof = profiled;
+        trackedHead = headingWithTranslationPriority(doc, robot, pts, prof, head, effRanges, headingTransitions);
+        optimization = {
+          ...optimization,
+          status: 'internal-error',
+          violations,
+          constraintViolations: violations.length,
+          fallback: true,
+          fallbackReason: 'Post-rotation renderer validation found ' + violations.length + ' violations.',
+        };
+      } else optimization = { ...optimization, status: 'optimal' };
+    }
     appendTerminalHeadingCatchup(doc, prof, trackedHead, head, effRanges);
     const anchors = mode === 'tank' ? [] : buildAnchors(pts.map((p, i) => ({ f: total > 1e-6 ? p.s / total : 0, rad: trackedHead[i] })));
     const mtr = metrics(pts, prof, anchors, mode);
+    if (optimization) {
+      optimization = {
+        ...optimization,
+        plannerUsed: optimization.fallback ? 'profiledSpline' : 'optimizedTrajectory',
+        solveTimeMs: Date.now() - optimizationStarted,
+        totalTimeS: prof.totalTime,
+        maxVelocityMps: mtr.v.reduce((max, value) => Math.max(max, Math.abs(value)), 0),
+        maxAccelerationMps2: mtr.accel.reduce((max, value) => Math.max(max, Math.abs(value)), 0),
+      };
+    }
     const checks = analyze(pts, prof, mtr, robot || {}, {
       constraints: doc.constraints,
       plannerId,
@@ -1135,7 +1190,7 @@
       for (let i = 0; i < wpFrac.length - 1; i++) { if (check.f >= wpFrac[i] - 1e-4) seg = i; }
       check.seg = Math.max(0, Math.min(doc.waypoints.length - 2, seg));
     });
-    return { sample: smp, prof, totalDistance: smp.length + (prof.actionDistance || 0), anchors, metrics: mtr, checks, wpFrac, wpIdx, mode, effRanges, headingMode, rev: !!doc.driveBackward };
+    return { sample: smp, prof, totalDistance: smp.length + (prof.actionDistance || 0), anchors, metrics: mtr, checks, wpFrac, wpIdx, mode, effRanges, headingMode, rev: !!doc.driveBackward, optimization };
   }
 
   function jigglePositions(anchor, baseRad, options, bounds = { w: 17.548, h: 8.052 }) {
