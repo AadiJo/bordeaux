@@ -48,6 +48,19 @@ describe("motion features", () => {
     expect(faster.v[1]).toBeCloseTo(2, 6);
   });
 
+  it("keeps traction available until the motor torque envelope becomes tighter", () => {
+    const points = [{ s: 0, curv: 0 }, { s: 1, curv: 0 }] as any;
+    const profiled = PM.profile(
+      points,
+      { maxVel: 10, maxAccel: 5, maxDecel: 5 },
+      2,
+      10,
+      { motorMaxSpeed: 10, motorAcceleration: 20 },
+    );
+
+    expect(profiled.v[1]).toBeCloseTo(Math.sqrt(14), 6);
+  });
+
   it("acquires the first real target monotonically when Targets becomes active", () => {
     const points = Array.from({ length: 25 }, (_, index) => ({ s: index * 0.25 }));
     const waypoints = buildWaypoints([

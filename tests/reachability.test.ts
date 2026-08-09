@@ -49,7 +49,82 @@ describe("fixed-path reachability", () => {
     }));
 
     expect(result.status).toBe("optimal");
-    expect(result.velocities[1]).toBeCloseTo(Math.sqrt(3), 12);
+    expect(result.velocities[1]).toBeCloseTo(Math.sqrt(6) - 1, 12);
+    const acceleration = (result.velocities[1] ** 2 - 1) / 2;
+    expect(acceleration).toBeLessThanOrEqual(2 * (1 - result.velocities[1] / 2) + 1e-12);
+  });
+
+  it("keeps traction and motor torque-speed limits independent", () => {
+    const result = solveReachabilityProfile(input({
+      positions: [0, 1, 2],
+      accelerationLimits: [2, 2],
+      motorAccelerationLimits: [10, 10],
+      decelerationLimits: [10, 10],
+      freeSpeeds: [2, 2],
+      startVelocity: 1,
+    }));
+
+    expect(result.status).toBe("optimal");
+    expect(result.velocities[1]).toBeCloseTo((-10 + Math.sqrt(184)) / 2, 12);
+    const acceleration = (result.velocities[1] ** 2 - 1) / 2;
+    expect(acceleration).toBeLessThanOrEqual(10 * (1 - result.velocities[1] / 2) + 1e-12);
+  });
+
+  it("self-checks the module longitudinal motor envelope at interval endpoints", () => {
+    const motorConstraint = {
+      u: 1,
+      x: 0,
+      minimum: -2,
+      maximum: 2,
+      velocityCoefficient: 1,
+      freeSpeed: 2,
+      motorAcceleration: 2,
+    };
+    const result = solveReachabilityProfile(input({
+      accelerationLimits: [10, 10],
+      decelerationLimits: [10, 10],
+      scalarAccelerationConstraints: [[motorConstraint], [motorConstraint]],
+    }));
+
+    expect(result.status).toBe("optimal");
+    result.velocities.slice(1).forEach((velocity, index) => {
+      const before = result.velocities[index];
+      const acceleration = (velocity ** 2 - before ** 2) / 2;
+      const limit = 2 * Math.max(0, 1 - Math.max(before, velocity) / 2);
+      expect(Math.abs(acceleration)).toBeLessThanOrEqual(limit + 1e-9);
+    });
+  });
+
+  it("propagates the full controllable interval for affine constraints", () => {
+    const result = solveReachabilityProfile(input({
+      positions: [0, 1, 2],
+      accelerationLimits: [5, 5],
+      decelerationLimits: [1, 1],
+      freeSpeeds: [100, 100],
+      accelerationConstraints: [[{ uX: 0, uY: 0, xX: 1, xY: 0, limit: 1.1 }], []],
+    }));
+
+    expect(result.status).toBe("optimal");
+    expect(result.velocities[0]).toBe(0);
+    expect(result.velocities[1]).toBeCloseTo(Math.sqrt(2), 11);
+    expect(result.velocities[2]).toBe(0);
+  });
+
+  it("accepts a narrow boundary-feasible nonlinear predecessor", () => {
+    const result = solveReachabilityProfile(input({
+      positions: [0, 1],
+      velocityLimits: [2, 2],
+      accelerationLimits: [5],
+      decelerationLimits: [5],
+      freeSpeeds: [1e9],
+      accelerationConstraints: [[{ uX: 1, uY: 0, xX: 0, xY: 0, limit: 100 }]],
+      scalarAccelerationConstraints: [[{ u: 1, x: 0, minimum: 0.5, maximum: 0.5 }]],
+      startVelocity: 1,
+      goalVelocity: Math.sqrt(2),
+    }));
+
+    expect(result.status).toBe("optimal");
+    expect(result.velocities).toEqual([1, Math.sqrt(2)]);
   });
 
   it("classifies a boundary that cannot brake to the goal as infeasible", () => {

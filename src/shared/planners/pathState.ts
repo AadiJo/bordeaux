@@ -82,6 +82,8 @@ function waypointSampleIndices(path: PathDoc, samples: readonly TrajectorySample
 export function buildCanonicalPathState(
   path: PathDoc,
   samples: readonly TrajectorySample[],
+  headingBreaks: ReadonlySet<number> = new Set(),
+  syntheticStops: ReadonlySet<number> = new Set(),
 ): CanonicalPathState {
   if (samples.length < 2) throw new Error("Canonical path state requires at least two trajectory samples.");
   const positions = samples.map((sample) => sample.s);
@@ -102,8 +104,9 @@ export function buildCanonicalPathState(
   const tangentAngles = unwrap(tangentXRaw.map((x, index) => Math.atan2(tangentYRaw[index], x)));
   const curvatures = derivative(tangentAngles, positions, stoppedSamples);
   const headings = unwrap(samples.map((sample) => sample.headingRad));
-  const headingDerivatives = derivative(headings, positions, stoppedSamples);
-  const headingSecondDerivatives = derivative(headingDerivatives, positions, stoppedSamples);
+  const headingDerivativeBreaks = new Set([...stoppedSamples, ...headingBreaks]);
+  const headingDerivatives = derivative(headings, positions, headingDerivativeBreaks);
+  const headingSecondDerivatives = derivative(headingDerivatives, positions, headingDerivativeBreaks);
   const waypointBySample = new Map<number, number>();
   waypointIndices.forEach((sampleIndex, waypointIndex) => {
     if (!waypointBySample.has(sampleIndex)) waypointBySample.set(sampleIndex, waypointIndex);
@@ -118,6 +121,9 @@ export function buildCanonicalPathState(
     const segmentStart = waypointIndices[segment] ?? 0;
     const segmentEnd = waypointIndices[segment + 1] ?? Math.max(segmentStart, samples.length - 1);
     const waypointIndex = waypointBySample.get(index);
+    const sampledCurvature = Math.abs(sample.curvatureInvM);
+    const derivedCurvature = curvatures[index];
+    const curvatureSign = Math.sign(derivedCurvature) || 1;
     return {
       sourceIndex: index,
       s: sample.s,
@@ -129,14 +135,17 @@ export function buildCanonicalPathState(
       tangentY,
       normalX: -tangentY,
       normalY: tangentX,
-      curvatureInvM: curvatures[index],
+      // PM evaluates Bezier/arc/clothoid curvature on the authored geometry.
+      // Keep its magnitude so finite-difference smoothing cannot hide a local
+      // peak, while retaining the signed direction needed by drivetrain math.
+      curvatureInvM: curvatureSign * Math.max(Math.abs(derivedCurvature), sampledCurvature),
       headingRad: headings[index],
       headingDerivativeRadPerM: headingDerivatives[index],
       headingSecondDerivativeRadPerM2: headingSecondDerivatives[index],
       segmentIndex: segment,
       segmentFraction: segmentEnd > segmentStart ? (index - segmentStart) / (segmentEnd - segmentStart) : 0,
       ...(waypointIndex !== undefined ? { waypointIndex } : {}),
-      stop: stoppedSamples.has(index),
+      stop: stoppedSamples.has(index) || syntheticStops.has(index),
     };
   });
 
@@ -145,6 +154,27 @@ export function buildCanonicalPathState(
     waypointSampleIndices: waypointIndices,
     totalDistanceM: samples.at(-1)?.s ?? 0,
   };
+}
+
+export function findDynamicHeadingStops(
+  state: CanonicalPathState,
+  stopAtIndex?: number,
+): Set<number> {
+  const result = new Set<number>();
+  state.waypointSampleIndices.slice(1, -1).forEach((sampleIndex) => {
+    if (stopAtIndex !== undefined && sampleIndex >= stopAtIndex) return;
+    const before = state.points[sampleIndex - 1];
+    const point = state.points[sampleIndex];
+    const after = state.points[sampleIndex + 1];
+    if (!before || !point || !after || point.stop) return;
+    const beforeDistance = point.s - before.s;
+    const afterDistance = after.s - point.s;
+    if (beforeDistance <= EPSILON || afterDistance <= EPSILON) return;
+    const incomingRate = (point.headingRad - before.headingRad) / beforeDistance;
+    const outgoingRate = (after.headingRad - point.headingRad) / afterDistance;
+    if (Math.abs(outgoingRate - incomingRate) > 0.05) result.add(sampleIndex);
+  });
+  return result;
 }
 
 export function interpolatePathPoint(

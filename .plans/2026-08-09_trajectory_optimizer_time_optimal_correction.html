@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- TheLab metadata (read by the `lab` CLI on publish; do not remove).
+     thelab:plan is the STABLE plan id — re-publishing this file updates the same
+     plan (bumping its version) even if the title changes. -->
+<meta name="thelab:project" content="bordeaux">
+<meta name="thelab:title" content="True Time-Optimal Trajectory Correction">
+<meta name="thelab:plan" content="true-time-optimal-trajectory-correction">
+<meta name="thelab:kind" content="plan">
+<meta name="thelab:status" content="active">
+<meta name="thelab:tags" content="optimizer,planning,performance">
+<!-- Optional: issue numbers this plan closes on ship, e.g. content="3,7". They
+     auto-close when the plan is marked done (`lab done … --commit`). -->
+<meta name="thelab:addresses" content="">
+<meta name="thelab:version" content="3">
+<meta name="thelab:hosted-url" content="https://thelab.wilsonzach.com/project/bordeaux/plan/true-time-optimal-trajectory-correction">
+<!-- Optional owner questions. Add 1–8 entries; each needs 2–8 options. -->
+<script type="application/json" id="thelab-questions">[]</script>
+<title>True Time-Optimal Trajectory Correction</title>
+<style>
+  /* Self-contained. Mirrors The Lab reader so the local file looks like the hosted
+     one. This block is NOT published: the hosted view uses The Lab's own reader
+     stylesheet, and only the article content below is published. */
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    background: #0a0a0a; color: #a1a1a1;
+    font-size: 15px; line-height: 1.7; letter-spacing: -0.006em;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 40px 24px 96px; }
+  a { color: #4e9bfa; text-decoration: none; } a:hover { text-decoration: underline; }
+  img { max-width: 100%; height: auto; }
+  h1 { font-size: 30px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.2; color: #ededed; margin-bottom: 8px; }
+  h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.015em; color: #ededed; margin: 56px 0 16px; padding-top: 24px; border-top: 1px solid #222; }
+  h3 { font-size: 14px; font-weight: 600; color: #ededed; margin: 32px 0 12px; }
+  p { margin: 0 0 12px; } strong { color: #ededed; font-weight: 600; }
+  ul, ol { margin: 0 0 12px 22px; } li { margin: 4px 0; }
+  .lede { color: #ededed; font-size: 16px; margin: 4px 0 8px; }
+  code { font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; }
+  pre.code { background: #0d0d0d; border: 1px solid #222; border-radius: 6px; padding: 16px 20px; overflow-x: auto; font-size: 12.5px; line-height: 1.65; color: #a1a1a1; tab-size: 2; margin: 16px 0; }
+  .callout { border: 1px solid #222; border-left: 2px solid #4e9bfa; border-radius: 0 6px 6px 0; padding: 14px 20px; margin: 20px 0; font-size: 13.5px; color: #a1a1a1; }
+  .callout strong { color: #ededed; }
+  figure { margin: 16px 0; } figcaption { font-size: 12px; color: #6b6b6b; padding-top: 8px; font-family: ui-monospace, Menlo, monospace; }
+  .fig-scroll { overflow-x: auto; border: 1px solid #222; border-radius: 6px; }
+  .fig-scroll svg { display: block; width: 100%; height: auto; }
+  .tbl-scroll { overflow-x: auto; }
+  table.data { width: 100%; border-collapse: collapse; font-size: 13.5px; margin: 12px 0; }
+  table.data th { text-align: left; font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.07em; color: #6b6b6b; padding: 10px 14px; border-bottom: 1px solid #222; }
+  table.data td { padding: 10px 14px; border-bottom: 1px solid #222; color: #a1a1a1; vertical-align: top; }
+  table.data tr:last-child td { border-bottom: 0; }
+  table.data td:first-child { color: #ededed; white-space: nowrap; }
+  .plan-links { margin: 16px 0 8px; }
+  .plan-links table.data td:first-child { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: #6b6b6b; width: 90px; }
+  .plan-links table.data td:nth-child(2) { color: #ededed; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; word-break: break-all; }
+  .status { display: inline-flex; align-items: center; gap: 7px; }
+  .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; }
+  .st-draft::before { border: 1px solid #6b6b6b; }
+  .st-active::before { background: #4e9bfa; }
+  .st-done::before { background: #ededed; }
+  .st-archived::before { background: #333; }
+</style>
+</head>
+<body>
+<main class="wrap">
+<article>
+  <h1>True Time-Optimal Trajectory Correction</h1>
+
+  <!-- Plan meta: local-file chrome only — `lab publish` strips this whole section
+       from the published body (The Lab renders its own header + metadata rail). The
+       CLI fills the Version cell on publish (v1, v2, …). -->
+  <section class="plan-links">
+    <div class="tbl-scroll"><table class="data">
+      <tr><td>Project</td><td>bordeaux</td></tr>
+      <tr><td>Version</td><td id="thelab-version">v3</td></tr>
+      <tr><td>Status</td><td><span class="status st-done">done</span> · 2026-08-09</td></tr>
+    </table></div>
+  </section>
+
+  <p class="lede">Make Bordeaux genuinely minimize traversal time under independently derived robot constraints, then add bounded geometry refinement as an explicit preview instead of silently moving authored paths.</p>
+
+  <h2>Context</h2>
+  <p>The current <code>optimizedTrajectory</code> uses each <code>profiledSpline</code> sample velocity as a hard ceiling and then adds motor, drivetrain, angular, and numerical margins. It therefore cannot beat Profiled. Its backward pass also stores only one controllable maximum; general affine drivetrain constraints can require a lower predecessor speed, so valid trajectories can be misclassified as infeasible.</p>
+  <div class="callout"><strong>Correctness boundary.</strong> Fixed-path timing belongs in <code>optimizedTrajectory</code>. Geometry movement does not: it must clone the path, solve off-thread, show the changed curve and anchored features, and require Apply or Cancel.</div>
+
+  <h2>Recommendation</h2>
+  <p>Replace the inherited Profiled envelope with explicit point and midpoint caps for authored velocity, stops, curvature, heading rate, and wheel/module kinematics. Propagate complete controllable intervals in squared speed, then greedily extract the fastest trajectory inside those intervals. Prove small instances against an independent dynamic-programming oracle and validate every accepted output densely.</p>
+  <p>After that core passes, add deterministic cubic-Bezier handle-length refinement as the first nonlinear geometry tool. Pin waypoint positions, tangent directions, headings, topology, actions, and feature identities. Include the authored path as the baseline and return <code>unchanged</code> rather than “unsolvable” when no material win exists.</p>
+
+  <h2>Implementation steps</h2>
+  <ol>
+    <li>Remove the Profiled sample-speed ceiling while restoring explicit stop, point, and midpoint curvature/drivetrain caps in the shared and renderer constraint adapters.</li>
+    <li>Rewrite backward reachability to propagate complete squared-speed intervals. Intersect scalar motor/accel/decel limits, affine module constraints, and asymmetric angular acceleration bounds before forward extraction.</li>
+    <li>Add a no-dependency exhaustive oracle for short scalar cases, the known false-infeasible regression, physical trajectory fixtures, and randomized renderer parity.</li>
+    <li>Make benchmark comparisons honest: accepted Optimized output must have zero violations; Profiled time is labeled as an unsafe baseline when it fails the same dense validator.</li>
+    <li>Add an off-thread Bezier handle-refinement worker with fixed evaluation ceilings, stale-result cancellation, candidate overlay, and one undoable Apply action.</li>
+    <li>Run the full test/type/build/smoke/package gates, 100,000 reachability fuzz cases, optimizer corpus, and independent Codex review.</li>
+  </ol>
+
+  <h2>Risks &amp; mitigations</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Risk</th><th>Likelihood</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr><td>Removing the inherited cap exposes missing physical constraints</td><td>high</td><td>Derive curvature, angular, stop, and drivetrain bounds directly at points and midpoints; dense validation remains mandatory.</td></tr>
+      <tr><td>Numeric interval search misses a narrow controllable set</td><td>medium</td><td>Exploit convex one-dimensional feasibility, retain explicit tolerances, and compare short cases to an independent exhaustive oracle.</td></tr>
+      <tr><td>Profiled looks faster because it violates the stricter physical model</td><td>high</td><td>Compare safety and time together; never claim an invalid baseline is a better trajectory.</td></tr>
+      <tr><td>Geometry refinement changes authored intent</td><td>medium</td><td>Pin waypoint positions and tangent directions, whitelist only handle-length changes, preview all anchored features, and require Apply.</td></tr>
+      <tr><td>Nonlinear search blocks interaction</td><td>medium</td><td>Run in a cancellable worker with preflight segment/evaluation ceilings and deterministic candidate order.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification</h2>
+  <ul>
+    <li>Known false-infeasible affine case returns the oracle-optimal profile.</li>
+    <li>Every curated and fuzzed accepted trajectory passes independent dense velocity, acceleration, deceleration, angular, curvature, and module/wheel validation.</li>
+    <li>For each valid fixed geometry, solver duration matches the short-case oracle within tolerance and is never capped by Profiled samples.</li>
+    <li>Geometry candidates are accepted only when valid and faster by at least <code>max(0.020 s, 0.5%)</code>; unchanged geometry is always a safe fallback.</li>
+    <li><code>npm test</code>, typecheck, build, smoke, shadow, benchmark, fuzz, package, and packaged-manifest checks pass.</li>
+  </ul>
+
+  <h2>Claim boundary</h2>
+  <p>The corrected fixed-path planner may be called time-optimal only under Bordeaux’s discretized authored-path model. The first geometry tool should be called <em>Geometry refinement</em>, not globally optimal or Sleipnir-equivalent. A Sleipnir-comparable claim requires a later TrajoptLib oracle showing a median time gap no greater than 2%, p95 no greater than 5%, and zero safety regressions.</p>
+
+  <h2>Outcome</h2>
+  <p>The fixed-path planner now derives its own physical envelope, propagates full controllable squared-speed intervals, enforces endpoint torque falloff along every wheel module’s rolling direction, inserts exact policy boundaries, and validates on a freshly resampled curve. Heading-derivative discontinuities become explicit dynamic stops instead of optimistic finite-difference timing.</p>
+  <p>The explicit <em>Refine path</em> tool searches bounded Bezier handle lengths in a cancellable worker, rejects candidates with path-check errors, protects stale document/robot/planner state, and applies a winning preview as one undoable edit.</p>
+  <ul>
+    <li>All 225 TypeScript tests pass, including independent oracle, endpoint module motor-envelope, resource-ceiling, dense-geometry, renderer parity, and geometry-refinement regressions.</li>
+    <li>The 100,000-case reachability fuzz run completed with zero unexplained failures.</li>
+    <li>The shadow corpus reports no both-valid slowdown: two faster, two materially equal, and five Profiled baselines invalid under the same eight-times-dense physical check.</li>
+    <li>Observed p95 latency is approximately 14.4 ms for common paths and 37.3 ms for the long stress path.</li>
+    <li>Build, Electron smoke, package creation, and packaged-manifest verification pass.</li>
+  </ul>
+</article>
+</main>
+</body>
+</html>

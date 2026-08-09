@@ -9,16 +9,22 @@ import { validateOptimizedTrajectory } from "./trajectoryValidation";
 
 const EPSILON = 1e-9;
 
-function fixedPathSamples(result: PlannerResult) {
+export function fixedPathSamples(result: PlannerResult) {
   let end = result.samples.length;
-  for (let index = 1; index < result.samples.length; index += 1) {
-    if (result.samples[index].s - result.samples[index - 1].s <= EPSILON
-      && result.samples[index].t - result.samples[index - 1].t > EPSILON) {
-      end = index;
-      break;
-    }
+  while (end > 1
+    && result.samples[end - 1].s - result.samples[end - 2].s <= EPSILON
+    && result.samples[end - 1].t - result.samples[end - 2].t > EPSILON) {
+    end -= 1;
   }
   return result.samples.slice(0, end);
+}
+
+export function normalizePhysicalPlannerInput(input: PlannerInput): PlannerInput {
+  const hardLimits = robotHardLimits(input.robot);
+  const robot = hardLimits ? { ...input.robot, maxSpeed: hardLimits.maxSpeedMps } : input.robot;
+  const constraints = effectivePathConstraints(input.path.constraints, robot);
+  const path = constraints === input.path.constraints ? input.path : { ...input.path, constraints };
+  return path === input.path && robot === input.robot ? input : { ...input, path, robot };
 }
 
 export const planners: Record<TrajectoryPlannerId, TrajectoryPlanner> = {
@@ -31,11 +37,8 @@ export function getPlanner(id: TrajectoryPlannerId): TrajectoryPlanner {
   return {
     id: planner.id,
     generate(input) {
-      const hardLimits = robotHardLimits(input.robot);
-      const robot = hardLimits ? { ...input.robot, maxSpeed: hardLimits.maxSpeedMps } : input.robot;
-      const constraints = effectivePathConstraints(input.path.constraints, robot);
-      const path = constraints === input.path.constraints ? input.path : { ...input.path, constraints };
-      const physicalInput = path === input.path && robot === input.robot ? input : { ...input, path, robot };
+      const physicalInput = normalizePhysicalPlannerInput(input);
+      const { path, robot } = physicalInput;
       const hasStationaryPause = path.waypoints.some((waypoint) => waypoint.turnInPlace || (waypoint.wait ?? 0) > 0);
       const planningInput = hasStationaryPause
         ? {
@@ -72,7 +75,7 @@ export function getPlanner(id: TrajectoryPlannerId): TrajectoryPlanner {
               constraintViolations: validation.violations.length,
               fallback: true,
               fallbackReason: reason,
-              validatedPoints: validation.checkedPoints,
+              validatedPoints: Math.max(rotated.optimization.validatedPoints ?? 0, validation.checkedPoints),
               activeConstraints: validation.activeConstraints,
             },
           };
@@ -83,7 +86,7 @@ export function getPlanner(id: TrajectoryPlannerId): TrajectoryPlanner {
               ...rotated.optimization,
               status: "optimal",
               constraintViolations: 0,
-              validatedPoints: validation.checkedPoints,
+              validatedPoints: Math.max(rotated.optimization.validatedPoints ?? 0, validation.checkedPoints),
               activeConstraints: [...new Set([
                 ...(rotated.optimization.activeConstraints ?? []),
                 ...validation.activeConstraints,

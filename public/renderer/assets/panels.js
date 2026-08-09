@@ -234,7 +234,7 @@
 
   function Toolbar(props) {
     const { project, page, setPage, alliance, setAlliance,
-      onUndo, onRedo, onExportJava, javaProject, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
+      onUndo, onRedo, onExportJava, onRefineGeometry, geometryRefining, javaProject, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
       routines, activeRoutineId, setActiveRoutine, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine } = props;
     const plan = page === 'plan';
     const javaReady = !!(javaProject && javaProject.catalog && javaProject.catalog.authoritative && javaProject.integration && javaProject.integration.installed && javaProject.integration.supportVersion === javaProject.catalog.supportVersion);
@@ -257,7 +257,8 @@
           h(IconBtn, { icon: 'redo', onClick: onRedo, title: 'Redo  (\u21e7\u2318Z)' })),
         plan && h(React.Fragment, null,
           h('div', { className: 'tbdiv' }),
-          h(PlannerFamily, { plannerId, onChange: setPlannerFamily })),
+          h(PlannerFamily, { plannerId, onChange: setPlannerFamily }),
+          plannerId === 'optimizedTrajectory' && h('button', { className: 'qbtn geometry-refine-btn', type: 'button', disabled: geometryRefining, onClick: onRefineGeometry, title: 'Search for a faster all-Bezier handle layout and preview it before applying' }, geometryRefining ? 'Refining…' : 'Refine path')),
         (plan || page === 'auto') && h(React.Fragment, null,
           h('button', { className: 'alliance', type: 'button', onClick: () => setAlliance(alliance === 'blue' ? 'red' : 'blue'), title: 'Switch to ' + (alliance === 'blue' ? 'red' : 'blue') + ' alliance', 'aria-label': 'Alliance view: ' + alliance + '. Switch to ' + (alliance === 'blue' ? 'red' : 'blue') },
             h('span', { className: 'alliance-side blue' + (alliance === 'blue' ? ' on' : '') }, 'B'),

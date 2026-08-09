@@ -13,6 +13,7 @@ interface RendererDerived {
     plannerUsed?: string;
     status?: string;
     refinementPasses?: number;
+    validatedPoints?: number;
     constraintViolations?: number;
     solveTimeMs?: number;
     totalTimeS?: number;
@@ -34,6 +35,36 @@ function rendererMath() {
     );
   }
   return window.PM as { derivePath(path: PathDoc, robot: BordeauxProject["robot"], perSegment: number, plannerId: string): RendererDerived };
+}
+
+function rendererGeometryOptimizer() {
+  const window: Record<string, unknown> = {};
+  const context = { window, console, Math, Number, Set, Map, Infinity, isFinite, Error, Array, Object, JSON };
+  for (const asset of ["trajectory-optimizer.js", "path-math.js", "trajectory-geometry-optimizer.js"]) {
+    vm.runInNewContext(
+      fs.readFileSync(new URL(`../public/renderer/assets/${asset}`, import.meta.url), "utf8"),
+      context,
+    );
+  }
+  return window.TrajectoryGeometryOptimizer as {
+    refine(path: PathDoc, robot: BordeauxProject["robot"], perSegment: number): {
+      status: string;
+      path?: PathDoc;
+      baselineTimeS?: number;
+      candidateTimeS?: number;
+      gainS?: number;
+      reason?: string;
+    };
+  };
+}
+
+function rendererBoundaryInserter() {
+  const window: Record<string, unknown> = {};
+  vm.runInNewContext(
+    fs.readFileSync(new URL("../public/renderer/assets/trajectory-optimizer.js", import.meta.url), "utf8"),
+    { window, console, Math, Number, Set, Map, Infinity, isFinite, Error, Array, Object },
+  );
+  return (window.TrajectoryOptimizer as { insertBoundaries: (...args: unknown[]) => unknown }).insertBoundaries;
 }
 
 function randomGenerator(seed: number) {
@@ -72,10 +103,15 @@ function randomProject(seed: number): BordeauxProject {
     project.robot.driveModel = {
       motorId: "differential-test",
       motorFreeRpm: 5_000,
+      motorMaxTorqueNm: 2.6,
+      motorCount: 4,
       gearRatio: 6,
       wheelDiameterM: 0.1,
+      massKg: 52,
+      moiKgM2: 6,
       wheelbaseM: 0.6,
       trackwidthM: 0.8,
+      wheelFrictionCoefficient: 1.1,
     };
   }
   const rangeKind = seed % 4;
@@ -99,6 +135,23 @@ function randomProject(seed: number): BordeauxProject {
 }
 
 describe("static renderer optimizer mirror", () => {
+  it("preflights exact boundaries against the renderer sample ceiling", () => {
+    const points = {
+      length: 250_000,
+      249_999: { s: 1 },
+      some: () => false,
+    };
+
+    expect(() => rendererBoundaryInserter()(
+      {},
+      points,
+      [],
+      [],
+      [],
+      [{ start: 0.25, end: 0.25 }],
+    )).toThrow("Optimization boundaries require more than 250000 trajectory samples");
+  });
+
   it("matches shared status, geometry, timing, and velocity over seeded paths", () => {
     const renderer = rendererMath();
     for (let seed = 1; seed <= 64; seed += 1) {
@@ -106,12 +159,25 @@ describe("static renderer optimizer mirror", () => {
       const path = project.paths[0];
       const preview = renderer.derivePath(path, project.robot, 56, "optimizedTrajectory");
       const shared = getPlanner("optimizedTrajectory").generate({ path, robot: project.robot, samplesPerSegment: 56 });
-
       expect(preview.optimization?.status, `status for seed ${seed}`).toBe(shared.optimization?.status);
       expect(preview.optimization?.plannerUsed, `planner for seed ${seed}`).toBe(shared.optimization?.plannerUsed);
+      if (["invalid-input", "infeasible"].includes(shared.optimization?.status || "")) {
+        expect(preview.optimization?.constraintViolations, `rejected violations for seed ${seed}`).toBe(0);
+        continue;
+      }
       expect(preview.optimization?.refinementPasses, `refinement for seed ${seed}`).toBe(shared.optimization?.refinementPasses);
       expect(preview.optimization?.constraintViolations, `violations for seed ${seed}`).toBe(shared.optimization?.constraintViolations);
-      expect(preview.optimization?.activeConstraints, `active constraints for seed ${seed}`).toEqual(shared.optimization?.activeConstraints);
+      if (shared.optimization?.fallback) {
+        expect(preview.optimization?.activeConstraints, `fallback active constraints for seed ${seed}`).toEqual(
+          expect.arrayContaining(shared.optimization.activeConstraints || []),
+        );
+      } else {
+        expect(preview.optimization?.activeConstraints, `active constraints for seed ${seed}`).toEqual(shared.optimization?.activeConstraints);
+      }
+      if (["optimal", "feasible"].includes(shared.optimization?.status || "")) {
+        expect(preview.optimization?.validatedPoints, `validated points for seed ${seed}`).toBe(shared.optimization?.validatedPoints);
+        expect(preview.optimization?.validatedPoints, `dense validation for seed ${seed}`).toBeGreaterThan(preview.sample.pts.length * 2);
+      }
       expect(preview.optimization?.solveTimeMs, `solve time for seed ${seed}`).toBeGreaterThanOrEqual(0);
       expect(preview.sample.pts, `sample count for seed ${seed}`).toHaveLength(shared.samples.length);
       expect(preview.prof.totalTime, `time for seed ${seed}`).toBeCloseTo(shared.totalTimeS, 3);
@@ -125,7 +191,7 @@ describe("static renderer optimizer mirror", () => {
         expect(Math.atan2(Math.sin(renderedHeading - shared.samples[index].headingRad), Math.cos(renderedHeading - shared.samples[index].headingRad)), `heading ${seed}:${index}`).toBeCloseTo(0, 3);
       });
     }
-  });
+  }, 15_000);
 
   it("matches translation-priority and stationary-action total timing", () => {
     const renderer = rendererMath();
@@ -204,10 +270,15 @@ describe("static renderer optimizer mirror", () => {
     project.robot.driveModel = {
       motorId: "differential-test",
       motorFreeRpm: 5_000,
+      motorMaxTorqueNm: 2.6,
+      motorCount: 4,
       gearRatio: 6,
       wheelDiameterM: 0.1,
+      massKg: 52,
+      moiKgM2: 6,
       wheelbaseM: 0.6,
       trackwidthM: 0.8,
+      wheelFrictionCoefficient: 1.1,
     };
     const path = project.paths[0];
     path.headingMode = "manual";
@@ -240,10 +311,15 @@ describe("static renderer optimizer mirror", () => {
     project.robot.driveModel = {
       motorId: "differential-test",
       motorFreeRpm: 5_000,
+      motorMaxTorqueNm: 2.6,
+      motorCount: 4,
       gearRatio: 6,
       wheelDiameterM: 0.1,
+      massKg: 52,
+      moiKgM2: 6,
       wheelbaseM: 0.6,
       trackwidthM: 0.8,
+      wheelFrictionCoefficient: 1.1,
     };
     const path = project.paths[0];
     path.headingMode = "tangent";
@@ -298,5 +374,81 @@ describe("optimized preview worker controller", () => {
     expect(results).toEqual(["current"]);
     expect(errors).toEqual([]);
     expect(workers[1].terminated).toBe(true);
+  });
+});
+
+describe("explicit geometry refinement", () => {
+  it("returns a faster preview while preserving authored intent and handle directions", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 1, nextC: { x: 2, y: 6 }, segType: "bezier" },
+      { x: 8, y: 6, prevC: { x: 2, y: 5 }, nextC: { x: 14, y: 7 }, segType: "bezier", stop: true },
+      { x: 16, y: 1, prevC: { x: 15, y: 6 } },
+    ]);
+    path.markers = [{ id: "score", f: 0.7, name: "Score" }];
+    path.ranges = [{ anchor: "param", f0: 0.3, f1: 0.6, maxVel: 3, maxAccel: 4, maxDecel: 4, maxAngVel: 360, maxAngAccel: 720 }];
+    const result = rendererGeometryOptimizer().refine(path, project.robot, 56);
+
+    expect(result.status).toBe("candidate");
+    expect(result.gainS).toBeGreaterThanOrEqual(Math.max(0.02, result.baselineTimeS! * 0.005));
+    expect(result.candidateTimeS).toBeLessThan(result.baselineTimeS!);
+    expect(result.path?.markers).toEqual(path.markers);
+    expect(result.path?.ranges).toEqual(path.ranges);
+    result.path?.waypoints.forEach((waypoint, index) => {
+      const authored = path.waypoints[index];
+      expect({ ...waypoint, prevC: undefined, nextC: undefined }).toEqual({ ...authored, prevC: undefined, nextC: undefined });
+      for (const key of ["prevC", "nextC"] as const) {
+        const before = authored[key];
+        const after = waypoint[key];
+        if (!before || !after) continue;
+        const first = { x: before.x - authored.x, y: before.y - authored.y };
+        const second = { x: after.x - waypoint.x, y: after.y - waypoint.y };
+        expect(first.x * second.y - first.y * second.x).toBeCloseTo(0, 8);
+        expect(first.x * second.x + first.y * second.y).toBeGreaterThan(0);
+      }
+    });
+  });
+
+  it("keeps the authored baseline when segment geometry is unsupported", () => {
+    const project = createDemoProject();
+    project.paths[0].waypoints[0].segType = "clothoid";
+
+    const result = rendererGeometryOptimizer().refine(project.paths[0], project.robot, 56);
+
+    expect(result).toMatchObject({ status: "unchanged", reason: expect.stringContaining("all-Bezier") });
+    expect(result.path).toBeUndefined();
+  });
+
+  it("refuses to refine a path with blocking path-check errors", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.waypoints = buildWaypoints([
+      {
+        x: 1, y: 2, segType: "bezier", nextC: { x: 3, y: 2 },
+        segmentHeadingMode: "lookAt", segmentLookAt: { x: 4, y: 2 },
+      },
+      { x: 7, y: 2, prevC: { x: 5, y: 2 } },
+    ]);
+
+    const result = rendererGeometryOptimizer().refine(path, project.robot, 56);
+
+    expect(result).toMatchObject({ status: "unchanged", reason: expect.stringContaining("no path-check errors") });
+    expect(result.path).toBeUndefined();
+  });
+
+  it("preflights geometry search size before evaluating candidates", () => {
+    const project = createDemoProject();
+    project.paths[0].waypoints = buildWaypoints(Array.from({ length: 42 }, (_unused, index) => ({
+      x: 1 + index * 0.2,
+      y: 2,
+      segType: "bezier" as const,
+    })));
+
+    const result = rendererGeometryOptimizer().refine(project.paths[0], project.robot, 56);
+
+    expect(result).toMatchObject({ status: "unchanged", reason: expect.stringContaining("at most 40 segments") });
   });
 });

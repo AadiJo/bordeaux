@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
 import { projectDrivetrainAtPoint } from "../src/shared/planners/drivetrainProjection";
-import { getPlanner } from "../src/shared/planners";
+import { fixedPathSamples, getPlanner } from "../src/shared/planners";
 import { optimizedTrajectoryPlanner } from "../src/shared/planners/optimizedTrajectory";
+import {
+  buildLinearConstraintProfile,
+  buildReachabilityInput,
+  insertOptimizationBoundaries,
+} from "../src/shared/planners/optimizationConstraints";
+import { profiledSplineOptimizationSeed } from "../src/shared/planners/profiledSpline";
 import { buildCanonicalPathState, type CanonicalPathPoint } from "../src/shared/planners/pathState";
 import { accelerationBoundsForSpeedSquared, solveReachabilityProfile } from "../src/shared/planners/reachability";
 import { validateOptimizedTrajectory } from "../src/shared/planners/trajectoryValidation";
-import type { RobotConfig } from "../src/shared/types";
+import type { PlannerResult, RobotConfig, TrajectorySample } from "../src/shared/types";
 
 function point(overrides: Partial<CanonicalPathPoint> = {}): CanonicalPathPoint {
   return {
@@ -40,11 +46,23 @@ function robot(drive: RobotConfig["drive"]): RobotConfig {
     driveModel: {
       motorId: "test",
       motorFreeRpm: 5_000,
+      motorMaxTorqueNm: 2.6,
+      motorCount: 4,
       gearRatio: 6,
       wheelDiameterM: 0.1,
+      massKg: 52,
+      moiKgM2: 6,
       wheelbaseM: 0.6,
       trackwidthM: 0.8,
+      wheelFrictionCoefficient: 1.1,
     },
+  };
+}
+
+function trajectorySample(i: number, s: number, t: number): TrajectorySample {
+  return {
+    i, s, t, f: s / 2, x: s, y: 0, headingRad: 0,
+    velocityMps: 0, accelerationMps2: 0, angularVelocityRadps: 0, curvatureInvM: 0,
   };
 }
 
@@ -74,21 +92,58 @@ describe("canonical optimizer path state", () => {
 
 describe("drivetrain projection", () => {
   it("caps tank wheel speed from signed curvature and trackwidth", () => {
+    const tank = robot("tank");
+    delete tank.driveModel!.motorMaxTorqueNm;
     const projection = projectDrivetrainAtPoint(point({
       curvatureInvM: 1,
       headingDerivativeRadPerM: 1,
-    }), robot("tank"), 1e9);
+    }), tank, 1e9);
 
     expect(projection.velocityLimitMps).toBeCloseTo(5 / 1.4, 12);
   });
 
   it("caps the fastest rectangular swerve module during simultaneous translation and rotation", () => {
+    const swerve = robot("swerve");
+    delete swerve.driveModel!.motorMaxTorqueNm;
     const projection = projectDrivetrainAtPoint(point({
       headingDerivativeRadPerM: 1,
-    }), robot("swerve"), 1e9);
+    }), swerve, 1e9);
 
     expect(projection.velocityLimitMps).toBeCloseTo(5 / Math.sqrt(2.05), 12);
     expect(projection.velocityConstraints).toHaveLength(4);
+  });
+
+  it("tightens module acceleration as module speed approaches motor free speed", () => {
+    const projection = projectDrivetrainAtPoint(point({ headingDerivativeRadPerM: 1 }), robot("swerve"), 10);
+    const constraint = projection.motorAccelerationConstraints[0];
+    const withoutMotor = { ...constraint, velocityCoefficient: undefined, freeSpeed: undefined, motorAcceleration: undefined };
+    const scalarSpeed = 0.6 * constraint.freeSpeed! / constraint.velocityCoefficient!;
+    const physical = accelerationBoundsForSpeedSquared([], scalarSpeed ** 2, [constraint])!;
+    const fixed = accelerationBoundsForSpeedSquared([], scalarSpeed ** 2, [withoutMotor])!;
+
+    expect(physical.maximum).toBeLessThan(fixed.maximum);
+  });
+
+  it("accepts a stationary inner tank wheel at the instantaneous center", () => {
+    const projection = projectDrivetrainAtPoint(point({
+      curvatureInvM: 2.5,
+      headingDerivativeRadPerM: 2.5,
+    }), robot("tank"), 10);
+    const stationaryWheel = projection.velocityConstraints.find((constraint) => constraint.coefficient === 0);
+
+    expect(stationaryWheel).toBeDefined();
+    const result = solveReachabilityProfile({
+      positions: [0, 1, 2],
+      velocityLimits: [2, 2, 2],
+      accelerationLimits: [10, 10],
+      decelerationLimits: [10, 10],
+      freeSpeeds: [1e9, 1e9],
+      accelerationConstraints: [projection.accelerationConstraints, projection.accelerationConstraints],
+      startVelocity: 0,
+      goalVelocity: 0,
+    });
+
+    expect(result.status).not.toBe("invalid-input");
   });
 
   it("solves affine module acceleration bounds in squared-speed space", () => {
@@ -121,6 +176,21 @@ describe("drivetrain projection", () => {
 });
 
 describe("dense optimized trajectory validation", () => {
+  it("keeps movement after interior stationary phases in fixed-path validation", () => {
+    const result = {
+      samples: [
+        trajectorySample(0, 0, 0),
+        trajectorySample(1, 1, 1),
+        trajectorySample(2, 1, 2),
+        trajectorySample(3, 2, 3),
+      ],
+    } as PlannerResult;
+
+    expect(fixedPathSamples(result)).toHaveLength(4);
+    result.samples.push(trajectorySample(4, 2, 4));
+    expect(fixedPathSamples(result)).toHaveLength(4);
+  });
+
   it("checks angular limits for short ranges that only overlap an interval", () => {
     const project = createDemoProject();
     const path = project.paths[0];
@@ -151,7 +221,7 @@ describe("dense optimized trajectory validation", () => {
     ]));
   });
 
-  it("refines an under-resolved path until dense validation passes", () => {
+  it("rejects a tangent-discontinuous path after independent dense validation", () => {
     const project = createDemoProject();
     const path = project.paths[0];
     path.headingMode = "tangent";
@@ -171,8 +241,78 @@ describe("dense optimized trajectory validation", () => {
 
     const result = optimizedTrajectoryPlanner.generate({ path, robot: project.robot, samplesPerSegment: 4 });
 
-    expect(result.optimization).toMatchObject({ status: "optimal", refinementPasses: 1, constraintViolations: 0 });
-    expect(result.samples).toHaveLength(25);
+    expect(result.optimization).toMatchObject({ status: "internal-error", refinementPasses: 2, fallback: true });
+    expect(result.optimization?.constraintViolations).toBeGreaterThan(0);
+    expect(result.optimization?.fallbackReason).toContain("Dense validation found");
+  });
+
+  it("uses a zero-speed phase boundary for a heading-rate discontinuity", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.constraints = {
+      ...path.constraints,
+      maxVel: 4,
+      maxAccel: 3,
+      maxDecel: 3,
+      maxAngVel: 720,
+      maxAngAccel: 1_000,
+    };
+    path.waypoints = buildWaypoints([
+      { x: 0, y: 0, nextC: { x: 1, y: 0 } },
+      { x: 2, y: 0, prevC: { x: 1, y: 0 }, nextC: { x: 3, y: 0 } },
+      { x: 4, y: 1, prevC: { x: 3.5, y: 1 } },
+    ]);
+
+    const result = optimizedTrajectoryPlanner.generate({ path, robot: project.robot, samplesPerSegment: 24 });
+    const boundary = result.samples.find((sample) => Math.hypot(sample.x - 2, sample.y) < 1e-8);
+
+    expect(result.optimization).toMatchObject({ status: "optimal", fallback: false, constraintViolations: 0 });
+    expect(boundary?.velocityMps).toBe(0);
+  });
+
+  it("derives optimizer limits independently from Profiled timing samples", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    const baseline = getPlanner("profiledSpline").generate({ path, robot: project.robot });
+    const first = buildReachabilityInput({ path, robot: project.robot }, baseline.samples);
+    const retimed = baseline.samples.map((sample, index) => ({
+      ...sample,
+      t: index * 100,
+      velocityMps: index % 2 ? 0.01 : 100,
+      accelerationMps2: -999,
+      angularVelocityRadps: 999,
+    }));
+
+    expect(buildReachabilityInput({ path, robot: project.robot }, retimed)).toEqual(first);
+  });
+
+  it("inserts exact range boundaries without tightening adjacent intervals", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.ranges = [{
+      anchor: "param",
+      f0: 0.205,
+      f1: 0.795,
+      maxVel: 0.25,
+      maxAccel: 1,
+      maxDecel: 1,
+      maxAngVel: 360,
+      maxAngAccel: 720,
+    }];
+    const input = { path, robot: project.robot, samplesPerSegment: 8 };
+    const bounded = insertOptimizationBoundaries(input, profiledSplineOptimizationSeed(input).samples);
+    const profile = buildLinearConstraintProfile(input, bounded);
+    const start = bounded.findIndex((sample) => Math.abs(sample.f - 0.205) < 1e-9);
+    const end = bounded.findIndex((sample) => Math.abs(sample.f - 0.795) < 1e-9);
+
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    expect(profile.intervals[start - 1].velocity).toBeGreaterThan(0.25);
+    expect(profile.intervals[start].velocity).toBe(0.25);
+    expect(profile.intervals[end - 1].velocity).toBe(0.25);
+    expect(profile.intervals[end].velocity).toBeGreaterThan(0.25);
   });
 
   it("keeps every swerve module inside free speed while rotating on a straight path", () => {

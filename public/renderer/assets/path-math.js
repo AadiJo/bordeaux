@@ -334,8 +334,8 @@
     // forward
     for (let i = 1; i < n; i++) {
       const ds = pts[i].s - pts[i - 1].s;
-      const availableAccel = opts.motorMaxSpeed > 1e-6
-        ? aFwd[i - 1] * Math.max(0, 1 - Math.abs(v[i - 1]) / opts.motorMaxSpeed)
+      const availableAccel = opts.motorMaxSpeed > 1e-6 && opts.motorAcceleration > 0
+        ? Math.min(aFwd[i - 1], opts.motorAcceleration * Math.max(0, 1 - Math.abs(v[i - 1]) / opts.motorMaxSpeed))
         : aFwd[i];
       v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] + 2 * availableAccel * ds)));
     }
@@ -1037,13 +1037,13 @@
       doc = { ...doc, constraints: effectiveConstraints(doc.constraints, robot) };
     }
     const smp = sample(doc.waypoints, perSeg);
-    const pts = smp.pts;
+    let pts = smp.pts;
     const nWp = doc.waypoints.length;
-    const lastI = Math.max(0, pts.length - 1);
-    const wpIdx = smp.wpIdx || doc.waypoints.map((_, k) => Math.min(lastI, k * perSeg));
+    let lastI = Math.max(0, pts.length - 1);
+    let wpIdx = smp.wpIdx || doc.waypoints.map((_, k) => Math.min(lastI, k * perSeg));
     const total = smp.length || 1;
     const wpFrac = wpIdx.map((i) => (pts.length ? pts[i].s / total : 0));
-    const stopIdx = [];
+    let stopIdx = [];
     doc.waypoints.forEach((w, k) => { if (w.stop) stopIdx.push(wpIdx[k]); });
     const cap = (robot && robot.maxSpeed) || doc.constraints.maxVel;
     const vmax = Math.min(doc.constraints.maxVel, cap);
@@ -1092,7 +1092,19 @@
       manual: manualAnchors,
       targets: targetAnchors,
     });
-    const head = smoothHeadingTransitions(rawHead, segmentLaws, transitionBreaks, wpIdx, pts, doc.waypoints, transitionGoals);
+    let head = smoothHeadingTransitions(rawHead, segmentLaws, transitionBreaks, wpIdx, pts, doc.waypoints, transitionGoals);
+    if (internal.validationOnly) return { sample: smp, head, effRanges, wpIdx, headingTransitions };
+    if (plannerId === 'optimizedTrajectory' && window.TrajectoryOptimizer) {
+      const bounded = window.TrajectoryOptimizer.insertBoundaries(doc, pts, head, effRanges, wpIdx, headingTransitions);
+      pts = bounded.pts;
+      head = bounded.head;
+      wpIdx = bounded.waypointIndices;
+      lastI = Math.max(0, pts.length - 1);
+      stopIdx = [];
+      doc.waypoints.forEach((w, k) => { if (w.stop) stopIdx.push(wpIdx[k]); });
+      smp.pts = pts;
+      smp.wpIdx = wpIdx;
+    }
     const allTangent = doc.waypoints.slice(0, -1).every((_, segment) => effectiveHeadingMode(segment) === 'tangent');
     const mode = allTangent ? 'tank' : 'swerve';
     const dwell = [], turns = [], jiggles = [];
@@ -1108,16 +1120,64 @@
         jiggles.push({ idx: wpIdx[nWp - 1], baseRad, config: endpoint.jiggle });
       } else invalidJiggle = true;
     }
-    const profileOptions = { stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, dwell, turns, jiggles, freeSpeed: cap, motorMaxSpeed: hardLimits ? cap : 0 };
+    const profileOptions = {
+      stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, dwell, turns, jiggles,
+      freeSpeed: cap,
+      motorMaxSpeed: hardLimits ? cap : 0,
+      motorAcceleration: hardLimits ? hardLimits.motorAccel : 0,
+    };
     const movementProfileOptions = { ...profileOptions, dwell: [], turns: [], jiggles: [] };
     const profiled = profile(pts, doc.constraints, sv, gv, movementProfileOptions);
     let prof = profiled;
     let optimization;
     if (plannerId === 'optimizedTrajectory' && window.TrajectoryOptimizer) {
-      const result = window.TrajectoryOptimizer.optimize(doc, robot, pts, head, profiled, effRanges, wpIdx, headingTransitions);
+      let result = window.TrajectoryOptimizer.optimize(doc, robot, pts, head, profiled, effRanges, wpIdx, headingTransitions);
+      if (result.status === 'optimal' || result.status === 'feasible') {
+        if ((nWp - 1) > Math.floor((250000 - 1) / (perSeg * 2))) {
+          result = { status: 'internal-error', reason: 'Dense validation requires more than 250000 trajectory samples.', violations: [], refinable: false };
+        } else {
+          const denseRaw = derivePath(doc, robot, perSeg * 2, 'profiledSpline', { validationOnly: true, startedAt: optimizationStarted });
+          const denseBounded = window.TrajectoryOptimizer.insertBoundaries(
+            doc,
+            denseRaw.sample.pts,
+            denseRaw.head,
+            denseRaw.effRanges,
+            denseRaw.wpIdx,
+            denseRaw.headingTransitions,
+          );
+          const denseValidation = window.TrajectoryOptimizer.validateDense(
+            doc,
+            robot,
+            denseBounded.pts,
+            denseBounded.head,
+            denseRaw.effRanges,
+            denseBounded.waypointIndices,
+            denseRaw.headingTransitions,
+            pts,
+            result.velocities,
+          );
+          if (denseValidation.violations.length) {
+            result = {
+              ...result,
+              status: 'internal-error',
+              reason: 'Dense renderer validation found ' + denseValidation.violations.length + ' violations.',
+              violations: denseValidation.violations,
+              activeConstraints: denseValidation.activeConstraints,
+              validatedPoints: denseValidation.checkedPoints,
+              refinable: denseValidation.violations.every((violation) => violation.refinable),
+            };
+          } else {
+            result = {
+              ...result,
+              activeConstraints: denseValidation.activeConstraints,
+              validatedPoints: denseValidation.checkedPoints,
+            };
+          }
+        }
+      }
       if (result.status === 'optimal' || result.status === 'feasible') {
         prof = profile(pts, doc.constraints, sv, gv, { ...movementProfileOptions, velocityOverride: result.velocities, timeOverride: result.times });
-        optimization = { ...result, iterations: internal.iterations + result.iterations, refinementPasses: internal.refinementPasses, validatedPoints: pts.length * 2 - 1, constraintViolations: 0, fallback: false };
+        optimization = { ...result, iterations: internal.iterations + result.iterations, refinementPasses: internal.refinementPasses, constraintViolations: 0, fallback: false };
       } else if (result.refinable && internal.refinementPasses < 2
         && (nWp - 1) <= Math.floor((250000 - 1) / (perSeg * 2))) {
         return derivePath(doc, robot, perSeg * 2, plannerId, { refinementPasses: internal.refinementPasses + 1, iterations: internal.iterations + (result.iterations || 0), startedAt: optimizationStarted });
@@ -1125,10 +1185,22 @@
         optimization = {
           ...result,
           refinementPasses: internal.refinementPasses,
-          validatedPoints: pts.length * 2 - 1,
+          validatedPoints: result.validatedPoints || pts.length * 2 - 1,
           constraintViolations: (result.violations || []).length,
           fallback: result.status === 'internal-error',
           fallbackReason: result.reason || (result.violations && result.violations.length ? 'Dense renderer validation found ' + result.violations.length + ' violations.' : undefined),
+        };
+        const fallback = derivePath(doc, robot, perSeg, 'profiledSpline', { startedAt: optimizationStarted });
+        return {
+          ...fallback,
+          optimization: {
+            ...optimization,
+            plannerUsed: optimization.fallback ? 'profiledSpline' : 'optimizedTrajectory',
+            solveTimeMs: Date.now() - optimizationStarted,
+            totalTimeS: fallback.prof.totalTime,
+            maxVelocityMps: fallback.metrics.v.reduce((max, value) => Math.max(max, Math.abs(value)), 0),
+            maxAccelerationMps2: fallback.metrics.accel.reduce((max, value) => Math.max(max, Math.abs(value)), 0),
+          },
         };
       }
     }

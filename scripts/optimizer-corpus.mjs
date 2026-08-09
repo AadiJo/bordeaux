@@ -7,10 +7,15 @@ function driveModel() {
   return {
     motorId: 'corpus',
     motorFreeRpm: 5_000,
+    motorMaxTorqueNm: 2.6,
+    motorCount: 4,
     gearRatio: 6,
     wheelDiameterM: 0.1,
+    massKg: 52,
+    moiKgM2: 6,
     wheelbaseM: 0.6,
     trackwidthM: 0.8,
+    wheelFrictionCoefficient: 1.1,
   };
 }
 
@@ -117,13 +122,29 @@ function unsupportedJerkCase() {
 
 function longPathCase() {
   const project = createDemoProject();
+  delete project.robot.driveModel;
   const path = project.paths[0];
-  path.headingMode = 'tangent';
-  path.waypoints = buildWaypoints(Array.from({ length: 91 }, (_unused, index) => ({
-    x: 0.7 + index * 0.16,
-    y: 3 + Math.sin(index * 0.22) * 0.35,
-    segType: 'line',
-  })));
+  path.headingMode = 'manual';
+  const points = Array.from({ length: 31 }, (_unused, index) => ({
+    x: 0.7 + index * 0.48,
+    y: 3 + Math.sin(index * 0.45) * 0.35,
+  }));
+  path.waypoints = buildWaypoints(points.map((point, index) => {
+    const before = points[Math.max(0, index - 1)];
+    const after = points[Math.min(points.length - 1, index + 1)];
+    const dx = after.x - before.x;
+    const dy = after.y - before.y;
+    const length = Math.max(1e-9, Math.hypot(dx, dy));
+    const handle = 0.16;
+    return {
+      ...point,
+      theta: 0,
+      thetaOn: true,
+      segType: 'bezier',
+      prevC: { x: point.x - dx / length * handle, y: point.y - dy / length * handle },
+      nextC: { x: point.x + dx / length * handle, y: point.y + dy / length * handle },
+    };
+  }));
   return { name: 'long-path', input: { path, robot: project.robot }, expectedStatuses: ['optimal'], stress: true };
 }
 

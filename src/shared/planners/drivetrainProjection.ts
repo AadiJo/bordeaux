@@ -1,5 +1,6 @@
 import type { RobotConfig } from "../types";
-import type { AffineAccelerationConstraint } from "./reachability";
+import { robotHardLimits } from "../robotLimits";
+import type { AffineAccelerationConstraint, AffineScalarAccelerationConstraint } from "./reachability";
 import { interpolatePathPoint, type CanonicalPathPoint, type CanonicalPathState } from "./pathState";
 
 const EPSILON = 1e-9;
@@ -14,17 +15,22 @@ export interface DrivetrainPointProjection {
   velocityLimitMps: number;
   velocityConstraints: DrivetrainVelocityConstraint[];
   accelerationConstraints: AffineAccelerationConstraint[];
+  motorAccelerationConstraints: AffineScalarAccelerationConstraint[];
 }
 
 export interface DrivetrainProjection {
   pointVelocityLimits: number[];
+  intervalVelocityLimits: number[];
   intervalAccelerationConstraints: AffineAccelerationConstraint[][];
+  intervalMotorAccelerationConstraints: AffineScalarAccelerationConstraint[][];
 }
 
 export interface DrivetrainKinematicValue {
   label: string;
   speedMps: number;
   accelerationMps2: number;
+  longitudinalAccelerationMps2: number;
+  motorAccelerationLimitMps2?: number;
 }
 
 interface ModuleOffset {
@@ -58,16 +64,19 @@ export function projectDrivetrainAtPoint(
   point: CanonicalPathPoint,
   robot: RobotConfig,
   accelerationLimitMps2: number,
+  motorSafety = 1,
 ): DrivetrainPointProjection {
   const freeSpeed = Math.max(0.01, robot.maxSpeed);
   const velocityConstraints: DrivetrainVelocityConstraint[] = [];
   const accelerationConstraints: AffineAccelerationConstraint[] = [];
+  const motorAccelerationConstraints: AffineScalarAccelerationConstraint[] = [];
   let velocityLimitMps = freeSpeed;
   const cosHeading = Math.cos(point.headingRad);
   const sinHeading = Math.sin(point.headingRad);
   const offsets = moduleOffsets(robot);
+  const hardLimits = robotHardLimits(robot);
   if (offsets.length === 0) {
-    return { velocityLimitMps, velocityConstraints, accelerationConstraints };
+    return { velocityLimitMps, velocityConstraints, accelerationConstraints, motorAccelerationConstraints };
   }
 
   for (const module of offsets) {
@@ -98,6 +107,19 @@ export function projectDrivetrainAtPoint(
       limit: Math.max(0.01, accelerationLimitMps2),
       label: module.label,
     });
+    if (hardLimits && velocityCoefficient > EPSILON) {
+      const motorAcceleration = hardLimits.motorAccelMps2 * motorSafety;
+      motorAccelerationConstraints.push({
+        u: velocityCoefficient,
+        x: (uX * xX + uY * xY) / velocityCoefficient,
+        minimum: -motorAcceleration,
+        maximum: motorAcceleration,
+        velocityCoefficient,
+        freeSpeed: hardLimits.maxSpeedMps,
+        motorAcceleration,
+        label: module.label,
+      });
+    }
 
     const constantSpeedCoefficient = Math.hypot(xX, xY);
     if (constantSpeedCoefficient > EPSILON) {
@@ -108,7 +130,7 @@ export function projectDrivetrainAtPoint(
     }
   }
 
-  return { velocityLimitMps, velocityConstraints, accelerationConstraints };
+  return { velocityLimitMps, velocityConstraints, accelerationConstraints, motorAccelerationConstraints };
 }
 
 export function evaluateDrivetrainKinematics(
@@ -121,6 +143,7 @@ export function evaluateDrivetrainKinematics(
 ): DrivetrainKinematicValue[] {
   const cosHeading = Math.cos(point.headingRad);
   const sinHeading = Math.sin(point.headingRad);
+  const hardLimits = robotHardLimits(robot);
   return moduleOffsets(robot).map((module) => {
     const offsetX = cosHeading * module.x - sinHeading * module.y;
     const offsetY = sinHeading * module.x + cosHeading * module.y;
@@ -136,10 +159,19 @@ export function evaluateDrivetrainKinematics(
       + point.curvatureInvM * point.normalY * velocityMps ** 2
       + angularAccelerationRadps2 * perpendicularY
       - angularVelocityRadps ** 2 * offsetY;
+    const speedMps = Math.hypot(velocityX, velocityY);
+    const longitudinalAccelerationMps2 = speedMps > EPSILON
+      ? (velocityX * accelerationX + velocityY * accelerationY) / speedMps
+      : 0;
     return {
       label: module.label,
-      speedMps: Math.hypot(velocityX, velocityY),
+      speedMps,
       accelerationMps2: Math.hypot(accelerationX, accelerationY),
+      longitudinalAccelerationMps2,
+      ...(hardLimits ? {
+        motorAccelerationLimitMps2: hardLimits.motorAccelMps2
+          * Math.max(0, 1 - speedMps / hardLimits.maxSpeedMps),
+      } : {}),
     };
   });
 }
@@ -148,6 +180,7 @@ export function buildDrivetrainProjection(
   state: CanonicalPathState,
   robot: RobotConfig,
   intervalAccelerationLimits: readonly number[],
+  motorSafety = 1,
 ): DrivetrainProjection {
   if (intervalAccelerationLimits.length !== state.points.length - 1) {
     throw new Error("Drivetrain interval limits must be one less than the path point count.");
@@ -157,11 +190,16 @@ export function buildDrivetrainProjection(
       intervalAccelerationLimits[index - 1] ?? Number.POSITIVE_INFINITY,
       intervalAccelerationLimits[index] ?? Number.POSITIVE_INFINITY,
     );
-    return projectDrivetrainAtPoint(point, robot, limit).velocityLimitMps;
+    return projectDrivetrainAtPoint(point, robot, limit, motorSafety).velocityLimitMps;
   });
-  const intervalAccelerationConstraints = state.points.slice(1).map((point, index) => {
+  const intervalProjections = state.points.slice(1).map((point, index) => {
     const midpoint = interpolatePathPoint(state.points[index], point);
-    return projectDrivetrainAtPoint(midpoint, robot, intervalAccelerationLimits[index]).accelerationConstraints;
+    return projectDrivetrainAtPoint(midpoint, robot, intervalAccelerationLimits[index], motorSafety);
   });
-  return { pointVelocityLimits, intervalAccelerationConstraints };
+  return {
+    pointVelocityLimits,
+    intervalVelocityLimits: intervalProjections.map((projection) => projection.velocityLimitMps),
+    intervalAccelerationConstraints: intervalProjections.map((projection) => projection.accelerationConstraints),
+    intervalMotorAccelerationConstraints: intervalProjections.map((projection) => projection.motorAccelerationConstraints),
+  };
 }

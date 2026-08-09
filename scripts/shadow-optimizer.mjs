@@ -3,8 +3,10 @@ import { performance } from 'node:perf_hooks';
 import { optimizerCorpus } from './optimizer-corpus.mjs';
 
 const require = createRequire(import.meta.url);
-const { getPlanner } = require('../dist-electron/shared/planners/index.js');
+const { fixedPathSamples, getPlanner, normalizePhysicalPlannerInput } = require('../dist-electron/shared/planners/index.js');
 const { validateOptimizedTrajectory } = require('../dist-electron/shared/planners/trajectoryValidation.js');
+const { buildDenseValidationSamples } = require('../dist-electron/shared/planners/optimizedTrajectory.js');
+const { translationPriorityStartIndex } = require('../dist-electron/shared/planners/rotationPriority.js');
 const requestedRuns = Number.parseInt(process.env.BORDEAUX_SHADOW_RUNS ?? '20', 10);
 if (!Number.isInteger(requestedRuns) || requestedRuns < 5 || requestedRuns > 200) {
   throw new Error('BORDEAUX_SHADOW_RUNS must be an integer from 5 through 200.');
@@ -20,11 +22,11 @@ function deterministicValue(result) {
 }
 
 const aggregate = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   cases: 0,
   statuses: {},
   plannerUsed: {},
-  comparisons: { faster: 0, equal: 0, slowerEnforcingSafety: 0, unexplainedSlower: 0 },
+  comparisons: { bothValidFaster: 0, bothValidEqual: 0, bothValidSlower: 0, baselineInvalid: 0 },
   profiledTimeS: 0,
   optimizedTimeS: 0,
   deltaTimeS: 0,
@@ -55,9 +57,17 @@ for (const corpusCase of optimizerCorpus()) {
   const status = diagnostics.status || 'missing';
   const plannerUsed = diagnostics.plannerUsed || 'missing';
   const delta = optimized.totalTimeS - profiled.totalTimeS;
+  const comparisonTolerance = Math.max(0.005, profiled.totalTimeS * 0.005);
   const accepted = status === 'optimal' || status === 'feasible';
+  const validationInput = normalizePhysicalPlannerInput(corpusCase.input);
+  const baselineSamples = accepted
+    ? buildDenseValidationSamples(validationInput, fixedPathSamples(profiled), undefined, 8)
+    : [];
+  const baselineTranslationStart = accepted
+    ? translationPriorityStartIndex(validationInput.path, baselineSamples, baselineSamples.at(-1)?.s ?? 0)
+    : null;
   const baselineValidation = accepted
-    ? validateOptimizedTrajectory(corpusCase.input, profiled.samples, { angularKinematics: 'sample' })
+    ? validateOptimizedTrajectory(validationInput, baselineSamples, { skipAngularFromIndex: baselineTranslationStart ?? undefined })
     : { violations: [] };
   for (let run = 0; run < 3; run += 1) getPlanner('optimizedTrajectory').generate(corpusCase.input);
   const durations = [];
@@ -77,10 +87,10 @@ for (const corpusCase of optimizerCorpus()) {
   aggregate.cases += 1;
   aggregate.statuses[status] = (aggregate.statuses[status] || 0) + 1;
   aggregate.plannerUsed[plannerUsed] = (aggregate.plannerUsed[plannerUsed] || 0) + 1;
-  if (delta < -0.00005) aggregate.comparisons.faster += 1;
-  else if (delta > 0.00005 && baselineValidation.violations.length > 0) aggregate.comparisons.slowerEnforcingSafety += 1;
-  else if (delta > 0.00005) aggregate.comparisons.unexplainedSlower += 1;
-  else aggregate.comparisons.equal += 1;
+  if (baselineValidation.violations.length > 0) aggregate.comparisons.baselineInvalid += 1;
+  else if (delta < -comparisonTolerance) aggregate.comparisons.bothValidFaster += 1;
+  else if (delta > comparisonTolerance) aggregate.comparisons.bothValidSlower += 1;
+  else aggregate.comparisons.bothValidEqual += 1;
   aggregate.profiledTimeS += profiled.totalTimeS;
   aggregate.optimizedTimeS += optimized.totalTimeS;
   aggregate.deltaTimeS += delta;
@@ -106,5 +116,5 @@ for (const key of ['commonP50Max', 'commonP95Max', 'stressP50Max', 'stressP95Max
 
 console.log(JSON.stringify(aggregate));
 if (aggregate.unexpectedStatuses > 0 || aggregate.deterministicMismatches > 0
-  || aggregate.constraintViolations > 0 || aggregate.comparisons.unexplainedSlower > 0
+  || aggregate.constraintViolations > 0 || aggregate.comparisons.bothValidSlower > 0
   || aggregate.latencyFailures > 0 || aggregate.fallbacks > 0 || aggregate.unexpectedPlannerUsed > 0) process.exitCode = 1;

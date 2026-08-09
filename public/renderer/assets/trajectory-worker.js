@@ -1,10 +1,12 @@
 self.window = self;
-importScripts('trajectory-optimizer.js', 'path-math.js');
+importScripts('trajectory-optimizer.js', 'path-math.js', 'trajectory-geometry-optimizer.js');
 
 self.onmessage = (event) => {
   const request = event.data || {};
   try {
-    const value = self.PM.derivePath(request.path, request.robot, request.perSegment, 'optimizedTrajectory');
+    const value = request.operation === 'refineGeometry'
+      ? self.TrajectoryGeometryOptimizer.refine(request.path, request.robot, request.perSegment)
+      : self.PM.derivePath(request.path, request.robot, request.perSegment, 'optimizedTrajectory');
     self.postMessage({ generation: request.generation, ok: true, value });
   } catch (error) {
     self.postMessage({

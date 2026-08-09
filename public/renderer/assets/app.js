@@ -143,6 +143,7 @@
     const [metric, setMetric] = useState('velocity');
     const [tool, setTool] = useState('select');
     const [waypointPreview, setWaypointPreview] = useState(null);
+    const [geometryRefinement, setGeometryRefinement] = useState(null);
     const [headMenu, setHeadMenu] = useState(null);
     const [plannerId, setPlannerId] = useState('profiledSpline');
     const [dirty, setDirty] = useState(false);
@@ -321,6 +322,7 @@
     const autosaveRevision = useRef(0);
     const lastDerived = useRef(null);
     const optimizedPreviewController = useRef(null);
+    const geometryRefinementController = useRef(null);
     const [optimizedPreview, setOptimizedPreview] = useState(null);
     const [, force] = useState(0);
 
@@ -473,6 +475,47 @@
     const beginHistory = useCallback(() => { hist.current.past.push(clone(docRef.current)); if (hist.current.past.length > 80) hist.current.past.shift(); hist.current.future = []; projectHist.current.future = []; force((x) => x + 1); }, []);
     const commit = useCallback((fn) => { beginHistory(); writeDoc(fn(clone(docRef.current))); }, [beginHistory, writeDoc]);
     const mutate = useCallback((fn) => { writeDoc(fn(clone(docRef.current))); }, [writeDoc]);
+    const cancelGeometryRefinement = useCallback(() => {
+      if (geometryRefinementController.current) geometryRefinementController.current.cancel();
+      setGeometryRefinement(null);
+    }, []);
+    const runGeometryRefinement = useCallback(() => {
+      if (selectedPlannerId !== 'optimizedTrajectory') return;
+      if (!geometryRefinementController.current && window.OptimizedPreviewController) {
+        geometryRefinementController.current = new window.OptimizedPreviewController();
+      }
+      const controller = geometryRefinementController.current;
+      if (!controller) return;
+      setGeometryRefinement({ sourceDoc: doc, sourceRobot: robot, sourcePlannerId: selectedPlannerId, status: 'running' });
+      controller.request(
+        { operation: 'refineGeometry', path: doc, robot, perSegment: PERSEG },
+        (value) => setGeometryRefinement({ sourceDoc: doc, sourceRobot: robot, sourcePlannerId: selectedPlannerId, ...value }),
+        (error) => setGeometryRefinement({ sourceDoc: doc, sourceRobot: robot, sourcePlannerId: selectedPlannerId, status: 'error', reason: error.message || String(error) }),
+      );
+    }, [doc, robot, selectedPlannerId]);
+    const applyGeometryRefinement = useCallback(() => {
+      if (!geometryRefinement || geometryRefinement.status !== 'candidate'
+        || geometryRefinement.sourceDoc !== doc || geometryRefinement.sourceRobot !== robot
+        || geometryRefinement.sourcePlannerId !== selectedPlannerId
+        || selectedPlannerId !== 'optimizedTrajectory') return;
+      commit(() => geometryRefinement.path);
+      setGeometryRefinement(null);
+    }, [commit, doc, geometryRefinement, robot, selectedPlannerId]);
+    useEffect(() => {
+      setGeometryRefinement((current) => current
+        && (current.sourceDoc !== doc || current.sourceRobot !== robot
+          || current.sourcePlannerId !== selectedPlannerId
+          || selectedPlannerId !== 'optimizedTrajectory') ? null : current);
+      return () => {
+        if (geometryRefinementController.current) geometryRefinementController.current.cancel();
+      };
+    }, [doc, robot, selectedPlannerId]);
+    const currentGeometryRefinement = selectedPlannerId === 'optimizedTrajectory'
+      && geometryRefinement && geometryRefinement.sourceDoc === doc
+      && geometryRefinement.sourceRobot === robot
+      && geometryRefinement.sourcePlannerId === selectedPlannerId
+      ? geometryRefinement
+      : null;
 
     const undo = useCallback(() => {
       const H = hist.current;
@@ -1366,19 +1409,19 @@
         }
         if (k === 'g') setShowGrid((s) => !s);
         else if (k === 'f') setView(FIT);
-        else if (e.key === 'Escape') { setTool('select'); setHeadMenu(null); setWaypointPreview(null); select(null, -1); }
+        else if (e.key === 'Escape') { setTool('select'); setHeadMenu(null); setWaypointPreview(null); cancelGeometryRefinement(); select(null, -1); }
         else if ((e.key === 'Backspace' || e.key === 'Delete') && sel.kind) {
           if (sel.kind === 'wp') delWp(sel.idx); else if (sel.kind === 'rt') delTarget(sel.idx); else if (sel.kind === 'em') delMarker(sel.idx); else if (sel.kind === 'cr') delRange(sel.idx);
         }
       };
       window.addEventListener('keydown', onKey);
       return () => window.removeEventListener('keydown', onKey);
-    }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, nudgeWp, nudgeFrac, alliance, togglePlayback]);
+    }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, nudgeWp, nudgeFrac, alliance, togglePlayback, cancelGeometryRefinement]);
 
     const selNode = (page === 'auto' && routineSel) ? window.AUTO.findNode(routine, routineSel) : null;
 
     return h('div', { className: 'app' },
-      h(window.Panels.Toolbar, { project, page, setPage, alliance, setAlliance, onNew: newProject, onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo, onExportJava: () => onExportJava('linked'), javaProject: javaProjectState, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
+      h(window.Panels.Toolbar, { project, page, setPage, alliance, setAlliance, onNew: newProject, onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo, onExportJava: () => onExportJava('linked'), onRefineGeometry: runGeometryRefinement, geometryRefining: currentGeometryRefinement && currentGeometryRefinement.status === 'running', javaProject: javaProjectState, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
         routines, activeRoutineId: routine.id, setActiveRoutine, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine }),
       page === 'robot'
         ? h('main', { className: 'page-main' }, h(window.RobotPage, { robot, setRobot, accent, mcpEnabled, agentProposal: agentProposal && agentProposal.operation === 'configureRobot' ? agentProposal : null, onApplyProposal: applyAgentProposal, onRejectProposal: rejectAgentProposal }))
@@ -1400,7 +1443,10 @@
               previewError && h('div', { className: 'insert-preview derivation-error', role: 'alert' },
                 h('div', { className: 'insert-preview-copy' }, h('b', null, selectedPlannerId === 'optimizedTrajectory' ? 'Optimized preview unavailable' : 'Path preview unavailable'), h('span', null, previewError.message || String(previewError))),
                 h('span', null, selectedPlannerId === 'optimizedTrajectory' ? 'Showing the immediate profiled preview.' : 'Showing the last valid preview. Undo or edit the selected geometry.')),
-              h(window.FieldView, { doc, derived, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, playTime, playing, actions: fieldActions, onSelPos, showHandles: true }),
+              h(window.FieldView, { doc, derived, insertionPreview: waypointPreview, proposalPreviews: [
+                ...(agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : []),
+                ...(currentGeometryRefinement && currentGeometryRefinement.status === 'candidate' ? [{ id: 'geometry-refinement', selected: true, valid: true, derived: currentGeometryRefinement.derived }] : []),
+              ], sel, tool, view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, playTime, playing, actions: fieldActions, onSelPos, showHandles: true }),
               tool !== 'select' && !waypointPreview && h('div', { className: 'stage-hint', dangerouslySetInnerHTML: { __html: toolHint(tool) } }),
               waypointPreview && h('div', { className: 'insert-preview', role: 'region', 'aria-label': 'Preview waypoint insertion' },
                 h('div', { className: 'insert-preview-copy' },
@@ -1409,6 +1455,17 @@
                 h('div', { className: 'insert-preview-actions' },
                   h('button', { type: 'button', onClick: () => setWaypointPreview(null) }, 'Cancel'),
                   h('button', { className: 'primary', type: 'button', onClick: applyWaypointPreview }, waypointPreview.actionLabel || 'Insert waypoint'))),
+              currentGeometryRefinement && h('div', { className: 'insert-preview geometry-refinement', role: currentGeometryRefinement.status === 'error' ? 'alert' : 'region', 'aria-label': 'Geometry refinement' },
+                h('div', { className: 'insert-preview-copy' },
+                  h('b', null, currentGeometryRefinement.status === 'running' ? 'Refining Bezier handles' : currentGeometryRefinement.status === 'candidate' ? 'Faster geometry preview' : currentGeometryRefinement.status === 'error' ? 'Geometry refinement failed' : 'Authored geometry retained'),
+                  h('span', null, currentGeometryRefinement.status === 'running'
+                    ? 'Searching fixed handle directions in a background worker. The project has not changed.'
+                    : currentGeometryRefinement.status === 'candidate'
+                      ? currentGeometryRefinement.baselineTimeS.toFixed(3) + ' s → ' + currentGeometryRefinement.candidateTimeS.toFixed(3) + ' s · saves ' + currentGeometryRefinement.gainS.toFixed(3) + ' s'
+                      : currentGeometryRefinement.reason || 'No material time improvement was found.')),
+                h('div', { className: 'insert-preview-actions' },
+                  h('button', { type: 'button', onClick: cancelGeometryRefinement }, currentGeometryRefinement.status === 'running' ? 'Cancel' : 'Dismiss'),
+                  currentGeometryRefinement.status === 'candidate' && h('button', { className: 'primary', type: 'button', onClick: applyGeometryRefinement }, 'Apply faster path'))),
               agentProposal && h('div', { className: 'insert-preview agent-proposal', role: 'region', 'aria-label': 'Agent path proposal' },
                 h('div', { className: 'insert-preview-copy' },
                   h('b', null, agentProposal.operation === 'replace' ? 'Agent repair proposal' : 'Agent path proposal'),

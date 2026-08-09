@@ -253,7 +253,13 @@
     // forward
     for (let i = 1; i < n; i++) {
       const ds = pts[i].s - pts[i - 1].s;
-      v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] + 2 * aFwd[i] * ds)));
+      const availableAccel = opts.motorMaxSpeed > 1e-6 && opts.motorAcceleration > 0
+        ? Math.min(
+            aFwd[i - 1],
+            opts.motorAcceleration * Math.max(0, 1 - Math.abs(v[i - 1]) / opts.motorMaxSpeed),
+          )
+        : aFwd[i];
+      v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] + 2 * availableAccel * ds)));
     }
     // backward (dedicated deceleration limit, tightened by ranges)
     for (let i = n - 2; i >= 0; i--) {
@@ -822,8 +828,20 @@
     const dwell = [], turns = [];
     doc.waypoints.forEach((w, k) => { if (w.stop && w.wait > 0) dwell.push({ idx: wpIdx[k], wait: w.wait }); });
     if (!(options && options.skipStationaryActions)) doc.waypoints.forEach((w, k) => { if (w.stop && w.turnInPlace) turns.push({ idx: wpIdx[k], start: k > 0 ? head[Math.max(0, wpIdx[k] - 1)] : head[0], end: w.turnInPlace.headingDeg * D2R, direction: w.turnInPlace.direction, maxAngVel: doc.constraints.maxAngVel, maxAngAccel: Math.min(doc.constraints.maxAngAccel, doc.constraints.maxAngDecel || doc.constraints.maxAngAccel), maxAngJerk: doc.constraints.maxAngJerk }); });
-    const physicalModel = robot?.driveModel?.motorMaxTorqueNm > 0 && robot?.driveModel?.massKg > 0;
-    const prof = profile(pts, doc.constraints, sv, gv, { stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, dwell, turns, motorMaxSpeed: physicalModel ? cap : 0 });
+    const model = robot?.driveModel;
+    const wheelRadius = (model?.wheelDiameterM ?? 0) / 2;
+    const motorAcceleration = model?.motorMaxTorqueNm > 0
+      && model?.motorCount > 0
+      && model?.gearRatio > 0
+      && wheelRadius > 0
+      && model?.massKg > 0
+      ? model.motorCount * model.motorMaxTorqueNm * model.gearRatio / (wheelRadius * model.massKg)
+      : 0;
+    const prof = profile(pts, doc.constraints, sv, gv, {
+      stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, dwell, turns,
+      motorMaxSpeed: motorAcceleration > 0 ? cap : 0,
+      motorAcceleration,
+    });
     const mtr = metrics(pts, prof, anchors, mode);
     const warnings = analyze(pts, prof, mtr, robot || {});
     doc.waypoints.slice(0, -1).forEach((w, segment) => {

@@ -5,8 +5,12 @@ const require = createRequire(import.meta.url);
 const { solveReachabilityProfile } = require("../dist-electron/shared/planners/reachability.js");
 
 const requestedCases = Number.parseInt(process.env.BORDEAUX_FUZZ_CASES ?? "100000", 10);
+const caseOffset = Number.parseInt(process.env.BORDEAUX_FUZZ_OFFSET ?? "0", 10);
 if (!Number.isInteger(requestedCases) || requestedCases < 1 || requestedCases > 1_000_000) {
   throw new Error("BORDEAUX_FUZZ_CASES must be an integer from 1 through 1000000.");
+}
+if (!Number.isInteger(caseOffset) || caseOffset < 0 || caseOffset > 1_000_000) {
+  throw new Error("BORDEAUX_FUZZ_OFFSET must be an integer from 0 through 1000000.");
 }
 
 function randomGenerator(seed) {
@@ -40,6 +44,7 @@ function requestFor(index) {
   const decelerationLimits = [];
   const freeSpeeds = [];
   const accelerationConstraints = [];
+  const scalarAccelerationConstraints = [];
   for (let interval = 0; interval < count - 1; interval += 1) {
     accelerationLimits.push(between(random, 0.2, 8));
     decelerationLimits.push(between(random, 0.2, 8));
@@ -53,6 +58,19 @@ function requestFor(index) {
       xY: between(random, 0, 1.5) * Math.sin(curvatureAngle),
       limit: between(random, 0.5, 10),
     }]);
+    if (index % 4 === 0) {
+      const velocityCoefficient = between(random, 0.1, 2);
+      const motorAcceleration = between(random, 0.5, 12);
+      scalarAccelerationConstraints.push([{
+        u: velocityCoefficient,
+        x: between(random, -1.5, 1.5),
+        minimum: -motorAcceleration,
+        maximum: motorAcceleration,
+        velocityCoefficient,
+        freeSpeed: between(random, 1, 8),
+        motorAcceleration,
+      }]);
+    } else scalarAccelerationConstraints.push([]);
   }
   return {
     positions,
@@ -61,6 +79,7 @@ function requestFor(index) {
     decelerationLimits,
     freeSpeeds,
     accelerationConstraints,
+    scalarAccelerationConstraints,
     startVelocity: 0,
     goalVelocity: 0,
   };
@@ -80,7 +99,7 @@ function verifyOptimal(request, result, caseIndex) {
     const afterSquared = velocity ** 2;
     const acceleration = (afterSquared - beforeSquared) / (2 * distance);
     const motorLimit = request.accelerationLimits[interval]
-      * Math.max(0, 1 - result.velocities[point - 1] / request.freeSpeeds[interval]);
+      * Math.max(0, 1 - Math.max(result.velocities[point - 1], velocity) / request.freeSpeeds[interval]);
     if (acceleration > motorLimit + tolerance || -acceleration > request.decelerationLimits[interval] + tolerance) {
       throw new Error(`Case ${caseIndex} violates scalar acceleration at interval ${interval}.`);
     }
@@ -94,27 +113,37 @@ function verifyOptimal(request, result, caseIndex) {
         throw new Error(`Case ${caseIndex} violates affine acceleration at interval ${interval}.`);
       }
     }
+    for (const constraint of request.scalarAccelerationConstraints[interval]) {
+      const moduleSpeed = constraint.velocityCoefficient * Math.max(result.velocities[point - 1], velocity);
+      const limit = constraint.motorAcceleration * Math.max(0, 1 - moduleSpeed / constraint.freeSpeed);
+      const measured = Math.abs(constraint.u * acceleration + constraint.x * midpointSpeedSquared);
+      if (measured > limit + tolerance) {
+        throw new Error(`Case ${caseIndex} violates module motor acceleration at interval ${interval}.`);
+      }
+    }
   }
 }
 
 const counts = { optimal: 0, "invalid-input": 0, infeasible: 0 };
 const started = performance.now();
 for (let caseIndex = 0; caseIndex < requestedCases; caseIndex += 1) {
-  const request = requestFor(caseIndex);
+  const absoluteCaseIndex = caseOffset + caseIndex;
+  const request = requestFor(absoluteCaseIndex);
   const result = solveReachabilityProfile(request);
-  if (!(result.status in counts)) throw new Error(`Case ${caseIndex} returned unknown status ${result.status}.`);
+  if (!(result.status in counts)) throw new Error(`Case ${absoluteCaseIndex} returned unknown status ${result.status}.`);
   counts[result.status] += 1;
-  if (result.status === "optimal") verifyOptimal(request, result, caseIndex);
+  if (result.status === "optimal") verifyOptimal(request, result, absoluteCaseIndex);
   if (caseIndex < 1_000) {
     const repeated = solveReachabilityProfile(request);
     if (JSON.stringify(repeated) !== JSON.stringify(result)) {
-      throw new Error(`Case ${caseIndex} is nondeterministic.`);
+      throw new Error(`Case ${absoluteCaseIndex} is nondeterministic.`);
     }
   }
 }
 
 console.log(JSON.stringify({
   cases: requestedCases,
+  offset: caseOffset,
   elapsedMs: Number((performance.now() - started).toFixed(1)),
   statuses: counts,
   unexplainedFailures: 0,

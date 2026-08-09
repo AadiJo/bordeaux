@@ -6,9 +6,9 @@ import type {
   TrajectorySample,
   ValidationIssue,
 } from "../types";
-import { buildReachabilityInput, countLinearConstraintViolations } from "./optimizationConstraints";
+import { buildReachabilityInput, countLinearConstraintViolations, insertOptimizationBoundaries } from "./optimizationConstraints";
 import { DEFAULT_SAMPLES_PER_SEGMENT, MAX_TRAJECTORY_SAMPLES } from "./limits";
-import { profiledSplinePlanner } from "./profiledSpline";
+import { profiledSplineOptimizationSeed, profiledSplinePlanner } from "./profiledSpline";
 import { solveReachabilityProfile, type ReachabilityStatus } from "./reachability";
 import { translationPriorityStartIndex } from "./rotationPriority";
 import { validateOptimizedTrajectory, type TrajectoryValidationResult } from "./trajectoryValidation";
@@ -35,18 +35,62 @@ function remapTiming(samples: TrajectorySample[], velocities: number[]): Traject
         : i === samples.length - 1
           ? 0
           : (velocities[i + 1] - velocities[i - 1]) / Math.max(1e-6, dtPrev + dtNext);
-    const headingDelta =
-      i === 0
-        ? 0
-        : Math.atan2(Math.sin(sample.headingRad - samples[i - 1].headingRad), Math.cos(sample.headingRad - samples[i - 1].headingRad));
+    const headingDelta = i === 0
+      ? 0
+      : Math.atan2(
+          Math.sin(sample.headingRad - samples[i - 1].headingRad),
+          Math.cos(sample.headingRad - samples[i - 1].headingRad),
+        );
     return {
       ...sample,
-      t: R(times[i], 4),
-      velocityMps: R(velocities[i], 4),
-      accelerationMps2: R(accel, 4),
-      angularVelocityRadps: R(i === 0 ? 0 : headingDelta / dtPrev, 5),
+      t: R(times[i], 6),
+      velocityMps: R(velocities[i], 6),
+      accelerationMps2: R(accel, 6),
+      angularVelocityRadps: R(i === 0 ? 0 : headingDelta / dtPrev, 7),
     };
   });
+}
+
+function remapProfileForValidation(
+  geometrySamples: TrajectorySample[],
+  timedSamples: TrajectorySample[],
+): TrajectorySample[] {
+  let sourceIndex = 0;
+  const velocities = geometrySamples.map((sample) => {
+    while (sourceIndex < timedSamples.length - 2 && timedSamples[sourceIndex + 1].f < sample.f) sourceIndex += 1;
+    for (let candidate = Math.max(0, sourceIndex - 2); candidate <= Math.min(timedSamples.length - 1, sourceIndex + 3); candidate += 1) {
+      if (Math.hypot(timedSamples[candidate].x - sample.x, timedSamples[candidate].y - sample.y) <= 1e-8) {
+        sourceIndex = candidate;
+        return Math.abs(timedSamples[candidate].velocityMps);
+      }
+    }
+    const before = timedSamples[sourceIndex];
+    const after = timedSamples[Math.min(timedSamples.length - 1, sourceIndex + 1)];
+    const span = Math.max(1e-9, after.f - before.f);
+    const ratio = Math.max(0, Math.min(1, (sample.f - before.f) / span));
+    const speedSquared = before.velocityMps ** 2
+      + (after.velocityMps ** 2 - before.velocityMps ** 2) * ratio;
+    return Math.sqrt(Math.max(0, speedSquared));
+  });
+  return remapTiming(geometrySamples, velocities);
+}
+
+export function buildDenseValidationSamples(
+  input: PlannerInput,
+  timedSamples: TrajectorySample[],
+  samplesPerSegment = input.samplesPerSegment ?? DEFAULT_SAMPLES_PER_SEGMENT,
+  validationMultiplier = 2,
+): TrajectorySample[] {
+  const segmentCount = Math.max(0, input.path.waypoints.length - 1);
+  const denseSamplesPerSegment = samplesPerSegment * validationMultiplier;
+  if (segmentCount > Math.floor((MAX_TRAJECTORY_SAMPLES - 1) / denseSamplesPerSegment)) {
+    throw new Error(`Dense validation requires more than ${MAX_TRAJECTORY_SAMPLES} trajectory samples`);
+  }
+  const denseGeometry = insertOptimizationBoundaries(
+    input,
+    profiledSplineOptimizationSeed({ ...input, samplesPerSegment: denseSamplesPerSegment }).samples,
+  );
+  return remapProfileForValidation(denseGeometry, timedSamples);
 }
 
 function timeAtFraction(samples: TrajectorySample[], fraction: number): number {
@@ -87,7 +131,8 @@ function diagnostics(
     totalTimeS: R(samples[samples.length - 1]?.t ?? 0, 4),
     maxVelocityMps: R(maxVelocityMps, 4),
     maxAccelerationMps2: R(maxAccelerationMps2, 4),
-    constraintViolations: validation?.violations.length ?? countLinearConstraintViolations(input, samples),
+    constraintViolations: validation?.violations.length
+      ?? (status === "optimal" || status === "feasible" ? countLinearConstraintViolations(input, samples) : 0),
     fallback: Boolean(fallbackReason),
     fallbackReason,
   };
@@ -98,6 +143,7 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
   generate(input: PlannerInput): PlannerResult {
     const started = performance.now();
     const base = profiledSplinePlanner.generate(input);
+    const optimizationSeed = profiledSplineOptimizationSeed(input);
     const solveTimeMs = performance.now() - started;
 
     if (base.samples.length < 2) {
@@ -133,11 +179,12 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
     }
 
     try {
-      let candidateBase = base;
+      let candidateBase = optimizationSeed;
       let samplesPerSegment = input.samplesPerSegment ?? DEFAULT_SAMPLES_PER_SEGMENT;
       let totalIterations = 0;
       for (let refinementPasses = 0; refinementPasses <= MAX_REFINEMENT_PASSES; refinementPasses += 1) {
-        const reachability = solveReachabilityProfile(buildReachabilityInput(input, candidateBase.samples));
+        const optimizationSamples = insertOptimizationBoundaries(input, candidateBase.samples);
+        const reachability = solveReachabilityProfile(buildReachabilityInput(input, optimizationSamples));
         totalIterations += reachability.iterations;
         if (reachability.status !== "optimal") {
           const reason = reachability.reason ?? "The fixed-path optimizer could not produce a trajectory.";
@@ -163,13 +210,15 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
           };
         }
 
-        const samples = remapTiming(candidateBase.samples, reachability.velocities);
+        const samples = remapTiming(optimizationSamples, reachability.velocities);
+        const segmentCount = Math.max(0, input.path.waypoints.length - 1);
+        const validationSamples = buildDenseValidationSamples(input, samples, samplesPerSegment);
         const translationPriorityStart = translationPriorityStartIndex(
           input.path,
-          samples,
-          candidateBase.totalDistanceM,
+          validationSamples,
+          validationSamples.at(-1)?.s ?? candidateBase.totalDistanceM,
         );
-        const validation = validateOptimizedTrajectory(input, samples, {
+        const validation = validateOptimizedTrajectory(input, validationSamples, {
           skipAngularFromIndex: translationPriorityStart ?? undefined,
         });
         if (validation.violations.length === 0) {
@@ -179,7 +228,7 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
             totalTimeS,
             totalDistanceM: candidateBase.totalDistanceM,
             samples,
-            markers: candidateBase.markers.map((marker) => ({ ...marker, timeS: R(timeAtFraction(samples, marker.fraction), 4) })),
+            markers: candidateBase.markers.map((marker) => ({ ...marker, timeS: R(timeAtFraction(samples, marker.fraction), 6) })),
             diagnostics: candidateBase.diagnostics,
             optimization: diagnostics(
               input,
@@ -195,12 +244,11 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
         }
 
         const allRefinable = validation.violations.every((violation) => violation.refinable);
-        const segmentCount = Math.max(0, input.path.waypoints.length - 1);
         const nextSamplesPerSegment = samplesPerSegment * 2;
         const withinSampleLimit = segmentCount <= Math.floor((MAX_TRAJECTORY_SAMPLES - 1) / nextSamplesPerSegment);
         if (allRefinable && refinementPasses < MAX_REFINEMENT_PASSES && withinSampleLimit) {
           samplesPerSegment = nextSamplesPerSegment;
-          candidateBase = profiledSplinePlanner.generate({ ...input, samplesPerSegment });
+          candidateBase = profiledSplineOptimizationSeed({ ...input, samplesPerSegment });
           continue;
         }
 
@@ -211,14 +259,15 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
           path: `paths.${input.path.name}.planner`,
           message: `Optimized trajectory fell back to profiled spline: ${fallbackReason}`,
         };
+        const fallback = profiledSplinePlanner.generate({ ...input, samplesPerSegment });
         return {
-          ...candidateBase,
+          ...fallback,
           planner: "profiledSpline",
-          diagnostics: [...candidateBase.diagnostics, issue],
+          diagnostics: [...fallback.diagnostics, issue],
           optimization: {
             ...diagnostics(
               input,
-              candidateBase.samples,
+              fallback.samples,
               performance.now() - started,
               "internal-error",
               totalIterations,
