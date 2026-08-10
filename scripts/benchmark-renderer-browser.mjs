@@ -221,7 +221,7 @@ try {
       correctPaint: "input dispatch to the first compositor paint after the waypoint matches in screen and pre-drag SVG coordinates and the centerline contains it",
       droppedFrames: "missed 16.67 ms requestAnimationFrame slots during continuous input",
       worker: "production Vite bundle with its emitted Web Worker; no worker replacement or mock",
-      clockPhase: "offscreen paint and renderer rAF timestamps allow a two-frame association window, never before input dispatch",
+      clockPhase: "a correct paint must occur at or after the renderer observes matching waypoint and curve geometry",
     },
     variants,
     comparison: comparison(variants.upstream, variants.candidate),

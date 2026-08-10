@@ -409,9 +409,10 @@ app.whenReady().then(async () => {
         const value = await window.webContents.executeJavaScript("window.__rendererBenchmark.lastCorrect()");
         return value && Math.hypot(value.x - target.x, value.y - target.y) <= 1 ? value : null;
       }, 5000, "a correct-geometry frame");
-      // Chromium's offscreen paint callback and renderer rAF observation can
-      // straddle adjacent compositor phases even though they show one frame.
-      const correctPaint = await paintAfter(Math.max(sentAt, correct.correctAtEpochMs - frameBudgetMs * 2));
+      // Without a cross-process frame token, only a compositor paint observed
+      // after correct geometry is known can safely be called a correct paint.
+      const correctPaint = await paintAfter(correct.correctAtEpochMs);
+      if (correctPaint < correct.correctAtEpochMs) throw new Error('A correct paint cannot precede the correct-geometry observation.');
       anyPaintSamples.push(anyPaint - sentAt);
       correctPaintSamples.push(correctPaint - sentAt);
     }

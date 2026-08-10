@@ -30,7 +30,6 @@ display stack; Electron, Chrome, Node, revisions, raw trials, and protocol are
 recorded in the JSON report. Generated results are evidence, not source, and
 must not be committed.
 
-The offscreen compositor callback may arrive just before the renderer observes
-the same frame in `requestAnimationFrame`; the harness allows a two-frame phase
-tolerance when associating those cross-process timestamps, but never accepts a
-paint timestamp from before the measured input.
+Renderer and compositor timestamps are not treated as the same-frame proof.
+The harness conservatively accepts only a compositor paint at or after the
+renderer observes matching waypoint and curve geometry.
