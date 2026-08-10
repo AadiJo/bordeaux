@@ -426,7 +426,6 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const projectHist = useRef({ past: [], future: [] });
     const autosaveRevision = useRef(0);
     const autosaveTimer = useRef(0);
-    const autosaveTail = useRef(Promise.resolve());
     const [, force] = useState(0);
     const updateDirty = useCallback((next) => {
       dirtyRef.current = next;
@@ -441,24 +440,26 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       const before = base.paths.find((path) => path.id === draft.id);
       return PathLinks.sync(materialized, draft.id, before);
     }, [editStore]);
-    const scheduleAutosave = useCallback(() => {
+    const scheduleAutosave = useCallback((immediate) => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.autosaveProject !== 'function') return;
       const revision = ++autosaveRevision.current;
       if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);
+      autosaveTimer.current = 0;
+      const persist = async () => {
+        if (revision !== autosaveRevision.current) return;
+        const sourceProject = projectRef.current;
+        const editRevision = editStore.getRevision();
+        const result = await window.bordeauxAPI.autosaveProject(materializeProject());
+        if (revision === autosaveRevision.current && sourceProject === projectRef.current
+          && editRevision === editStore.getRevision() && !editStore.getSnapshot() && result && result.saved) updateDirty(false);
+      };
+      if (immediate === true) {
+        void persist().catch((error) => console.warn('Could not autosave the Bordeaux project:', error));
+        return;
+      }
       autosaveTimer.current = window.setTimeout(() => {
         autosaveTimer.current = 0;
-        const persist = async () => {
-          if (revision !== autosaveRevision.current) return;
-          const sourceProject = projectRef.current;
-          const editRevision = editStore.getRevision();
-          const result = await window.bordeauxAPI.autosaveProject(materializeProject());
-          if (revision === autosaveRevision.current && sourceProject === projectRef.current
-            && editRevision === editStore.getRevision() && !editStore.getSnapshot() && result && result.saved) updateDirty(false);
-        };
-        autosaveTail.current = autosaveTail.current
-          .catch(() => undefined)
-          .then(persist)
-          .catch((error) => console.warn('Could not autosave the Bordeaux project:', error));
+        void persist().catch((error) => console.warn('Could not autosave the Bordeaux project:', error));
       }, 900);
     }, [editStore, materializeProject, updateDirty]);
 
@@ -478,7 +479,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       const canceled = !draft && editStore.getLastResolution() === 'cancel';
       if (!draft && !canceled) return;
       if (canceled || !dirtyRef.current) updateDirty(true);
-      scheduleAutosave();
+      scheduleAutosave(canceled);
     }), [editStore, scheduleAutosave, updateDirty]);
     useEffect(() => () => {
       if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);

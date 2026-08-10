@@ -334,7 +334,7 @@ app.whenReady().then(async () => {
       return waypoint && Math.hypot(waypoint.x - originalCancelWaypoint.x, waypoint.y - originalCancelWaypoint.y) <= 1e-6
         ? state.autosavedProjects.at(-1)
         : null;
-    }, 4000, "the canceled draft autosave to be rolled back");
+    }, 500, "the canceled draft autosave to be rolled back immediately");
     const cancelAutosaveRestored = Boolean(restoredAutosave);
 
     await loadFixture();

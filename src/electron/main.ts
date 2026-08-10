@@ -755,11 +755,12 @@ handle("project:save", async (_event, project, rawSaveAs) => {
 });
 
 handle("project:autosave", async (_event, project) => {
-  if (!currentProjectPath) return { saved: false };
+  const target = currentProjectPath;
+  if (!target) return { saved: false };
   const validation = validateProject(project);
   if (!validation.ok) return { saved: false };
   try {
-    await writeProject(currentProjectPath, project);
+    await writeProject(target, project);
     return { saved: true };
   } catch {
     // Autosave is best-effort. Keep the renderer dirty so an explicit save or
