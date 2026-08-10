@@ -32,6 +32,18 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     return PathLinks.reconcile(normalizeProjectData(raw));
   }
 
+  function agentProposalMatchesPublishedContext(proposal, sessionId, publishedContext, currentContext) {
+    return Boolean(proposal && publishedContext
+      && proposal.baseSessionId === sessionId
+      && proposal.baseRevision === publishedContext.revision
+      && proposal.baseActivePathId === publishedContext.activePathId
+      && publishedContext.project === currentContext.project
+      && publishedContext.activePathId === currentContext.activePathId
+      && publishedContext.editRevision === currentContext.editRevision
+      && (!proposal.baseJavaCatalogFingerprint || proposal.baseJavaCatalogFingerprint === currentContext.javaCatalogFingerprint)
+      && !currentContext.hasDraft);
+  }
+
   const ACCENT = '#3f6fd0';
 
   const DEF_CONS = { maxVel: 4.2, maxAccel: 6.5, maxDecel: 6.5, maxAngVel: 540, maxAngAccel: 720, maxAngDecel: 720, maxJerk: 0, maxAngJerk: 0 };
@@ -250,9 +262,13 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const [mcpEnabled, setMcpEnabled] = useState(false);
     const [agentSessionId] = useState(() => 'session_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)));
     const agentRevision = useRef(-1);
+    const agentPublishedContext = useRef(null);
     const agentProposalRef = useRef(agentProposal); agentProposalRef.current = agentProposal;
     const agentProposalContext = useRef(null);
     const [javaProjectState, setJavaProjectState] = useState({ status: 'unlinked', operation: null, catalog: null, integration: null, error: '', notice: '', bookmarkId: null, recentProjects: [] });
+    const javaCatalogFingerprint = useRef(null);
+    if (javaProjectState.catalog && javaProjectState.catalog.semanticFingerprint) javaCatalogFingerprint.current = javaProjectState.catalog.semanticFingerprint;
+    else if (!javaProjectState.operation) javaCatalogFingerprint.current = null;
     const [exportError, setExportError] = useState('');
     const [unitSystem, setUnitSystemState] = useState(() => UnitPrefs.current());
     const setUnitSystem = useCallback((next) => setUnitSystemState(UnitPrefs.set(next)), []);
@@ -310,7 +326,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         return;
       }
       const generation = ++javaRestoreGeneration.current;
-      setJavaProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', catalog: null, integration: null, bookmarkId: null, error: '', notice: '' }));
+      setJavaProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', error: '', notice: '' }));
       try {
         const result = await window.bordeauxAPI.linkJavaProject();
         if (javaRestoreGeneration.current !== generation) return;
@@ -328,7 +344,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const openRecentJavaProject = useCallback(async (id, expectedGeneration) => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.openRecentJavaProject !== 'function') return;
       const generation = expectedGeneration == null ? ++javaRestoreGeneration.current : expectedGeneration;
-      setJavaProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', catalog: null, integration: null, bookmarkId: null, error: '', notice: '' }));
+      setJavaProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', error: '', notice: '' }));
       try {
         const result = await window.bordeauxAPI.openRecentJavaProject(id);
         if (javaRestoreGeneration.current !== generation) return;
@@ -510,18 +526,28 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }, []);
     useEffect(() => markAgentProposalStale(), [project, activeIdx, markAgentProposalStale]);
     useEffect(() => {
+      if (javaProjectState.operation) return;
+      const current = agentProposalRef.current;
+      if (current?.status === 'ready' && current.baseJavaCatalogFingerprint
+        && current.baseJavaCatalogFingerprint !== javaCatalogFingerprint.current) markAgentProposalStale();
+    }, [javaProjectState.operation, javaProjectState.catalog && javaProjectState.catalog.semanticFingerprint, markAgentProposalStale]);
+    useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.publishAgentSession !== 'function') return;
       let published = false;
       const publish = () => {
         if (published) return;
         published = true;
+        const sourceProject = projectRef.current;
+        const activePathId = docRef.current && docRef.current.id;
+        const editRevision = editStore.getRevision();
         agentRevision.current += 1;
         const revision = agentRevision.current;
+        agentPublishedContext.current = { revision, project: sourceProject, activePathId, editRevision };
         window.bordeauxAPI.publishAgentSession({
           sessionId: agentSessionId,
           revision,
           project: clone(materializeProject()),
-          activePathId: doc.id,
+          activePathId,
           allianceView: 'blue',
           fieldPack: { id: '2026-rebuilt', revision: '2026-manual-tu19-welded-4' },
         });
@@ -547,17 +573,27 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         const proposalKey = proposal.id + ':' + proposal.status;
         if (proposalKey === lastProposalKey) return;
         lastProposalKey = proposalKey;
-        const stale = proposal.baseSessionId !== agentSessionId || proposal.baseRevision !== agentRevision.current || Boolean(editStore.getSnapshot());
+        const publishedContext = agentPublishedContext.current;
+        const currentActivePathId = docRef.current && docRef.current.id;
+        const stale = !agentProposalMatchesPublishedContext(proposal, agentSessionId, publishedContext, {
+          project: projectRef.current,
+          activePathId: currentActivePathId,
+          editRevision: editStore.getRevision(),
+          javaCatalogFingerprint: javaCatalogFingerprint.current,
+          hasDraft: Boolean(editStore.getSnapshot()),
+        });
         const received = stale && proposal.status === 'ready' ? { ...proposal, status: 'stale' } : proposal;
         agentProposalContext.current = {
           id: proposal.id,
-          project: projectRef.current,
-          activePathId: docRef.current && docRef.current.id,
-          editRevision: editStore.getRevision(),
+          published: publishedContext,
         };
         agentProposalRef.current = received;
         if (stale && proposal.status === 'ready' && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(proposal.id, 'stale');
-        if (window.bordeauxAPI.acknowledgeAgentProposal) window.bordeauxAPI.acknowledgeAgentProposal(proposal.id, agentSessionId, agentRevision.current, !stale);
+        if (window.bordeauxAPI.acknowledgeAgentProposal) {
+          const receiptRevision = publishedContext ? publishedContext.revision : agentRevision.current >= 0 ? agentRevision.current : proposal.baseRevision;
+          const receiptActivePathId = publishedContext ? publishedContext.activePathId : currentActivePathId || proposal.baseActivePathId;
+          window.bordeauxAPI.acknowledgeAgentProposal(proposal.id, agentSessionId, receiptRevision, receiptActivePathId, !stale);
+        }
         setAgentProposal(received);
         setAgentCandidateId(proposal.recommendedCandidateId || null);
         setPage(proposal.operation === 'configureRobot' ? 'robot' : 'plan');
@@ -1296,10 +1332,18 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }, [agentProposal]);
     const applyAgentProposal = useCallback(() => {
       const proposalContext = agentProposalContext.current;
-      if (!agentProposal || agentProposal.status !== 'ready' || agentProposal.baseSessionId !== agentSessionId || agentProposal.baseRevision !== agentRevision.current
-        || !proposalContext || proposalContext.id !== agentProposal.id || proposalContext.project !== projectRef.current
-        || proposalContext.activePathId !== (docRef.current && docRef.current.id) || proposalContext.editRevision !== editStore.getRevision()
-        || editStore.getSnapshot() || (agentProposal.blockingIssues && agentProposal.blockingIssues.length)) return;
+      const publishedContext = agentPublishedContext.current;
+      const currentActivePathId = docRef.current && docRef.current.id;
+      const contextMatches = agentProposalMatchesPublishedContext(agentProposal, agentSessionId, publishedContext, {
+        project: projectRef.current,
+        activePathId: currentActivePathId,
+        editRevision: editStore.getRevision(),
+        javaCatalogFingerprint: javaCatalogFingerprint.current,
+        hasDraft: Boolean(editStore.getSnapshot()),
+      });
+      if (!agentProposal || agentProposal.status !== 'ready' || !contextMatches
+        || !proposalContext || proposalContext.published !== publishedContext || proposalContext.id !== agentProposal.id
+        || javaProjectState.operation || (agentProposal.blockingIssues && agentProposal.blockingIssues.length)) return;
       const before = { project: clone(project), activeIdx };
       let nextIndex = activeIdx;
       let nextProject;
@@ -1323,7 +1367,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       const applied = { ...agentProposal, status: 'applied', appliedRevision: agentRevision.current + 1 };
       agentProposalRef.current = applied;
       setAgentProposal(applied);
-    }, [agentProposal, agentCandidate, project, activeIdx, agentSessionId, editStore, updateDirty]);
+    }, [agentProposal, agentCandidate, project, activeIdx, agentSessionId, editStore, javaProjectState.operation, updateDirty]);
 
     const total = derived.prof.totalTime || 0;
     useEffect(() => playbackStore.setTotal(total), [playbackStore, total]);
@@ -1629,4 +1673,4 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }
   }
 
-export { App, AppErrorBoundary };
+export { App, AppErrorBoundary, agentProposalMatchesPublishedContext };

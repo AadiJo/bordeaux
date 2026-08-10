@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { javaTrajectoryFileName, type BuiltJavaTrajectory } from "../shared/export/javaTrajectory";
+import { javaCatalogSemanticSignature } from "../shared/agent/catalogSignature";
 import type { BordeauxProject, JavaCommandCatalog, JavaIntegrationStatus } from "../shared/types";
 import type { AgentSessionSnapshot } from "../shared/agent/types";
 import { validateProject } from "../shared/validation";
@@ -89,6 +90,7 @@ function clearLinkedJavaProject(): void {
   linkedJavaProjectBookmarkId = null;
   linkedJavaCatalog = null;
   linkedJavaIntegration = null;
+  agentSessions.refreshJavaCatalog();
 }
 
 function rejectProposalReceipts(message: string): void {
@@ -261,7 +263,11 @@ async function rememberLinkedJavaProject(projectPath: string, projectName: strin
 async function connectJavaProject(projectPath: string) {
   const generation = ++javaConnectionGeneration;
   const canonicalPath = await fs.promises.realpath(projectPath);
-  const catalog = await discoverJavaProject(canonicalPath);
+  const discoveredCatalog = await discoverJavaProject(canonicalPath);
+  const catalog: JavaCommandCatalog = {
+    ...discoveredCatalog,
+    semanticFingerprint: `sha256:${createHash("sha256").update(javaCatalogSemanticSignature(discoveredCatalog), "utf8").digest("hex")}`,
+  };
   let integration: JavaIntegrationStatus;
   let integrationWarning: string | undefined;
   try {
@@ -282,6 +288,7 @@ async function connectJavaProject(projectPath: string) {
   linkedJavaProjectBookmarkId = remembered.bookmarkId;
   linkedJavaCatalog = catalog;
   linkedJavaIntegration = integration;
+  agentSessions.refreshJavaCatalog();
   return {
     catalog,
     integration,
@@ -289,6 +296,17 @@ async function connectJavaProject(projectPath: string) {
     recentProjects: summarizeJavaProjectBookmarks(javaProjectBookmarks),
     ...((remembered.warning || integrationWarning) ? { warning: [remembered.warning, integrationWarning].filter(Boolean).join(" ") } : {}),
   };
+}
+
+async function replaceJavaProject(projectPath: string) {
+  const pending = connectJavaProject(projectPath);
+  const generation = javaConnectionGeneration;
+  try {
+    return await pending;
+  } catch (error) {
+    if (generation === javaConnectionGeneration) clearLinkedJavaProject();
+    throw error;
+  }
 }
 
 async function assertSafeJavaExportTarget(projectRoot: string, fileName: string): Promise<string> {
@@ -857,9 +875,8 @@ handle("javaProject:link", async () => {
     if (result.canceled || !result.filePaths[0]) return null;
     selectedPath = result.filePaths[0];
   }
-  clearLinkedJavaProject();
   try {
-    return await connectJavaProject(selectedPath);
+    return await replaceJavaProject(selectedPath);
   } catch (error) {
     throw readableJavaProjectError(error, "Selected Java project");
   }
@@ -868,9 +885,8 @@ handle("javaProject:openRecent", async (_event, rawId) => {
   if (typeof rawId !== "string" || rawId.length > 64) throw new Error("Recent Java project selection is invalid");
   const bookmark = javaProjectBookmarks.find((item) => item.id === rawId);
   if (!bookmark) throw new Error("Recent Java project is no longer available");
-  clearLinkedJavaProject();
   try {
-    return await connectJavaProject(bookmark.projectPath);
+    return await replaceJavaProject(bookmark.projectPath);
   } catch (error) {
     throw readableJavaProjectError(error, bookmark.projectName);
   }
@@ -945,12 +961,12 @@ ipcMain.on("agent:proposalStatus", (event, rawId, rawStatus, rawRevision) => {
   if (typeof rawId !== "string" || !["applied", "rejected", "stale"].includes(String(rawStatus))) return;
   agentSessions.updateProposalStatus(rawId, rawStatus as "applied" | "rejected" | "stale", typeof rawRevision === "number" ? rawRevision : undefined);
 });
-ipcMain.on("agent:proposalReceipt", (event, rawId, rawSessionId, rawRevision, rawAccepted) => {
+ipcMain.on("agent:proposalReceipt", (event, rawId, rawSessionId, rawRevision, rawActivePathId, rawAccepted) => {
   assertTrustedSender(event);
-  if (typeof rawId !== "string" || typeof rawSessionId !== "string" || !Number.isSafeInteger(rawRevision) || rawRevision < 0) return;
+  if (typeof rawId !== "string" || typeof rawSessionId !== "string" || !Number.isSafeInteger(rawRevision) || rawRevision < 0 || typeof rawActivePathId !== "string") return;
   const receipt = proposalReceipts.get(rawId);
   if (!receipt) return;
-  agentSessions.acknowledgeProposal(rawId, rawSessionId, rawRevision, rawAccepted !== false);
+  agentSessions.acknowledgeProposal(rawId, rawSessionId, rawRevision, rawActivePathId, rawAccepted !== false);
   proposalReceipts.delete(rawId);
   clearTimeout(receipt.timer);
   receipt.resolve();
