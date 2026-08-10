@@ -219,6 +219,39 @@ describe("agent session and private bridge", () => {
     expect((await pending as any).status).toBe("ready");
   });
 
+  it("rolls back staging when cancellation arrives during renderer acknowledgment", async () => {
+    let waitForReceipt = false;
+    let proposalReceived: (() => void) | undefined;
+    const notifications: Array<{ id: string; intent: string; status: string }> = [];
+    const service = new AgentSessionService((proposal, requireReceipt) => {
+      notifications.push({ id: proposal.id, intent: proposal.intent, status: proposal.status });
+      if (!requireReceipt || !waitForReceipt) return;
+      proposalReceived?.();
+      return new Promise<void>(() => {});
+    }, () => null);
+    service.publishSnapshot(snapshot());
+    const first: any = await service.request({ method: "plan_path", params: {
+      intent: "Existing preview", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 2, y: 1 }], maximumCandidates: 1,
+    } });
+
+    waitForReceipt = true;
+    const received = new Promise<void>((resolve) => { proposalReceived = resolve; });
+    const controller = new AbortController();
+    const pending = service.request({ method: "plan_path", params: {
+      intent: "Abandoned preview", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 3, y: 1 }], maximumCandidates: 1,
+    } }, controller.signal);
+    await received;
+    controller.abort();
+
+    await expect(pending).rejects.toThrow("Agent request was canceled");
+    expect(service.getActiveProposal()?.id).toBe(first.proposalId);
+    expect((await service.request({ method: "get_proposal", params: { proposalId: first.proposalId } }) as any).status).toBe("ready");
+    expect(notifications.slice(-2)).toEqual([
+      expect.objectContaining({ intent: "Abandoned preview", status: "stale" }),
+      expect.objectContaining({ intent: "Existing preview", status: "ready" }),
+    ]);
+  });
+
   it("keeps only the newest proposal ready for the single preview surface", async () => {
     const service = new AgentSessionService(() => {}, () => null);
     service.publishSnapshot(snapshot());

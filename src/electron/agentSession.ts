@@ -28,6 +28,27 @@ import { validateProject } from "../shared/validation";
 const MAX_PROPOSALS = 24;
 const PROPOSAL_TTL_MS = 30 * 60 * 1_000;
 
+function canceledRequestError(): Error {
+  return new Error("Agent request was canceled.");
+}
+
+function waitForAbort<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return operation;
+  if (signal.aborted) return Promise.reject(canceledRequestError());
+  return new Promise<T>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(canceledRequestError());
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(
+      (value) => { cleanup(); resolve(value); },
+      (error) => { cleanup(); reject(error); },
+    );
+  });
+}
+
 export type AgentRequest =
   | { method: "inspect_session" }
   | { method: "field_pack" }
@@ -314,23 +335,40 @@ export class AgentSessionService {
     while (this.proposals.size > MAX_PROPOSALS) this.proposals.delete(this.proposals.keys().next().value!);
   }
 
-  private async stage<T extends AgentProposal>(proposal: T): Promise<{ proposal: T; supersededProposalId?: string }> {
+  private async stage<T extends AgentProposal>(proposal: T, signal?: AbortSignal): Promise<{ proposal: T; supersededProposalId?: string }> {
+    if (signal?.aborted) throw canceledRequestError();
     if (!this.snapshot || this.snapshot.sessionId !== proposal.baseSessionId || this.snapshot.revision !== proposal.baseRevision) {
       throw new Error("The Bordeaux editor session changed while the proposal was being generated. Retry against the current session.");
     }
     let supersededProposalId: string | undefined;
+    const superseded: AgentProposal[] = [];
     for (const existing of this.proposals.values()) {
       if (existing.status !== "ready") continue;
       supersededProposalId = existing.id;
+      superseded.push(existing);
       existing.status = "stale";
       void Promise.resolve(this.sendProposal(existing, false)).catch(() => undefined);
     }
     this.proposals.set(proposal.id, proposal);
     this.expireProposals();
-    try { await this.sendProposal(proposal, true); }
-    catch (error) { this.proposals.delete(proposal.id); throw error; }
-    if (!this.snapshot || this.snapshot.sessionId !== proposal.baseSessionId || this.snapshot.revision !== proposal.baseRevision || proposal.status !== "ready") {
-      throw new Error("The Bordeaux editor session changed before it acknowledged the proposal. Retry against the current session.");
+    try {
+      await waitForAbort(Promise.resolve(this.sendProposal(proposal, true)), signal);
+      if (signal?.aborted) throw canceledRequestError();
+      if (!this.snapshot || this.snapshot.sessionId !== proposal.baseSessionId || this.snapshot.revision !== proposal.baseRevision || proposal.status !== "ready") {
+        throw new Error("The Bordeaux editor session changed before it acknowledged the proposal. Retry against the current session.");
+      }
+    } catch (error) {
+      this.proposals.delete(proposal.id);
+      const contextStillCurrent = this.snapshot?.sessionId === proposal.baseSessionId && this.snapshot.revision === proposal.baseRevision;
+      if (contextStillCurrent) {
+        proposal.status = "stale";
+        void Promise.resolve(this.sendProposal(proposal, false)).catch(() => undefined);
+        for (const existing of superseded) {
+          existing.status = "ready";
+          void Promise.resolve(this.sendProposal(existing, false)).catch(() => undefined);
+        }
+      }
+      throw error;
     }
     return { proposal, ...(supersededProposalId ? { supersededProposalId } : {}) };
   }
@@ -444,7 +482,7 @@ export class AgentSessionService {
         status: "ready",
         createdAt: new Date().toISOString(),
       };
-      const staged = await this.stage(proposal);
+      const staged = await this.stage(proposal, signal);
       return proposalSummary(staged.proposal, staged.supersededProposalId);
     }
     if (request.method === "resolve_field_terms") {
@@ -504,7 +542,7 @@ export class AgentSessionService {
         status: "ready",
         createdAt: new Date().toISOString(),
       };
-      const staged = await this.stage(proposal);
+      const staged = await this.stage(proposal, signal);
       return proposalSummary(staged.proposal, staged.supersededProposalId);
     }
     if (request.method !== "plan_path") throw new Error("Unsupported Bordeaux agent request.");
@@ -586,7 +624,7 @@ export class AgentSessionService {
       status: "ready",
       createdAt: new Date().toISOString(),
     };
-    const staged = await this.stage(proposal);
+    const staged = await this.stage(proposal, signal);
     return proposalSummary(staged.proposal, staged.supersededProposalId);
   }
 }
