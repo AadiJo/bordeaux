@@ -1,6 +1,7 @@
 import * as React from "react";
 import { FieldScene } from "../assets/field-scene";
 import fieldImage from "../assets/field.png";
+import { PointerDrag } from "../hooks/usePointerDrag";
 import { PM } from "../lib/pathMath";
 import { wheelZoomFactor } from "../lib/zoom";
 import { UI } from "./ui";
@@ -39,6 +40,7 @@ import { UI } from "./ui";
     const drag = useRef(null);
     const pendingMove = useRef(null);
     const moveFrame = useRef(0);
+    const pointerCleanup = useRef(null);
     const lastInspectPress = useRef({ key: null, at: 0 });
     const flip = alliance === 'red';
     const isTank = drive === 'tank';
@@ -231,7 +233,12 @@ import { UI } from "./ui";
       e.preventDefault();
       const t = e.target;
       const role = t.getAttribute && t.getAttribute('data-role');
-      try { svgRef.current.setPointerCapture(e.pointerId); } catch (_) {}
+      if (pointerCleanup.current) pointerCleanup.current();
+      pointerCleanup.current = PointerDrag.begin(e, {
+        move: onMove,
+        end: (event) => { pointerCleanup.current = null; onUp(event); },
+        cancel: (event) => { pointerCleanup.current = null; onInterrupted(event); },
+      });
       if (routine) {
         if (role === 'rpath') { const id = t.getAttribute('data-idx'); if (actions.selectNode) actions.selectNode(id); drag.current = null; return; }
         drag.current = { role: 'bg', start: { cx: e.clientX, cy: e.clientY }, vb0: { ...view }, moved: false, mid: e.button === 1 };
@@ -375,7 +382,6 @@ import { UI } from "./ui";
       flushMove();
       const d = drag.current; drag.current = null;
       setSnap(null);
-      try { svgRef.current.releasePointerCapture(e.pointerId); } catch (_) {}
       if (!d) return;
       if (d.historyStarted && actions.finishEdit) actions.finishEdit();
       if (d.role === 'newrange') {
@@ -426,16 +432,20 @@ import { UI } from "./ui";
       }
     };
 
-    const onCancel = (event) => {
-      if (moveFrame.current) cancelAnimationFrame(moveFrame.current);
+    // Preserve the last visible edit if the browser interrupts pointer capture.
+    const onInterrupted = () => {
+      flushMove();
       const d = drag.current;
       moveFrame.current = 0; pendingMove.current = null; drag.current = null; setSnap(null);
-      if (d && d.historyStarted && actions.cancelEdit) actions.cancelEdit();
-      try { svgRef.current.releasePointerCapture(event.pointerId); } catch (_) {}
+      if (d && d.role === 'newrange') setPreview(null);
+      if (d && d.historyStarted && actionsRef.current.finishEdit) actionsRef.current.finishEdit();
     };
     useEffect(() => {
-      window.addEventListener('blur', onCancel);
-      return () => { window.removeEventListener('blur', onCancel); if (moveFrame.current) cancelAnimationFrame(moveFrame.current); };
+      return () => {
+        if (pointerCleanup.current) pointerCleanup.current();
+        pointerCleanup.current = null;
+        if (moveFrame.current) cancelAnimationFrame(moveFrame.current);
+      };
     }, []);
 
     const onWheel = (e) => {
@@ -1001,7 +1011,7 @@ import { UI } from "./ui";
 
     return h('svg', {
       ref: svgRef, className: 'fieldsvg', viewBox: vb, preserveAspectRatio: 'xMidYMid meet',
-      onPointerDown: onDown, onPointerMove: onMove, onPointerUp: onUp, onPointerCancel: onCancel, onLostPointerCapture: onCancel, onWheel: onWheel, onDoubleClick: onDbl,
+      onPointerDown: onDown, onWheel: onWheel, onDoubleClick: onDbl,
       style: { cursor, userSelect: 'none', WebkitUserSelect: 'none', touchAction: 'none' },
       onContextMenu: onCtx, onDragStart: (e) => e.preventDefault(), draggable: false,
     },

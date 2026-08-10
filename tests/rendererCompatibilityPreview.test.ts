@@ -131,20 +131,23 @@ describe("renderer application", () => {
     expect(app).toContain("useSyncExternalStore(editStore.subscribe");
     expect(app).toContain("beginEdit, finishEdit, cancelEdit");
     expect(field).toContain("actions.finishEdit()");
-    expect(field).toContain("actions.cancelEdit()");
+    expect(field).toContain("actionsRef.current.finishEdit()");
+    expect(field).not.toContain("actions.cancelEdit()");
     expect(field).not.toContain("actions.beginHistory");
   });
 
   it("coalesces pointer motion and cleans up global drag listeners", () => {
     const field = fs.readFileSync(new URL("../src/renderer/components/FieldView.jsx", import.meta.url), "utf8");
+    expect(field).toContain("PointerDrag.begin");
+    expect(field).toContain("actionsRef.current.finishEdit()");
     expect(field).toContain("requestAnimationFrame");
     expect(field).toContain("cancelAnimationFrame");
-    expect(field).toContain("onPointerCancel: onCancel");
-    expect(field).toContain("onLostPointerCapture: onCancel");
-    expect(field).toContain("removeEventListener('blur', onCancel)");
+    expect(field).not.toContain("onPointerCancel:");
+    expect(field).not.toContain("onLostPointerCapture:");
     const pointerDrag = fs.readFileSync(new URL("../src/renderer/hooks/usePointerDrag.js", import.meta.url), "utf8");
     expect(pointerDrag).toContain("lostpointercapture");
     expect(pointerDrag).toContain("pointercancel");
+    expect(pointerDrag).toContain("next.pointerId !== pointerId");
     for (const file of ["Panels.jsx", "RobotPage.jsx", "RoutinePanel.jsx", "ui.jsx"]) {
       const source = fs.readFileSync(new URL(`../src/renderer/components/${file}`, import.meta.url), "utf8");
       expect(source).not.toContain("addEventListener('pointermove'");
