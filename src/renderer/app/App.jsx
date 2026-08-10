@@ -1375,12 +1375,13 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         if (sourceProject !== projectRef.current || editRevision !== editStore.getRevision() || dirtyRef.current) {
           invalidateScheduledAutosave();
           await window.bordeauxAPI.newProject();
+          updateDirty(true);
           return;
         }
         loadProject(result.project);
       }).catch((error) => console.warn('Could not restore the last project:', error));
       return () => { active = false; };
-    }, [editStore, enqueuePersistence, invalidateScheduledAutosave, loadProject]);
+    }, [editStore, enqueuePersistence, invalidateScheduledAutosave, loadProject, updateDirty]);
     const prepareProjectReplacement = useCallback(() => {
       invalidateScheduledAutosave();
       cancelEdit();

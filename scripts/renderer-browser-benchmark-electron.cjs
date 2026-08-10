@@ -360,6 +360,27 @@ app.whenReady().then(async () => {
   );
 
   async function correctnessChecks() {
+    await window.loadFile(rendererHtml);
+    await waitFor(
+      () => window.webContents.executeJavaScript('document.querySelectorAll(\'[data-role="wp"]\').length > 0'),
+      3000,
+      "the initial unsaved project",
+    );
+    await window.webContents.executeJavaScript(`(${installProbe.toString()})(0)`);
+    const restoreOrigin = await center();
+    const restoreTarget = { x: restoreOrigin.x + 32, y: restoreOrigin.y - 14 };
+    await pressMouse(restoreOrigin);
+    const restoreTargetLocal = await localAt(restoreTarget);
+    moveMouse(restoreTarget);
+    await waitForCorrect(restoreTarget, restoreTargetLocal);
+    const restoreConflictState = await waitFor(async () => {
+      const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
+      return state.projectOperations.some((entry) => entry === "restore:finish:original")
+        && state.currentFile === null ? state : null;
+    }, 4000, "the delayed restore conflict to detach its file");
+    const restoreConflictStaysDirty = restoreConflictState.dirtyValues.at(-1) === true;
+    releaseMouse(restoreTarget);
+
     await loadFixture();
     const workerFixture = JSON.parse(Buffer.from(process.env.BORDEAUX_BENCHMARK_PROJECT, "base64").toString("utf8"));
     const workerJob = {
@@ -537,11 +558,13 @@ app.whenReady().then(async () => {
     moveMouse(openDragTarget);
     await waitForCorrect(openDragTarget, openDragTargetLocal);
     await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkCommand('open-project')");
-    const openDuringDragState = await waitFor(async () => {
+    await waitFor(async () => {
       const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
       return state.projectOperations.some((entry) => entry === "open:finish:opened") ? state : null;
     }, 3000, "the project opened during a drag");
     releaseMouse(openDragTarget);
+    await delay(200);
+    const openDuringDragState = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
     const openDuringDragKeepsFile = !openDuringDragState.projectWrites.some((write) =>
       write.kind === "autosave" && write.target === "opened" && write.projectName === originalProject.name);
 
@@ -559,7 +582,7 @@ app.whenReady().then(async () => {
       const finished = state.projectOperations.filter((entry) => entry.startsWith("save:finish:") || entry.startsWith("open:finish:"));
       return finished.length >= 2 ? state : null;
     }, 4000, "the save and project-open sequence");
-    const saveOpenKeepsFile = overlappingSaveOpenState.currentFile === "opened"
+    const saveOpenKeepsFile = overlappingSaveOpenState.currentFile === "reopened"
       && overlappingSaveOpenState.maxConcurrentProjectOperations === 1;
 
     const saveSnapshot = async (description) => {
@@ -640,7 +663,7 @@ app.whenReady().then(async () => {
       && Math.hypot(sourceEnd.x - targetStart.x, sourceEnd.y - targetStart.y) <= 1e-6
       && Math.hypot(sourceEnd.x - expectedSourceEnd.x, sourceEnd.y - expectedSourceEnd.y) <= 1e-6;
 
-    return { realWorkerRoundTrip, releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, commandSurvivesDrag, commandUndoRestores, cancelPreservesRedo, pathSwitchCancelsDrag, openDuringDragKeepsFile, saveOpenKeepsFile, renameSurvivesDrag, moveSurvivesDrag, linkSurvivesDrag };
+    return { realWorkerRoundTrip, restoreConflictStaysDirty, releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, commandSurvivesDrag, commandUndoRestores, cancelPreservesRedo, pathSwitchCancelsDrag, openDuringDragKeepsFile, saveOpenKeepsFile, renameSurvivesDrag, moveSurvivesDrag, linkSurvivesDrag };
   }
 
   async function measureLatency() {

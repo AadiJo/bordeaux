@@ -4,18 +4,21 @@ const fixture = JSON.parse(Buffer.from(process.env.BORDEAUX_BENCHMARK_PROJECT, "
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const openedFixture = clone(fixture);
 openedFixture.name = "Opened renderer browser benchmark";
+const reopenedFixture = clone(fixture);
+reopenedFixture.name = "Reopened renderer browser benchmark";
 const state = {
   savedProjects: [],
   autosavedProjects: [],
   dirtyValues: [],
   publishedProjects: [],
   currentFile: "original",
-  files: { original: clone(fixture), opened: clone(openedFixture) },
+  files: { original: clone(fixture), opened: clone(openedFixture), reopened: clone(reopenedFixture) },
   projectWrites: [],
   projectOperations: [],
   activeProjectOperations: 0,
   maxConcurrentProjectOperations: 0,
   saveDelayMs: 0,
+  restoreDelayMs: Number.parseInt(process.env.BORDEAUX_BENCHMARK_RESTORE_DELAY_MS || "0", 10),
 };
 let menuListener = null;
 const unsubscribe = () => undefined;
@@ -32,13 +35,18 @@ const projectOperation = async (kind, operation) => {
   }
 };
 const openProject = () => projectOperation("open", async () => {
-  state.currentFile = "opened";
-  return { project: clone(openedFixture) };
+  const reopening = state.currentFile === "opened";
+  state.currentFile = reopening ? "reopened" : "opened";
+  return { project: clone(reopening ? reopenedFixture : openedFixture) };
 });
 
 contextBridge.exposeInMainWorld("bordeauxAPI", {
   platform: "linux",
-  restoreLastProject: async () => ({ project: clone(fixture) }),
+  restoreLastProject: () => projectOperation("restore", async () => {
+    if (state.restoreDelayMs) await delay(state.restoreDelayMs);
+    state.currentFile = "original";
+    return { project: clone(fixture) };
+  }),
   openProject,
   openRecentProject: openProject,
   newProject: async () => { state.currentFile = null; return { project: clone(fixture) }; },

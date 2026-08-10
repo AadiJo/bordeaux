@@ -131,6 +131,7 @@ function runVariant(label, variant, checkCorrectness, runCorrectnessOnly = false
         BORDEAUX_BENCHMARK_PROJECT: encodedFixture,
         BORDEAUX_BENCHMARK_RENDERER_HTML: variant.html,
         BORDEAUX_BENCHMARK_WORKER_ASSET: variant.workerAsset ? `./assets/${variant.workerAsset}` : "",
+        BORDEAUX_BENCHMARK_RESTORE_DELAY_MS: "750",
         BORDEAUX_BROWSER_LATENCY_SAMPLES: latencySamples,
         BORDEAUX_BROWSER_STRESS_MS: stressMs,
         BORDEAUX_BROWSER_CHECK_CORRECTNESS: checkCorrectness ? "1" : "0",
