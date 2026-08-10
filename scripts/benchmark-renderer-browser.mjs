@@ -218,7 +218,7 @@ try {
       fixture: "100-waypoint profiled spline plus a 3-waypoint path-switch fixture",
       viewport: "1440x900 offscreen Electron compositor at 60 Hz",
       input: `mouse input at 120 Hz; ${latencySamples} isolated latency samples; ${stressMs} ms stress; ${trials} alternating trials`,
-      correctPaint: "input dispatch to the first compositor paint after both the waypoint and SVG centerline match that input",
+      correctPaint: "input dispatch to the first compositor paint after the waypoint matches in screen and pre-drag SVG coordinates and the centerline contains it",
       droppedFrames: "missed 16.67 ms requestAnimationFrame slots during continuous input",
       worker: "production Vite bundle with its emitted Web Worker; no worker replacement or mock",
     },

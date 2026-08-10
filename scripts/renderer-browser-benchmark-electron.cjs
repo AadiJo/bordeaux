@@ -74,6 +74,16 @@ function installProbe(waypointIndex) {
     trace: null,
   };
   const waypoint = () => document.querySelector(`[data-role="wp"][data-idx="${waypointIndex}"]`);
+  const benchmarkSvg = waypoint()?.ownerSVGElement;
+  const benchmarkInverse = benchmarkSvg?.getScreenCTM()?.inverse();
+  const localAt = (x, y) => {
+    if (!benchmarkSvg || !benchmarkInverse) return null;
+    const point = benchmarkSvg.createSVGPoint();
+    point.x = x;
+    point.y = y;
+    const local = point.matrixTransform(benchmarkInverse);
+    return { x: local.x, y: local.y };
+  };
   const read = () => {
     const node = waypoint();
     const svg = node?.ownerSVGElement;
@@ -87,24 +97,26 @@ function installProbe(waypointIndex) {
       candidate.getAttribute("stroke") === "#05060a" && candidate.getAttribute("stroke-opacity") === "0.75");
     const curveCorrect = centerlines.some((candidate) =>
       typeof candidate.isPointInStroke === "function" && candidate.isPointInStroke(point));
-    return { ...screen, curveCorrect };
+    return { ...screen, localX: point.x, localY: point.y, curveCorrect };
   };
   window.addEventListener("pointermove", (event) => {
-    state.pending = { x: event.clientX, y: event.clientY, inputAtEpochMs: epoch() };
+    const local = localAt(event.clientX, event.clientY);
+    state.pending = { x: event.clientX, y: event.clientY, localX: local?.x, localY: local?.y, inputAtEpochMs: epoch() };
   }, true);
   const tick = (timestamp) => {
     const current = read();
     if (state.active) {
       state.frames.push(timestamp);
       if (current?.curveCorrect && (!state.lastGeometry
-        || Math.hypot(current.x - state.lastGeometry.x, current.y - state.lastGeometry.y) > 0.35)) {
+        || Math.hypot(current.localX - state.lastGeometry.localX, current.localY - state.lastGeometry.localY) > 0.75)) {
         state.geometry.push(epoch());
         state.lastGeometry = current;
       }
     }
     if (state.trace && current) state.trace.push({ atEpochMs: epoch(), x: current.x, y: current.y, curveCorrect: current.curveCorrect });
     if (state.pending && current?.curveCorrect
-      && Math.hypot(current.x - state.pending.x, current.y - state.pending.y) <= 2.5) {
+      && Math.hypot(current.x - state.pending.x, current.y - state.pending.y) <= 2.5
+      && Math.hypot(current.localX - state.pending.localX, current.localY - state.pending.localY) <= 7) {
       state.lastCorrect = { ...state.pending, correctAtEpochMs: epoch() };
       state.pending = null;
     }
@@ -113,6 +125,7 @@ function installProbe(waypointIndex) {
   requestAnimationFrame(tick);
   window.__rendererBenchmark = {
     read,
+    localAt,
     lastCorrect: () => state.lastCorrect,
     start() {
       const current = read();
@@ -202,19 +215,23 @@ app.whenReady().then(async () => {
   const center = async () => {
     const point = await readProbe();
     if (!point) throw new Error("Benchmark waypoint 50 is missing");
-    return { x: Math.round(point.x), y: Math.round(point.y) };
+    return { x: Math.round(point.x), y: Math.round(point.y), localX: point.localX, localY: point.localY };
   };
   const moveMouse = (point) => window.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(point.x), y: Math.round(point.y), button: "left" });
-  const pressMouse = (point) => {
+  const pressMouse = async (point) => {
     moveMouse(point);
+    await delay(16);
     window.webContents.sendInputEvent({ type: "mouseDown", x: point.x, y: point.y, button: "left", clickCount: 1 });
   };
   const releaseMouse = (point) => window.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(point.x), y: Math.round(point.y), button: "left", clickCount: 1 });
-  const matchesTarget = (current, target) => current?.curveCorrect && Math.hypot(current.x - target.x, current.y - target.y) <= 2.5;
-  const waitForCorrect = (target, timeoutMs = 5000) => waitFor(
+  const localAt = (target) => window.webContents.executeJavaScript(`window.__rendererBenchmark.localAt(${target.x}, ${target.y})`);
+  const matchesTarget = (current, target, expectedLocal) => current?.curveCorrect
+    && Math.hypot(current.x - target.x, current.y - target.y) <= 2.5
+    && (!expectedLocal || Math.hypot(current.localX - expectedLocal.x, current.localY - expectedLocal.y) <= 7);
+  const waitForCorrect = (target, expectedLocal, timeoutMs = 5000) => waitFor(
     async () => {
       const current = await readProbe();
-      return matchesTarget(current, target) ? current : null;
+      return matchesTarget(current, target, expectedLocal) ? current : null;
     },
     timeoutMs,
     `correct curve geometry at ${target.x},${target.y}`,
@@ -225,12 +242,14 @@ app.whenReady().then(async () => {
     const origin = await center();
     const lastMove = { x: origin.x + 42, y: origin.y - 16 };
     const release = { x: lastMove.x + 28, y: lastMove.y + 10 };
-    pressMouse(origin);
+    await pressMouse(origin);
+    const lastMoveLocal = await localAt(lastMove);
+    const releaseLocal = await localAt(release);
     moveMouse(lastMove);
-    await waitForCorrect(lastMove);
+    await waitForCorrect(lastMove, lastMoveLocal);
     await window.webContents.executeJavaScript("window.__rendererBenchmark.startTrace()");
     releaseMouse(release);
-    await waitForCorrect(release);
+    await waitForCorrect(release, releaseLocal);
     await delay(100);
     const releaseFinal = await readProbe();
     const trace = await window.webContents.executeJavaScript("window.__rendererBenchmark.stopTrace()");
@@ -240,9 +259,10 @@ app.whenReady().then(async () => {
     await loadFixture();
     const saveOrigin = await center();
     const saveTarget = { x: saveOrigin.x + 55, y: saveOrigin.y + 18 };
-    pressMouse(saveOrigin);
+    await pressMouse(saveOrigin);
+    const saveTargetLocal = await localAt(saveTarget);
     moveMouse(saveTarget);
-    await waitForCorrect(saveTarget);
+    await waitForCorrect(saveTarget, saveTargetLocal);
     await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkCommand('save-project')");
     const savedState = await waitFor(async () => {
       const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
@@ -257,22 +277,25 @@ app.whenReady().then(async () => {
     await loadFixture();
     const undoOrigin = await center();
     const undoTarget = { x: undoOrigin.x - 48, y: undoOrigin.y + 22 };
-    pressMouse(undoOrigin);
+    await pressMouse(undoOrigin);
+    const undoTargetLocal = await localAt(undoTarget);
     moveMouse(undoTarget);
-    await waitForCorrect(undoTarget);
+    await waitForCorrect(undoTarget, undoTargetLocal);
     window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Z", modifiers: ["control"] });
     window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Z", modifiers: ["control"] });
-    await waitForCorrect(undoOrigin);
+    await waitForCorrect(undoOrigin, { x: undoOrigin.localX, y: undoOrigin.localY });
     releaseMouse(undoTarget);
     await delay(150);
     const afterUndoRelease = await readProbe();
-    const undoCancelsDrag = matchesTarget(afterUndoRelease, undoOrigin);
+    const undoCancelsDrag = matchesTarget(afterUndoRelease, undoOrigin, { x: undoOrigin.localX, y: undoOrigin.localY });
 
     await loadFixture();
     const switchOrigin = await center();
-    pressMouse(switchOrigin);
-    moveMouse({ x: switchOrigin.x + 35, y: switchOrigin.y + 15 });
-    await waitForCorrect({ x: switchOrigin.x + 35, y: switchOrigin.y + 15 });
+    const switchTarget = { x: switchOrigin.x + 35, y: switchOrigin.y + 15 };
+    await pressMouse(switchOrigin);
+    const switchTargetLocal = await localAt(switchTarget);
+    moveMouse(switchTarget);
+    await waitForCorrect(switchTarget, switchTargetLocal);
     await window.webContents.executeJavaScript("document.querySelector('button.pathsw-btn')?.click()");
     const switched = await waitFor(async () => window.webContents.executeJavaScript(`(() => {
       const button = [...document.querySelectorAll('button.pathlib-pick')]
@@ -290,13 +313,13 @@ app.whenReady().then(async () => {
     await delay(150);
     const pathSwitchCancelsDrag = switched && await window.webContents.executeJavaScript('document.querySelectorAll(\'[data-role="wp"]\').length === 3');
 
-    return { releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, pathSwitchCancelsDrag };
+    return { releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, pathSwitchCancelsDrag };
   }
 
   async function measureLatency() {
     await loadFixture();
     const origin = await center();
-    pressMouse(origin);
+    await pressMouse(origin);
     await waitForPaintQuiet(80);
     const correctPaintSamples = [];
     const anyPaintSamples = [];
@@ -324,7 +347,7 @@ app.whenReady().then(async () => {
   async function measureStress() {
     await loadFixture();
     const origin = await center();
-    pressMouse(origin);
+    await pressMouse(origin);
     await waitForPaintQuiet(80);
     await window.webContents.executeJavaScript("window.__rendererBenchmark.start()");
     const firstPaint = paintTimestamps.length;
@@ -332,6 +355,9 @@ app.whenReady().then(async () => {
     const inputIntervalMs = 1000 / inputHz;
     const inputCount = Math.floor(stressDurationMs / inputIntervalMs);
     let target = origin;
+    const finalAngle = (inputCount - 1) / 11;
+    const finalTarget = { x: origin.x + Math.cos(finalAngle) * 54, y: origin.y + Math.sin(finalAngle) * 32 };
+    const finalTargetLocal = await localAt(finalTarget);
     for (let index = 0; index < inputCount; index++) {
       const remaining = startedAt + index * inputIntervalMs - epochNow();
       if (remaining > 0.5) await delay(remaining);
@@ -340,7 +366,7 @@ app.whenReady().then(async () => {
       moveMouse(target);
     }
     const endedAt = epochNow();
-    await waitForCorrect(target);
+    await waitForCorrect(target, finalTargetLocal);
     releaseMouse(target);
     const probe = await window.webContents.executeJavaScript("window.__rendererBenchmark.stop()");
     const frameDeltas = probe.frames.slice(1).map((timestamp, index) => timestamp - probe.frames[index]);
@@ -358,6 +384,8 @@ app.whenReady().then(async () => {
       correctCurveUpdates: geometry.length,
       correctCurveRateHz: geometry.length / actualDurationMs * 1000,
       maxCorrectCurveGapMs: Math.max(...geometryGaps),
+      timingBoundsEpochMs: { startedAt, endedAt },
+      rawGeometryEpochMs: probe.geometry,
       ...frameSummary(frameDeltas),
     };
   }

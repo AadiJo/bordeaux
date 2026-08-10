@@ -12,6 +12,8 @@ path-switch cancellation, and matching waypoint/curve geometry before timing.
 
 Latency is measured from Electron input dispatch to the first compositor paint
 where both the dragged waypoint and the SVG centerline match that input. The
+probe checks both screen position and SVG-local coordinates against the
+pre-drag transform, so viewport movement cannot masquerade as a path edit. The
 stress phase sends pointer input at 120 Hz and reports frame-time, estimated
 dropped frames, correct-curve update rate, and the longest correct-curve gap.
 
