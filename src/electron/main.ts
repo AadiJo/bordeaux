@@ -27,7 +27,7 @@ import {
   runJavaCatalogBuild,
 } from "./javaSupport";
 import { AgentBridgeClient, AgentBridgeServer } from "./agentBridge";
-import { AppUpdateController, usesGitHubAppUpdates } from "./appUpdates";
+import { appUpdateChannel, AppUpdateController, usesGitHubAppUpdates } from "./appUpdates";
 import { AgentSessionService } from "./agentSession";
 import { runAgentPlanningInWorker } from "./agentPlanningWorkerClient";
 import { serveBordeauxMcp } from "../mcp/server";
@@ -46,6 +46,7 @@ let dirty = false;
 let allowClose = false;
 let appUpdates: AppUpdateController | null = null;
 let updateCheckTimer: NodeJS.Timeout | null = null;
+let backgroundShutdownPromise: Promise<void> | null = null;
 
 function buildJavaTrajectoryOffThread(project: BordeauxProject, catalog: JavaCommandCatalog): Promise<BuiltJavaTrajectory> {
   return new Promise((resolve, reject) => {
@@ -126,8 +127,24 @@ function showUpdateMessage(options: Electron.MessageBoxOptions): Promise<Electro
   return window && !window.isDestroyed() ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
 }
 
+function stopBackgroundServices(): Promise<void> {
+  cancelJavaCatalogBuild(true);
+  rejectProposalReceipts("Bordeaux is shutting down.");
+  if (backgroundShutdownPromise) return backgroundShutdownPromise;
+  const bridge = agentBridge;
+  agentBridge = null;
+  if (!bridge) return Promise.resolve();
+  backgroundShutdownPromise = bridge.stop();
+  return backgroundShutdownPromise;
+}
+
 function createAppUpdateController(): AppUpdateController {
-  const supported = usesGitHubAppUpdates(process.platform, process.windowsStore);
+  const supported = usesGitHubAppUpdates(
+    process.platform,
+    process.windowsStore,
+    process.env.PORTABLE_EXECUTABLE_FILE !== undefined,
+    process.env.APPIMAGE !== undefined,
+  );
   if (supported) nativeAutoUpdater.on("before-quit-for-update", () => { allowClose = true; });
   const packaged = app.isPackaged;
   return new AppUpdateController(packaged && supported ? updateClient : null, {
@@ -135,7 +152,7 @@ function createAppUpdateController(): AppUpdateController {
       type: "info",
       title: "Bordeaux updates",
       message: "Update checks are available in installed builds.",
-      detail: `This development build is Bordeaux ${currentVersion}. Package and install a release before testing over-the-air updates.`,
+      detail: `Bordeaux ${currentVersion} can update automatically from a macOS install, Windows setup install, or Linux AppImage. Store and portable builds use their distribution channel.`,
       buttons: ["OK"],
     }).then(() => undefined),
     downloading: (version) => showUpdateMessage({
@@ -149,13 +166,13 @@ function createAppUpdateController(): AppUpdateController {
       type: "info",
       title: "Bordeaux updates",
       message: "Bordeaux is up to date.",
-      detail: `You are running Bordeaux ${currentVersion} on the beta channel.`,
+      detail: `You are running Bordeaux ${currentVersion} on the ${appUpdateChannel(currentVersion) === "beta" ? "beta" : "production"} channel.`,
       buttons: ["OK"],
     }).then(() => undefined),
     failed: (message) => showUpdateMessage({
       type: "error",
       title: "Bordeaux update failed",
-      message: "Bordeaux could not check for updates.",
+      message: "Bordeaux could not complete the update.",
       detail: message,
       buttons: ["OK"],
     }).then(() => undefined),
@@ -164,7 +181,7 @@ function createAppUpdateController(): AppUpdateController {
         type: "info",
         title: "Bordeaux update ready",
         message: `Bordeaux ${version} has been downloaded.`,
-        detail: "Save or discard the current project first. The update will install after Bordeaux exits cleanly.",
+        detail: "Save or discard the current project, then choose Check for Updates again to install it.",
         buttons: ["Later"],
       } : {
         type: "info",
@@ -183,6 +200,11 @@ function createAppUpdateController(): AppUpdateController {
     supported,
     currentVersion: app.getVersion(),
     isProjectDirty: () => dirty,
+    prepareToInstall: async () => {
+      await stopBackgroundServices();
+      if (dirty) throw new Error("The project changed while Bordeaux was preparing the update. Save or discard it, then try again.");
+      allowClose = true;
+    },
     warn: (message, error) => console.warn(message, error),
   });
 }
@@ -953,8 +975,7 @@ app.whenReady().then(async () => {
 app.on("before-quit", () => {
   if (updateCheckTimer) clearTimeout(updateCheckTimer);
   updateCheckTimer = null;
-  cancelJavaCatalogBuild(true);
-  if (agentBridge?.enabled) void agentBridge.stop();
+  void stopBackgroundServices().catch((error) => console.warn("Could not stop Bordeaux background services cleanly:", error));
 });
 app.on("web-contents-created", (_event, contents) => contents.on("will-attach-webview", (event) => event.preventDefault()));
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });

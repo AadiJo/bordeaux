@@ -96,7 +96,14 @@ for (const archive of archives) {
   }
   if (!fs.existsSync(updateConfigPath)) throw new Error(`${archive} is missing packaged resource: app-update.yml`);
   const updateConfig = fs.readFileSync(updateConfigPath, "utf8");
-  for (const [field, value] of Object.entries({ provider: "github", owner: "Zw96042", repo: "bordeaux", channel: "beta", releaseType: "prerelease" })) {
+  const prerelease = packagedManifest.version.includes("-");
+  for (const [field, value] of Object.entries({
+    provider: "github",
+    owner: "Zw96042",
+    repo: "bordeaux",
+    channel: prerelease ? "beta" : "latest",
+    releaseType: prerelease ? "prerelease" : "release",
+  })) {
     if (!new RegExp(`^${field}:\\s*${value}\\s*$`, "m").test(updateConfig)) {
       throw new Error(`${archive} app-update.yml has unexpected ${field}`);
     }
