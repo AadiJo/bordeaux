@@ -38,6 +38,10 @@ export function supportsAppUpdates(platform: NodeJS.Platform): boolean {
   return platform === "darwin" || platform === "win32" || platform === "linux";
 }
 
+export function usesGitHubAppUpdates(platform: NodeJS.Platform, windowsStore: boolean): boolean {
+  return supportsAppUpdates(platform) && !(platform === "win32" && windowsStore);
+}
+
 export class AppUpdateController {
   private started = false;
   private interactiveCheck = false;

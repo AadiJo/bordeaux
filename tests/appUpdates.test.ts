@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import { AppUpdateController, supportsAppUpdates, type UpdatePresenter, type UpdateRuntime } from "../src/electron/appUpdates";
+import { AppUpdateController, supportsAppUpdates, usesGitHubAppUpdates, type UpdatePresenter, type UpdateRuntime } from "../src/electron/appUpdates";
 
 class FakeUpdater extends EventEmitter {
   autoDownload = false;
@@ -48,6 +48,12 @@ describe("application updates", () => {
   it("supports every Electron desktop platform", () => {
     expect(["darwin", "win32", "linux"].every((platform) => supportsAppUpdates(platform as NodeJS.Platform))).toBe(true);
     expect(supportsAppUpdates("aix")).toBe(false);
+  });
+
+  it("leaves Store-installed Windows updates to Microsoft", () => {
+    expect(usesGitHubAppUpdates("win32", true)).toBe(false);
+    expect(usesGitHubAppUpdates("win32", false)).toBe(true);
+    expect(usesGitHubAppUpdates("darwin", false)).toBe(true);
   });
 
   it("configures packaged desktop builds for the GitHub beta channel", () => {

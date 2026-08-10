@@ -27,7 +27,7 @@ import {
   runJavaCatalogBuild,
 } from "./javaSupport";
 import { AgentBridgeClient, AgentBridgeServer } from "./agentBridge";
-import { AppUpdateController, supportsAppUpdates } from "./appUpdates";
+import { AppUpdateController, usesGitHubAppUpdates } from "./appUpdates";
 import { AgentSessionService } from "./agentSession";
 import { runAgentPlanningInWorker } from "./agentPlanningWorkerClient";
 import { serveBordeauxMcp } from "../mcp/server";
@@ -127,8 +127,8 @@ function showUpdateMessage(options: Electron.MessageBoxOptions): Promise<Electro
 }
 
 function createAppUpdateController(): AppUpdateController {
-  nativeAutoUpdater.on("before-quit-for-update", () => { allowClose = true; });
-  const supported = supportsAppUpdates(process.platform);
+  const supported = usesGitHubAppUpdates(process.platform, process.windowsStore);
+  if (supported) nativeAutoUpdater.on("before-quit-for-update", () => { allowClose = true; });
   const packaged = app.isPackaged;
   return new AppUpdateController(packaged && supported ? updateClient : null, {
     unavailable: (currentVersion) => showUpdateMessage({
@@ -587,6 +587,12 @@ function sendMcpStatus(): void {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("agent:mcpStatus", { enabled: agentBridge?.enabled === true });
 }
 
+function updateMenuItem(): Electron.MenuItemConstructorOptions {
+  return process.windowsStore
+    ? { label: "Updates are managed by Microsoft Store", enabled: false }
+    : { label: "Check for Updates…", click: () => { void appUpdates?.check(true); } };
+}
+
 function buildMenu() {
   const recentSubmenu = recentFiles.length > 0
     ? recentFiles.map((filePath, index) => ({ label: path.basename(filePath), sublabel: filePath, click: () => sendCommand("open-recent", index) }))
@@ -595,7 +601,7 @@ function buildMenu() {
   const template: Electron.MenuItemConstructorOptions[] = [
     ...(process.platform === "darwin" ? [{ label: app.name, submenu: [
       { role: "about" },
-      { label: "Check for Updates…", click: () => { void appUpdates?.check(true); } },
+      updateMenuItem(),
       { type: "separator" },
       { role: "quit" },
     ] } as Electron.MenuItemConstructorOptions] : []),
@@ -662,7 +668,7 @@ function buildMenu() {
     },
     { label: "View", submenu: [{ role: "reload" }, { role: "forceReload" }, { role: "toggleDevTools" }, { type: "separator" }, { role: "resetZoom" }, { role: "zoomIn" }, { role: "zoomOut" }, { type: "separator" }, { role: "togglefullscreen" }] },
     ...(process.platform === "darwin" ? [] : [{ label: "Help", submenu: [
-      { label: "Check for Updates…", click: () => { void appUpdates?.check(true); } },
+      updateMenuItem(),
       { type: "separator" },
       { label: `Bordeaux ${app.getVersion()}`, enabled: false },
     ] } as Electron.MenuItemConstructorOptions]),
