@@ -21,7 +21,12 @@ const commandArguments = process.platform === "win32"
   ? ["/d", "/s", "/c", `"${wrapper}" ${gradleArguments.join(" ")}`]
   : gradleArguments;
 
-const child = spawn(command, commandArguments, { cwd: javaRoot, stdio: "inherit", windowsHide: true });
+const child = spawn(command, commandArguments, {
+  cwd: javaRoot,
+  stdio: "inherit",
+  windowsHide: true,
+  windowsVerbatimArguments: process.platform === "win32",
+});
 child.once("error", (error) => {
   console.error(`Could not start the Bordeaux Java build: ${error.message}`);
   process.exitCode = 1;
