@@ -34,6 +34,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+export function supportsAppUpdates(platform: NodeJS.Platform): boolean {
+  return platform === "darwin" || platform === "win32" || platform === "linux";
+}
+
 export class AppUpdateController {
   private started = false;
   private interactiveCheck = false;

@@ -25,7 +25,8 @@
     "package:dir": "npm run build && electron-builder --dir",
     "package:mac": "npm run build && electron-builder --mac --arm64 --x64",
     "package:mac:ci": "npm run build && electron-builder --mac --arm64 --x64 --config.mac.icon=build/icon.icns",
-    "package:win": "npm run build && electron-builder --win --x64"
+    "package:win": "npm run build && electron-builder --win --x64",
+    "package:linux": "npm run build && electron-builder --linux --x64 --arm64"
   },
   "devDependencies": {
     "@electron/asar": "3.4.1",
@@ -134,6 +135,20 @@
     },
     "portable": {
       "artifactName": "${productName}-${version}-windows-${arch}-portable.${ext}"
+    },
+    "linux": {
+      "category": "Development",
+      "icon": "build/icon.png",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-linux-${arch}.${ext}"
     }
   },
   "dependencies": {

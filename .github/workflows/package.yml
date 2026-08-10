@@ -21,6 +21,9 @@ jobs:
           - os: windows-latest
             command: package:win
             artifact: bordeaux-windows
+          - os: ubuntu-latest
+            command: package:linux
+            artifact: bordeaux-linux
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -48,5 +51,7 @@ jobs:
             release/*.dmg
             release/*.zip
             release/*.exe
+            release/*.AppImage
             release/*.blockmap
             release/latest*.yml
+            release/beta*.yml

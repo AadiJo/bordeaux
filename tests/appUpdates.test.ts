@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import { AppUpdateController, type UpdatePresenter, type UpdateRuntime } from "../src/electron/appUpdates";
+import { AppUpdateController, supportsAppUpdates, type UpdatePresenter, type UpdateRuntime } from "../src/electron/appUpdates";
 
 class FakeUpdater extends EventEmitter {
   autoDownload = false;
@@ -45,6 +45,11 @@ function fixture(overrides: Partial<UpdateRuntime> = {}) {
 }
 
 describe("application updates", () => {
+  it("supports every Electron desktop platform", () => {
+    expect(["darwin", "win32", "linux"].every((platform) => supportsAppUpdates(platform as NodeJS.Platform))).toBe(true);
+    expect(supportsAppUpdates("aix")).toBe(false);
+  });
+
   it("configures packaged desktop builds for the GitHub beta channel", () => {
     const { controller, updater } = fixture();
     controller.start();

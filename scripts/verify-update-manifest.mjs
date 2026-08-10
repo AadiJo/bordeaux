@@ -5,10 +5,18 @@ import yaml from "js-yaml";
 
 const platform = process.argv[2];
 const outputDirectory = path.resolve(process.argv[3] ?? "release");
-const manifestName = platform === "mac" ? "beta-mac.yml" : platform === "windows" ? "beta.yml" : null;
-const expectedExtension = platform === "mac" ? ".zip" : platform === "windows" ? ".exe" : null;
+const manifestName = platform === "mac"
+  ? "beta-mac.yml"
+  : platform === "windows"
+    ? "beta.yml"
+    : platform === "linux"
+      ? "beta-linux.yml"
+      : platform === "linux-arm64"
+        ? "beta-linux-arm64.yml"
+        : null;
+const expectedExtension = platform === "mac" ? ".zip" : platform === "windows" ? ".exe" : platform?.startsWith("linux") ? ".AppImage" : null;
 
-if (!manifestName || !expectedExtension) throw new Error("Update manifest platform must be mac or windows");
+if (!manifestName || !expectedExtension) throw new Error("Update manifest platform must be mac, windows, linux, or linux-arm64");
 
 const packageManifest = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const manifestPath = path.join(outputDirectory, manifestName);
@@ -43,7 +51,7 @@ for (const entry of updateManifest.files) {
   }
   const digest = createHash("sha512").update(fs.readFileSync(artifact)).digest("base64");
   if (digest !== entry.sha512) throw new Error(`${manifestName} has an invalid SHA-512 digest for ${url}`);
-  hasInstallable ||= url.toLowerCase().endsWith(expectedExtension);
+  hasInstallable ||= url.toLowerCase().endsWith(expectedExtension.toLowerCase());
 }
 
 if (!hasInstallable) throw new Error(`${manifestName} does not reference a ${platform} ${expectedExtension} update`);

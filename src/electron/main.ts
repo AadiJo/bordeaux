@@ -27,7 +27,7 @@ import {
   runJavaCatalogBuild,
 } from "./javaSupport";
 import { AgentBridgeClient, AgentBridgeServer } from "./agentBridge";
-import { AppUpdateController } from "./appUpdates";
+import { AppUpdateController, supportsAppUpdates } from "./appUpdates";
 import { AgentSessionService } from "./agentSession";
 import { runAgentPlanningInWorker } from "./agentPlanningWorkerClient";
 import { serveBordeauxMcp } from "../mcp/server";
@@ -128,7 +128,7 @@ function showUpdateMessage(options: Electron.MessageBoxOptions): Promise<Electro
 
 function createAppUpdateController(): AppUpdateController {
   nativeAutoUpdater.on("before-quit-for-update", () => { allowClose = true; });
-  const supported = process.platform === "darwin" || process.platform === "win32";
+  const supported = supportsAppUpdates(process.platform);
   const packaged = app.isPackaged;
   return new AppUpdateController(packaged && supported ? updateClient : null, {
     unavailable: (currentVersion) => showUpdateMessage({

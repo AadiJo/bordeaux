@@ -79,6 +79,9 @@ jobs:
           - platform: windows
             os: windows-latest
             artifact: bordeaux-beta-windows
+          - platform: linux
+            os: ubuntu-latest
+            artifact: bordeaux-beta-linux
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -127,9 +130,18 @@ jobs:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
         run: npm run package:win -- --config.forceCodeSigning=true
+      - name: Build Linux AppImages
+        if: matrix.platform == 'linux'
+        run: npm run package:linux
       - run: npm run verify:package -- release
       - name: Verify public beta update manifest
-        run: node scripts/verify-update-manifest.mjs ${{ matrix.platform }} release
+        run: |
+          if [ "${{ matrix.platform }}" = linux ]; then
+            node scripts/verify-update-manifest.mjs linux release
+            node scripts/verify-update-manifest.mjs linux-arm64 release
+          else
+            node scripts/verify-update-manifest.mjs ${{ matrix.platform }} release
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
@@ -139,6 +151,7 @@ jobs:
             release/*.dmg
             release/*.zip
             release/*.exe
+            release/*.AppImage
             release/*.blockmap
             release/beta*.yml
 
