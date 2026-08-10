@@ -95,4 +95,35 @@ describe("Bordeaux MCP surface", () => {
       await server.close();
     }
   });
+
+  it("forwards resource cancellation to bridge-backed analysis", async () => {
+    let analysisStarted: (() => void) | undefined;
+    let analysisCanceled: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => { analysisStarted = resolve; });
+    const canceled = new Promise<void>((resolve) => { analysisCanceled = resolve; });
+    const server = buildMcpServer({ request: (request, signal) => {
+      if (request.method !== "analyze_path") return Promise.resolve({});
+      analysisStarted?.();
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => {
+          analysisCanceled?.();
+          reject(new Error("analysis canceled"));
+        }, { once: true });
+      });
+    } });
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const controller = new AbortController();
+      const reading = client.readResource({ uri: "bordeaux://paths/path_test/analysis" }, { signal: controller.signal });
+      await started;
+      controller.abort();
+      await canceled;
+      await expect(reading).rejects.toThrow();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 });
