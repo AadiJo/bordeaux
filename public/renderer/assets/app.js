@@ -423,7 +423,7 @@
           project: clone(project),
           plannerId: selectedPlannerId,
           activePathId: doc.id,
-          allianceView: alliance,
+          allianceView: 'blue',
           fieldPack: { id: '2026-rebuilt', revision: '2026-manual-tu19-welded-4' },
         });
         setAgentProposal((current) => {
@@ -435,7 +435,7 @@
       const timer = window.setTimeout(publish, 150);
       window.addEventListener('pointerup', publish, { once: true });
       return () => { window.clearTimeout(timer); window.removeEventListener('pointerup', publish); };
-    }, [project, selectedPlannerId, alliance, activeIdx, agentSessionId, doc.id]);
+    }, [project, selectedPlannerId, activeIdx, agentSessionId, doc.id]);
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.onAgentProposal !== 'function') return;
       let active = true;
@@ -1349,10 +1349,9 @@
         if (page !== 'plan') return;
         if (e.key.indexOf('Arrow') === 0 && sel.kind) {
           const base = e.shiftKey ? 0.25 : e.altKey ? 0.01 : 0.05;
-          const flip = alliance === 'red' ? -1 : 1;
           let dx = 0, dy = 0;
-          if (e.key === 'ArrowUp') dy = base * flip; else if (e.key === 'ArrowDown') dy = -base * flip;
-          else if (e.key === 'ArrowRight') dx = base * flip; else if (e.key === 'ArrowLeft') dx = -base * flip;
+          if (e.key === 'ArrowUp') dy = base; else if (e.key === 'ArrowDown') dy = -base;
+          else if (e.key === 'ArrowRight') dx = base; else if (e.key === 'ArrowLeft') dx = -base;
           if (dx || dy) {
             e.preventDefault();
             if (sel.kind === 'wp') nudgeWp(sel.idx, dx, dy);
@@ -1369,7 +1368,7 @@
       };
       window.addEventListener('keydown', onKey);
       return () => window.removeEventListener('keydown', onKey);
-    }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, nudgeWp, nudgeFrac, alliance, playbackStore]);
+    }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, nudgeWp, nudgeFrac, playbackStore]);
 
     const selNode = (page === 'auto' && routineSel) ? window.AUTO.findNode(routine, routineSel) : null;
 

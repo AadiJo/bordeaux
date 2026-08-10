@@ -141,6 +141,19 @@ describe("renderer application", () => {
     expect(panels).toContain("legacy: 'C'");
   });
 
+  it("keeps the path fixed when flipping the field background", () => {
+    const field = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
+    expect(field).toContain("transform: flip ? `rotate(180 ${FIELD_CX} ${FIELD_CY})` : undefined");
+    expect(field).toContain("const W2P = useCallback((p) => ({ x: wx(p.x), y: wy(p.y) }), []);");
+    expect(field).not.toContain("FIELD_W - p.x");
+    expect(field).not.toContain("FIELD_H - p.y");
+    expect(field.match(/\bflip\b/g)).toHaveLength(2);
+    expect(app).not.toContain("const flip = alliance === 'red' ? -1 : 1");
+    expect(app).toContain("allianceView: 'blue'");
+    expect(app).not.toContain("allianceView: alliance");
+  });
+
   it("keeps dormant Chap assets out of the application shell", () => {
     const html = fs.readFileSync(new URL("../public/renderer/index.html", import.meta.url), "utf8");
     const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");

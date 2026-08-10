@@ -163,7 +163,7 @@ html, body { font-synthesis: none; }
   .toolbar .brand-name, .toolbar .pathsw-t { display: none; }
   .toolbar .pageswitch button { padding-inline: 9px; }
   .toolbar .pathsw { flex-basis: 120px; max-width: 120px; }
-  .toolbar .planner-family { width: 104px; flex-basis: 104px; }
+  .toolbar .planner-family { width: 136px; flex-basis: 136px; }
   .toolbar .alliance { flex-shrink: 0; }
   .toolbar .exportbtn { width: 40px; padding: 0; justify-content: center; gap: 0; font-size: 0; }
 }
@@ -575,15 +575,15 @@ input,select{font-family:inherit}
 .iconbtn{width:32px;height:32px;display:flex;align-items:center;justify-content:center;border-radius:6px;color:var(--txt-2)}
 .iconbtn:hover{background:var(--bg-3);color:var(--txt)}
 .iconbtn.active{background:var(--accent-soft);color:var(--accent)}
-.planner-family{width:116px;height:32px;flex:0 0 116px}
-.planner-family .seg-i{height:24px;font-size:10.5px;padding-inline:5px}
+.planner-family{width:136px;height:32px;flex:0 0 136px}
+.planner-family .seg-i{height:24px;font-size:10.5px;padding-inline:6px;text-overflow:clip}
 .alliance{display:flex;align-items:center;gap:2px;height:32px;padding:3px;border-radius:7px;background:var(--bg-2);border:1px solid var(--line);color:var(--txt-3)}
 .alliance:hover{border-color:var(--line-2);background:var(--bg-2)}
 .alliance-side{display:flex;align-items:center;justify-content:center;width:23px;height:24px;border-radius:4px;font-family:var(--mono);font-size:9px;font-weight:700;transition:color .14s ease-out,background-color .14s ease-out}
 .alliance-side.blue.on{color:#a9c8ff;background:rgb(66 113 192 / .28)}
 .alliance-side.red.on{color:#ffb5b0;background:rgb(199 84 80 / .28)}
 .field-flip{gap:6px;padding:0 9px;font-size:10.5px;font-weight:600}.field-flip[aria-pressed="true"]{color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft)}
-.unit-toggle{min-width:42px;justify-content:center;padding:0 8px;font:700 10px var(--mono);text-transform:uppercase}
+.unit-toggle{min-width:64px;justify-content:center;padding:0 9px;font:600 10.5px var(--ui)}
 .exportbtn{display:flex;align-items:center;gap:7px;height:32px;padding:0 13px;border-radius:6px;background:var(--accent-surface);color:#fff;font-weight:600;font-size:12.5px}
 .exportbtn:hover{filter:brightness(1.08)}
 .exportbtn:disabled{cursor:not-allowed;opacity:.45;filter:none}

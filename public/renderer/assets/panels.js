@@ -249,7 +249,7 @@
         page === 'auto' && h(RoutineLibrary, { routines, activeRoutineId, setActiveRoutine, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine })),
 
       h('div', { className: 'tb-right' },
-        h('button', { className: 'alliance unit-toggle', type: 'button', onClick: () => setUnitSystem(unitSystem === 'metric' ? 'imperial' : 'metric'), title: 'Switch display units; project data remains SI', 'aria-label': 'Display units: ' + unitSystem + '. Switch to ' + (unitSystem === 'metric' ? 'imperial' : 'metric') }, unitSystem === 'metric' ? 'm' : 'ft'),
+        h('button', { className: 'alliance unit-toggle', type: 'button', onClick: () => setUnitSystem(unitSystem === 'metric' ? 'imperial' : 'metric'), title: 'Switch display units; project data remains SI', 'aria-label': 'Display units: ' + unitSystem + '. Switch to ' + (unitSystem === 'metric' ? 'imperial' : 'metric') }, unitSystem === 'metric' ? 'Metric' : 'Imperial'),
         plan && h(React.Fragment, null,
           h('button', { className: 'qbtn tb-file', type: 'button', title: 'Open project', 'aria-label': 'Open project', onClick: props.onOpen }, 'Open'),
           h('button', { className: 'qbtn tb-file', type: 'button', title: 'Save project (⌘S)', 'aria-label': 'Save project', onClick: () => props.onSave(false) }, 'Save')),
