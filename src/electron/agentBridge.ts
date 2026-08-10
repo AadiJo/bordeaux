@@ -166,6 +166,7 @@ export class AgentBridgeClient {
   async request(request: AgentRequest, signal?: AbortSignal): Promise<unknown> {
     if (signal?.aborted) throw new Error("Agent request was canceled.");
     const descriptor = await this.readDescriptor();
+    if (signal?.aborted) throw new Error("Agent request was canceled.");
     const socket = net.createConnection(descriptor.endpoint);
     const onAbort = () => socket.destroy(new Error("Agent request was canceled."));
     signal?.addEventListener("abort", onAbort, { once: true });

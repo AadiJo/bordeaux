@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AgentBridgeClient, AgentBridgeServer } from "../src/electron/agentBridge";
 import { AgentSessionService, runAgentPlanningJobDirect } from "../src/electron/agentSession";
 import { createDemoProject } from "../src/shared/project/defaults";
@@ -640,6 +640,28 @@ describe("agent session and private bridge", () => {
       await server.stop();
       await fs.rm(directory, { recursive: true, force: true });
       await fs.rm(alternateTmp, { recursive: true, force: true });
+    }
+  });
+
+  it("does not open a bridge request when cancellation arrives during descriptor I/O", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-agent-cancel-test-"));
+    const service = new AgentSessionService(() => {}, () => null);
+    service.publishSnapshot(snapshot());
+    const requestSpy = vi.spyOn(service, "request");
+    const server = new AgentBridgeServer(directory, service);
+    try {
+      await server.start();
+      const controller = new AbortController();
+      const pending = new AgentBridgeClient(directory).request({ method: "inspect_session" }, controller.signal);
+      controller.abort();
+
+      await expect(pending).rejects.toThrow("Agent request was canceled");
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(requestSpy).not.toHaveBeenCalled();
+    } finally {
+      requestSpy.mockRestore();
+      await server.stop();
+      await fs.rm(directory, { recursive: true, force: true });
     }
   });
 });
