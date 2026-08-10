@@ -59,4 +59,4 @@ import * as React from "react";
     }), []);
   }
 
-export const PointerDrag = { begin, useController };
+export const PointerDrag = { useController };

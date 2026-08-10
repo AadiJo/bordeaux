@@ -6,9 +6,8 @@ import { UI } from "./ui";
 
 // Autonomous Routine — step inspector (RIGHT rail) + run transport (bottom).
 // One inspector system, shared with the Plan page (.ctxinsp shell + form primitives).
-  const { useState } = React;
   const h = React.createElement;
-  const { Icon, Dropdown, Num, Seg } = UI;
+  const { Icon, Dropdown, Seg } = UI;
   const A = AUTO;
   const fmt = (t) => (t || 0).toFixed(2) + 's';
 
@@ -37,7 +36,6 @@ import { UI } from "./ui";
     let icon = 'dot', title = '', tag = null, accent = 'var(--accent)', body = null;
 
     if (node.type === 'path') {
-      const doc = paths.find((path) => path.id === node.ref);
       icon = 'route'; title = 'Path'; tag = 'step';
       body = h(React.Fragment, null,
         h(Dropdown, { id: 'routine-bound-path', label: 'Bound path', value: node.ref, icon: 'route',

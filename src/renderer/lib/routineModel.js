@@ -4,7 +4,6 @@ import { PM } from "./pathMath";
 // A routine is an ordered list of STEPS. Three step kinds: Path, Decision, Function.
 // A Function carries a runtime capability or a generated Java command.
 // Autonomous Routine is robot-agnostic: it ORCHESTRATES runtime generation, it does not define behaviors.
-  const D2R = Math.PI / 180;
   let _id = 0;
   const uid = (p) => (p || 'n') + '_' + (++_id);
 
@@ -64,52 +63,6 @@ import { PM } from "./pathMath";
     if (node.cat === 'generate') return node.funcRef || 'GeneratePath';
     if (node.cat === 'sequence') { const o = seqOp(node.op); return o.verb + (node.target ? ' · ' + node.target : ''); }
     return node.title || CATS[node.cat].label;
-  }
-
-  // ---- build smooth handles for a preview trajectory ----
-  function buildWps(raw) {
-    const out = raw.map((w) => ({ linked: true, thetaOn: false, theta: 0, stop: false, ...w }));
-    out.forEach((w, i) => { const hd = PM.autoHandles(out, i); if (!w.prevC) w.prevC = hd.prevC; if (!w.nextC) w.nextC = hd.nextC; });
-    if (out.length) { out[0].thetaOn = true; out[out.length - 1].thetaOn = true; }
-    return out;
-  }
-  function genPath(name, raw) {
-    return { name, waypoints: buildWps(raw), targets: [], markers: [], ranges: [],
-      constraints: { maxVel: 2.6, maxAccel: 4.5, maxDecel: 4.5, maxAngVel: 420, maxAngAccel: 640 }, startVel: 0, goalVel: 0 };
-  }
-
-  // ---- demo routine: a blue-side Reefscape qualification auto ----
-  // Generate steps reference robot-code functions (funcRef); the dashed preview is sim-only.
-  function demoRoutine(paths) {
-    _id = 0;
-    paths = paths || [];
-    return {
-      name: 'Qual_Auto_A',
-      nodes: [
-        { id: uid('p'), type: 'path', ref: paths[0] ? paths[0].id : '' },
-        { id: uid('f'), type: 'function', cat: 'terminate', title: 'Coral scored', trigger: 'Vision confirms L4 placement', note: 'Cuts the scoring dwell the instant the coral clears the gripper instead of waiting out a fixed timer.' },
-        {
-          id: uid('d'), type: 'decision', cond: 'Coral remaining \u2265 1', metric: 'gamePieces',
-          thenLabel: 'detected', elseLabel: 'none / timeout',
-          then: [
-            { id: uid('g'), type: 'function', cat: 'generate', funcRef: 'GenerateNearestCoral', trigger: 'On branch entry',
-              params: [{ k: 'maxRange', v: '3.0 m' }, { k: 'piece', v: 'coral' }],
-              note: 'Robot code returns a trajectory to whatever coral it judges best. Autonomous Routine just invokes it.',
-              preview: genPath('preview_coral', [{ x: 4.10, y: 5.05, theta: 60 }, { x: 3.45, y: 4.05 }, { x: 2.95, y: 3.25, theta: -60 }]) },
-            { id: uid('v'), type: 'function', cat: 'velocity', title: 'Precision intake', trigger: 'Within 0.8 m of target', scale: 0.35, note: 'Drops translational speed so the intake seats the coral without punching it out.' },
-          ],
-          else: [
-            { id: uid('s'), type: 'function', cat: 'sequence', op: 'skip', target: 'Reef_Station', trigger: 'No target in view', note: 'Abandons the opportunistic pickup and proceeds straight to the next scored path.' },
-          ],
-        },
-        { id: uid('p'), type: 'path', ref: paths[1] ? paths[1].id : '' },
-        { id: uid('p'), type: 'path', ref: paths[2] ? paths[2].id : '' },
-        { id: uid('g'), type: 'function', cat: 'generate', funcRef: 'GenerateParkingPath', trigger: 'Routine end',
-          params: [{ k: 'zone', v: 'alliance' }],
-          note: 'Robot code plans a clean exit to the park zone from wherever the robot finishes.',
-          preview: genPath('preview_park', [{ x: 3.85, y: 4.95, theta: -120 }, { x: 2.65, y: 3.10 }, { x: 1.60, y: 1.45, theta: -135 }]) },
-      ],
-    };
   }
 
   // ---- node factory ----
@@ -231,9 +184,9 @@ import { PM } from "./pathMath";
     });
   }
 
-export const AUTO = { CATS, CAT_LIST, CONDITIONS, FUNCTIONS, TRIGGERS, pickerItems, SEQ_OPS, seqOp, nodeTitle, demoRoutine, newNode, walk, findNode, countSteps, branchCount,
-    buildRun, poseAt, stepAt, fieldOverlay, genPath, D2R,
-    update, remove, insertAfter, prepend, appendBranch, prependBranch, append, move, reorderRelative };
+export const AUTO = { CATS, CAT_LIST, CONDITIONS, FUNCTIONS, TRIGGERS, pickerItems, SEQ_OPS, seqOp, nodeTitle, newNode, walk, findNode, countSteps, branchCount,
+    buildRun, poseAt, stepAt, fieldOverlay,
+    update, remove, insertAfter, prepend, appendBranch, append, move, reorderRelative };
 
   // ---- immutable-ish routine edits (operate on a deep clone) ----
   function _clone(o) { return JSON.parse(JSON.stringify(o)); }
@@ -250,7 +203,6 @@ export const AUTO = { CATS, CAT_LIST, CONDITIONS, FUNCTIONS, TRIGGERS, pickerIte
   }
   function prepend(routine, node) { const r = _clone(routine); r.nodes.unshift(node); return r; }
   function appendBranch(routine, decId, branch, node) { const r = _clone(routine); walk(r.nodes, (n) => { if (n.id === decId) { n[branch] = n[branch] || []; n[branch].push(node); } }); return r; }
-  function prependBranch(routine, decId, branch, node) { const r = _clone(routine); walk(r.nodes, (n) => { if (n.id === decId) { n[branch] = n[branch] || []; n[branch].unshift(node); } }); return r; }
   function append(routine, node) { const r = _clone(routine); r.nodes.push(node); return r; }
   // move a node up/down within its own containing array
   function move(routine, id, dir) {

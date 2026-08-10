@@ -236,7 +236,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
   }
 
   // numeric field with drag-to-scrub
-  function Num({ label, value, onChange, unit, imperialUnit, step = 0.01, min, max, precision = 2, accentDrag }) {
+  function Num({ label, value, onChange, unit, imperialUnit, step = 0.01, min, max, precision = 2 }) {
     const id = useId();
     const [edit, setEdit] = useState(null);
     const ref = useRef(null);
@@ -343,4 +343,3 @@ import { UnitPrefs } from "../lib/unitPreferences";
   }
 
 export const UI = { Icon, IconBtn, Dropdown, Num, Section, Toggle, Seg, ContextMenu, constraintRangeSummary };
-export { Icon, IconBtn, Dropdown, Num, Section, Toggle, Seg, ContextMenu, constraintRangeSummary };

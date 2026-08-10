@@ -25,7 +25,7 @@ import { UI } from "./ui";
   const forwardExtent = (robot) => Math.max(...localFootprint(robot).map((point) => point.x)) * SX;
 
   function FieldView(props) {
-    const { doc, derived, insertionPreview, proposalPreviews, sel, tool, view, setView, alliance, showGrid, robot, drive, accent, metric, playTime, actions, onSelPos, routine, routinePose } = props;
+    const { doc, derived, insertionPreview, proposalPreviews, sel, tool, view, setView, alliance, showGrid, robot, drive, accent, metric, playTime, actions, routine, routinePose } = props;
     const showHandles = props.showHandles !== false;
     const svgRef = useRef(null);
     const [cw, setCw] = useState(1200);
@@ -63,23 +63,6 @@ import { UI } from "./ui";
       ro.observe(svg); setCw(svg.clientWidth || 1200);
       return () => ro.disconnect();
     }, []);
-
-    // report selected element's screen position for the floating inspector
-    useEffect(() => {
-      const svg = svgRef.current; if (!svg || !onSelPos) return;
-      const pp = derived.sample.pts;
-      let wpoint = null;
-      if (sel.kind === 'wp' && doc.waypoints[sel.idx]) wpoint = doc.waypoints[sel.idx];
-      else if (sel.kind === 'rt' && doc.targets[sel.idx]) wpoint = PM.pointAtFraction(PM.featureFraction(doc.targets[sel.idx], derived.sample), pp);
-      else if (sel.kind === 'em' && doc.markers[sel.idx]) wpoint = PM.pointAtFraction(PM.featureFraction(doc.markers[sel.idx], derived.sample), pp);
-      else if (sel.kind === 'cr' && doc.ranges && doc.ranges[sel.idx]) { const rg = doc.ranges[sel.idx]; wpoint = PM.pointAtFraction((rg.f0 + rg.f1) / 2, pp); }
-      if (!wpoint) { onSelPos(null); return; }
-      const ctm = svg.getScreenCTM(); if (!ctm) { onSelPos(null); return; }
-      const ip = W2P(wpoint);
-      const sp = svg.createSVGPoint(); sp.x = ip.x; sp.y = ip.y;
-      const s = sp.matrixTransform(ctm);
-      onSelPos({ x: s.x, y: s.y });
-    }, [sel, doc, view, cw, onSelPos, W2P, derived]);
 
     const upp = view.w / Math.max(1, cw);
     const P = (px) => px * upp;
@@ -939,7 +922,7 @@ import { UI } from "./ui";
       };
       // order: dim/done/pending first, active + generated + focus on top
       const rank = (s) => ({ focus: 5, genfocus: 5, active: 4, generated: 3, done: 1, pending: 1, dim: 0 }[s] || 0);
-      const order = routine.map((r, i) => i).sort((a, b) => rank(routine[a].state) - rank(routine[b].state));
+      const order = routine.map((_, i) => i).sort((a, b) => rank(routine[a].state) - rank(routine[b].state));
       order.forEach((ri) => {
         const rp = routine[ri]; if (!rp.pts || rp.pts.length < 2) return;
         const S = STYLE[rp.state] || STYLE.pending;
@@ -1048,4 +1031,4 @@ import { UI } from "./ui";
   }
 
 export const FIELD_DIMS = { FIELD_W, FIELD_H, IMG_W, IMG_H };
-export { FieldView, wheelZoomFactor };
+export { FieldView };
