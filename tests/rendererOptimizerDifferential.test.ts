@@ -541,6 +541,56 @@ describe("explicit geometry refinement", () => {
     });
   });
 
+  it("requires a configured robot height before refining a TRENCH-crossing path", () => {
+    const project = createDemoProject();
+    project.robot.heightM = undefined;
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.waypoints = buildWaypoints([
+      { x: 14.2, y: 0.6, nextC: { x: 13.5, y: 0.6 }, segType: "bezier" },
+      { x: 12, y: 0.6, prevC: { x: 12.7, y: 0.6 }, nextC: { x: 11.3, y: 0.6 }, segType: "bezier" },
+      { x: 9.8, y: 0.6, prevC: { x: 10.5, y: 0.6 } },
+    ]);
+
+    const result = rendererGeometryOptimizer().refine(path, project.robot, 56, { corridorM: 0.15, clearanceM: 0 });
+
+    expect(result).toMatchObject({
+      status: "unchanged",
+      reason: expect.stringContaining("height is required"),
+    });
+    expect(result.path).toBeUndefined();
+  });
+
+  it("accepts a known-safe robot height for TRENCH refinement", () => {
+    const project = createDemoProject();
+    project.robot.heightM = 0.5;
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.waypoints = buildWaypoints([
+      { x: 14.2, y: 0.6, nextC: { x: 13.5, y: 0.6 }, segType: "bezier" },
+      { x: 12, y: 0.6, prevC: { x: 12.7, y: 0.6 }, nextC: { x: 11.3, y: 0.6 }, segType: "bezier" },
+      { x: 9.8, y: 0.6, prevC: { x: 10.5, y: 0.6 } },
+    ]);
+
+    const result = rendererGeometryOptimizer().refine(path, project.robot, 56, { corridorM: 0.15, clearanceM: 0 });
+
+    expect(result.reason || "").not.toContain("height");
+  });
+
+  it("allows geometry refinement without robot height away from TRENCH crossings", () => {
+    const project = createDemoProject();
+    project.robot.heightM = undefined;
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.waypoints = buildWaypoints([
+      { x: 6, y: 1, nextC: { x: 6.5, y: 5 }, segType: "bezier" },
+      { x: 8.5, y: 6, prevC: { x: 6.8, y: 5 }, nextC: { x: 10.2, y: 7 }, segType: "bezier", stop: true },
+      { x: 11.5, y: 1, prevC: { x: 11, y: 5 } },
+    ]);
+
+    expect(rendererGeometryOptimizer().refine(path, project.robot, 56, { corridorM: 0.15 }).status).toBe("candidate");
+  });
+
   it("keeps the authored baseline when segment geometry is unsupported", () => {
     const project = createDemoProject();
     project.paths[0].waypoints[0].segType = "clothoid";

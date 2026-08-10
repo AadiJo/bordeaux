@@ -169,7 +169,7 @@
     const checkHeight = (section, portals) => {
       const matching = portals.filter((portal) => section.minY >= portal.minY - EPSILON && section.maxY <= portal.maxY + EPSILON);
       if (matching.length === 1 && matching[0].traversal === 'trench'
-        && Number.isFinite(robot.heightM) && robot.heightM > TRENCH_CLEARANCE_M + EPSILON) heightValid = false;
+        && (!Number.isFinite(robot.heightM) || robot.heightM > TRENCH_CLEARANCE_M + EPSILON)) heightValid = false;
     };
     barriers.forEach((barrier) => {
       poses.forEach((pose) => {
