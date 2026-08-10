@@ -591,6 +591,22 @@ describe("explicit geometry refinement", () => {
     expect(rendererGeometryOptimizer().refine(path, project.robot, 56, { corridorM: 0.15 }).status).toBe("candidate");
   });
 
+  it("does not require robot height when only the footprint overlaps a TRENCH portal", () => {
+    const project = createDemoProject();
+    project.robot.heightM = undefined;
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.waypoints = buildWaypoints([
+      { x: 14.2, y: 0.45, nextC: { x: 13.9, y: 0.5 }, segType: "bezier" },
+      { x: 13.55, y: 0.65, prevC: { x: 13.75, y: 0.55 }, nextC: { x: 13.75, y: 0.75 }, segType: "bezier" },
+      { x: 14.2, y: 0.85, prevC: { x: 13.9, y: 0.8 } },
+    ]);
+
+    const result = rendererGeometryOptimizer().refine(path, project.robot, 56, { corridorM: 0.15, clearanceM: 0 });
+
+    expect(result.reason || "").not.toContain("height");
+  });
+
   it("keeps the authored baseline when segment geometry is unsupported", () => {
     const project = createDemoProject();
     project.paths[0].waypoints[0].segType = "clothoid";

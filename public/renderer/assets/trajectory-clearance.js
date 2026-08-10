@@ -182,7 +182,7 @@
         ), -Infinity);
         if (section) {
           minimum = Math.min(minimum, lateral);
-          checkHeight(section, barrier.portals);
+          if (Math.abs(pose.x - barrier.x) <= EPSILON) checkHeight(section, barrier.portals);
         }
         else if (lateral < 0) {
           const longitudinal = barrier.x < footprintBox.min.x
