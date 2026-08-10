@@ -245,6 +245,7 @@ export class AgentSessionService {
   private snapshot: AgentSessionSnapshot | null = null;
   private readonly proposals = new Map<string, AgentProposal>();
   private readonly planningAborts = new Set<AbortController>();
+  private previewPlanningAbort: AbortController | null = null;
 
   constructor(
     private readonly sendProposal: (proposal: AgentProposal, requireReceipt: boolean) => void | Promise<void>,
@@ -337,12 +338,16 @@ export class AgentSessionService {
   private abortPlanning(): void {
     for (const controller of this.planningAborts) controller.abort();
     this.planningAborts.clear();
+    this.previewPlanningAbort = null;
   }
 
   private async executePlanning<T>(job: AgentPlanningJob, snapshot: AgentSessionSnapshot, signal?: AbortSignal): Promise<T> {
     if (signal?.aborted) throw new Error("Agent planning was canceled.");
+    const producesPreview = job.kind !== "analyze";
+    if (producesPreview) this.previewPlanningAbort?.abort();
     const controller = new AbortController();
     this.planningAborts.add(controller);
+    if (producesPreview) this.previewPlanningAbort = controller;
     const onAbort = () => controller.abort();
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
@@ -355,6 +360,7 @@ export class AgentSessionService {
     } finally {
       signal?.removeEventListener("abort", onAbort);
       this.planningAborts.delete(controller);
+      if (this.previewPlanningAbort === controller) this.previewPlanningAbort = null;
     }
   }
 

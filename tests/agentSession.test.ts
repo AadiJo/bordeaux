@@ -71,6 +71,38 @@ describe("agent session and private bridge", () => {
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
   });
 
+  it("keeps preview-producing planning jobs newest-wins", async () => {
+    const releases: Array<() => void> = [];
+    const signals: AbortSignal[] = [];
+    const staged: string[] = [];
+    const service = new AgentSessionService((proposal) => { staged.push(proposal.intent); }, () => null, (job, signal) => new Promise((resolve, reject) => {
+      if (signal) {
+        signals.push(signal);
+        signal.addEventListener("abort", () => reject(new Error("planning worker aborted")), { once: true });
+      }
+      releases.push(() => resolve(runAgentPlanningJobDirect(job)));
+    }));
+    service.publishSnapshot(snapshot());
+
+    const first = service.request({ method: "plan_path", params: {
+      intent: "First preview", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 2, y: 1 }], maximumCandidates: 1,
+    } });
+    const firstRejected = expect(first).rejects.toThrow("planning worker aborted");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const second = service.request({ method: "plan_path", params: {
+      intent: "Second preview", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 3, y: 1 }], maximumCandidates: 1,
+    } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(signals).toHaveLength(2);
+    expect(signals[0].aborted).toBe(true);
+    expect(signals[1].aborted).toBe(false);
+    releases[1]();
+    await firstRejected;
+    await expect(second).resolves.toMatchObject({ status: "ready", intent: "Second preview" });
+    expect(staged).toEqual(["Second preview"]);
+  });
+
   it("rejects an explicit stale context before starting planning", async () => {
     let invoked = false;
     const service = new AgentSessionService(() => {}, () => null, async () => {
