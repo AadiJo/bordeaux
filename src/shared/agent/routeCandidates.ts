@@ -3,7 +3,7 @@ import { resolveProjectFieldTerm } from "../field/vocabulary";
 import { FIELD_H, FIELD_W } from "../math/fieldBounds";
 import { PM } from "../math/pm";
 import { buildWaypoints, clone, createPathId } from "../project/defaults";
-import type { BordeauxProject, PathDoc, TrajectoryPlannerId, TrajectorySample } from "../types";
+import type { BordeauxProject, PathDoc, TrajectorySample } from "../types";
 import { analyzePath, minimumPathClearance } from "./pathAnalysis";
 import { boundsPolygon, convexPolygonClearance, polygonBounds, robotFootprintAt, robotFootprintRadius } from "./robotFootprint";
 import type { FieldPointInput, FuelCollectionIntent, PlanPathRequest, RouteCandidate, RouteLocationInput, RouteStep, RouteTraversal } from "./types";
@@ -108,6 +108,13 @@ function configureCollectionHeading(path: PathDoc, spans: readonly ActiveCollect
     const raw = points[index].heading - intakeOffset;
     tangentDesired.push(tangentDesired.length ? unwrapNear(raw, tangentDesired[tangentDesired.length - 1]) : raw);
   }
+  const allowedHeadingError = points.slice(first, last + 1).map((point) => {
+    const active = spans.filter((span) => span.intent.allowCrosswiseHeading !== true
+      && point.seg >= span.startSegmentIndex && point.seg <= span.endSegmentIndex);
+    return active.length === 0
+      ? null
+      : Math.max(0.25, Math.min(...active.map((span) => span.intent.maxHeadingErrorDeg ?? 5))) * Math.PI / 180;
+  });
   let smoothed = [...tangentDesired];
   // Project a low-curvature heading law into each collection span's permitted
   // intake-error band. Non-collection approach samples remain free so the same
@@ -116,11 +123,9 @@ function configureCollectionHeading(path: PathDoc, spans: readonly ActiveCollect
     const next = [...smoothed];
     for (let local = 1; local < smoothed.length - 1; local += 1) {
       const relaxed = (smoothed[local - 1] + 2 * smoothed[local] + smoothed[local + 1]) / 4;
-      const segment = points[first + local].seg;
-      const active = spans.filter((span) => span.intent.allowCrosswiseHeading !== true && segment >= span.startSegmentIndex && segment <= span.endSegmentIndex);
-      if (active.length === 0) next[local] = relaxed;
+      const allowed = allowedHeadingError[local];
+      if (allowed === null) next[local] = relaxed;
       else {
-        const allowed = Math.max(0.25, Math.min(...active.map((span) => span.intent.maxHeadingErrorDeg ?? 5))) * Math.PI / 180;
         next[local] = Math.max(tangentDesired[local] - allowed, Math.min(tangentDesired[local] + allowed, relaxed));
       }
     }
@@ -587,7 +592,7 @@ function rankCandidates(candidates: RouteCandidate[], nearTieWindowS: number): R
   });
 }
 
-export function generateRouteCandidates(project: BordeauxProject, request: PlanPathRequest, plannerId?: TrajectoryPlannerId): RouteCandidate[] {
+export function generateRouteCandidates(project: BordeauxProject, request: PlanPathRequest): RouteCandidate[] {
   if (!request.intent.trim()) throw new Error("A route intent is required.");
   const hasSteps = Array.isArray(request.steps) && request.steps.length > 0;
   const hasGoals = Array.isArray(request.goals) && request.goals.length > 0;
@@ -605,7 +610,6 @@ export function generateRouteCandidates(project: BordeauxProject, request: PlanP
   const minimumClearanceM = Math.max(0, Math.min(2, request.minimumClearanceM ?? 0.15));
   const portalRunM = robotFootprintRadius(project.robot) + minimumClearanceM + 0.15;
   const effectiveRobotHeightM = project.robot.heightM ?? request.robotHeightM;
-  const selectedPlanner = plannerId ?? project.plannerId ?? "profiledSpline";
   const candidateTraversals: RouteCandidate["traversal"][] = hasSteps ? ["ordered"] : traversalOptions(request);
   const candidates = candidateTraversals.map((traversal, index): RouteCandidate => {
     const points = [start];
@@ -652,9 +656,8 @@ export function generateRouteCandidates(project: BordeauxProject, request: PlanP
     const route = routePath(project, base, name, points, collectionSpans, finishHeadingDeg, hasSteps);
     const path = route.path;
     const activeCollection = route.collectionSpans;
-    const analysisProject = { ...clone(project), plannerId: selectedPlanner, paths: [path] };
+    const analysisProject = { ...project, paths: [path] };
     const analysisOptions = {
-      plannerId: selectedPlanner,
       minimumClearanceM,
       robotHeightM: effectiveRobotHeightM,
       ...(traversal === "ordered" ? { requiredPortalIds } : { requiredTraversal: traversal as RouteTraversal }),

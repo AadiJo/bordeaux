@@ -18,17 +18,18 @@ function timeAtFraction(fraction: number, pts: Array<{ s: number }>, times: numb
   if (target <= 0) return times[0] ?? 0;
   if (target >= total) return times[times.length - 1] ?? 0;
 
-  for (let i = 1; i < pts.length; i += 1) {
-    if (pts[i].s >= target) {
-      const prev = pts[i - 1];
-      const curr = pts[i];
-      const span = Math.max(1e-9, curr.s - prev.s);
-      const u = (target - prev.s) / span;
-      return (times[i - 1] ?? 0) + ((times[i] ?? 0) - (times[i - 1] ?? 0)) * u;
-    }
+  let low = 1;
+  let high = pts.length - 1;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (pts[middle].s >= target) high = middle;
+    else low = middle + 1;
   }
-
-  return times[times.length - 1] ?? 0;
+  const previous = pts[low - 1];
+  const current = pts[low];
+  const span = Math.max(1e-9, current.s - previous.s);
+  const progress = (target - previous.s) / span;
+  return (times[low - 1] ?? 0) + ((times[low] ?? 0) - (times[low - 1] ?? 0)) * progress;
 }
 
 function diagnosticsFor(pathName: string, derived: any): ValidationIssue[] {

@@ -10,6 +10,13 @@ import { PM } from "../lib/pathMath";
 import { PathLinks } from "../lib/pathLinks";
 import { AUTO } from "../lib/routineModel";
 import { UnitPrefs } from "../lib/unitPreferences";
+import {
+  createMarkerId as markerId,
+  createPathId as pathId,
+  createPathLinkId as pathLinkId,
+  createRoutineId as routineId,
+} from "../../shared/project/ids";
+import { normalizeProject as normalizeProjectData } from "../../shared/project/normalize";
 
 // Bordeaux application root.
   const { useState, useRef, useEffect, useMemo, useCallback, useSyncExternalStore } = React;
@@ -18,45 +25,14 @@ import { UnitPrefs } from "../lib/unitPreferences";
   const PERSEG = 56;
   const clone = (o) => JSON.parse(JSON.stringify(o));
   const clampWorld = (p) => ({ x: Math.max(0, Math.min(FIELD_W, p.x)), y: Math.max(0, Math.min(FIELD_H, p.y)) });
-  const pathId = () => 'path_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
-  const markerId = () => 'event_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
-  const routineId = () => 'routine_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
-  const pathLinkId = () => 'pathlink_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
   const blankRoutine = (name) => ({ id: routineId(), name: name || 'Autonomous Routine', nodes: [] });
   function normalizeProject(raw) {
-    const project = clone(raw);
-    const used = new Set();
-    (project.paths || []).forEach((p) => {
-      if (!p.id) { do { p.id = pathId(); } while (used.has(p.id)); }
-      used.add(p.id);
-      delete p.labview;
-      if (Array.isArray(p.waypoints)) p.waypoints = buildWps(p.waypoints);
-      (p.markers || []).forEach((marker) => { if (!marker.id) marker.id = markerId(); });
-    });
-    const walk = (nodes) => (nodes || []).forEach((node) => {
-      if (node.type === 'path' && typeof node.ref === 'number') node.ref = project.paths[node.ref] ? project.paths[node.ref].id : '';
-      if (node.type === 'decision') { walk(node.then); walk(node.else); }
-    });
-    const routineSources = Array.isArray(project.routines) && project.routines.length
-      ? project.routines : [project.routine || blankRoutine()];
-    const routineIds = new Set();
-    project.routines = routineSources.map((source) => {
-      const routine = { ...source };
-      if (!routine.id || routineIds.has(routine.id)) routine.id = routineId();
-      routineIds.add(routine.id); walk(routine.nodes); return routine;
-    });
-    if (!routineIds.has(project.activeRoutineId)) project.activeRoutineId = project.routines[0].id;
-    project.routine = project.routines.find((routine) => routine.id === project.activeRoutineId) || project.routines[0];
-    project.pathLinks = Array.isArray(project.pathLinks) ? project.pathLinks.filter((link) => link && link.fromPathId && link.toPathId).map((link) => ({ ...link, id: link.id || pathLinkId() })) : [];
-    project.plannerId = project.plannerId === 'optimizedTrajectory' ? 'optimizedTrajectory' : 'profiledSpline';
-    return PathLinks.reconcile(project);
+    return PathLinks.reconcile(normalizeProjectData(raw));
   }
 
   const ACCENT = '#3f6fd0';
 
   const DEF_CONS = { maxVel: 4.2, maxAccel: 6.5, maxDecel: 6.5, maxAngVel: 540, maxAngAccel: 720, maxAngDecel: 720, maxJerk: 0, maxAngJerk: 0 };
-  const NEW_RANGE = { anchor: 'wp', maxVel: 1.5, maxAccel: 2.5, maxDecel: 2.5, maxAngVel: 270, maxAngAccel: 540 };
-
   function alignWaypointHandles(w) {
     if (!w || !w.prevC || !w.nextC) return;
     const inLen = Math.hypot(w.x - w.prevC.x, w.y - w.prevC.y);
@@ -113,7 +89,6 @@ import { UnitPrefs } from "../lib/unitPreferences";
       pathLinks: [],
       routines: [routine],
       activeRoutineId: routine.id,
-      routine,
       plannerId: 'profiledSpline',
       editor: { activePathId: path.id },
     };
@@ -121,7 +96,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
 
   function routineState(project) {
     const routines = Array.isArray(project.routines) && project.routines.length
-      ? project.routines : [project.routine || blankRoutine()];
+      ? project.routines : [blankRoutine()];
     const activeRoutineId = routines.some((routine) => routine.id === project.activeRoutineId)
       ? project.activeRoutineId : routines[0].id;
     return { routines, activeRoutineId };
@@ -129,7 +104,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
 
   function withRoutineState(project, state) {
     const activeRoutine = state.routines.find((routine) => routine.id === state.activeRoutineId) || state.routines[0];
-    return { ...project, routines: state.routines, activeRoutineId: activeRoutine.id, routine: activeRoutine };
+    return { ...project, routines: state.routines, activeRoutineId: activeRoutine.id };
   }
 
   const FIT = { x: 307, y: 7, w: 3285, h: 1569 };
@@ -155,7 +130,6 @@ import { UnitPrefs } from "../lib/unitPreferences";
         if (snapshot.playing) { stopFrame(); emit({ playing: false }); return; }
         emit({ time: snapshot.time >= snapshot.total - 1e-3 ? 0 : snapshot.time, playing: snapshot.total > 0 }); startFrame();
       },
-      play() { emit({ time: snapshot.time >= snapshot.total - 1e-6 ? 0 : snapshot.time, playing: snapshot.total > 0 }); startFrame(); },
       restart() { stopFrame(); emit({ time: 0, playing: snapshot.total > 0 }); startFrame(); },
       pause() { stopFrame(); if (snapshot.playing) emit({ playing: false }); },
       seek(time) { stopFrame(); emit({ time: Math.max(0, Math.min(snapshot.total, time)), playing: false }); },
@@ -184,21 +158,14 @@ import { UnitPrefs } from "../lib/unitPreferences";
     const pose = AUTO.poseAt(run, playback.time, robot);
     return h(FieldView, { ...props, robot, playTime: 0, routine: overlay, routinePose: pose });
   }
-  function RoutineTransportPlayback({ store, run, outcomes }) {
+  function RoutineTransportPlayback({ store, run }) {
     const playback = usePlayback(store), running = playback.playing || playback.time > 0.001;
-    const controls = useMemo(() => ({
-      toggle: store.toggle, play: store.play, reset: store.reset, seek: store.seek,
-      step: (direction) => {
-        const time = store.getSnapshot().time, index = AUTO.stepAt(run, time);
-        const next = run.steps[Math.max(0, Math.min(run.steps.length - 1, index + direction))];
-        store.seek(next ? next.t0 + (next.dur > 0 ? Math.min(0.05, next.dur / 2) : 0) : time);
-      },
-    }), [store, run]);
-    return h(RoutineTransport, { run, time: playback.time, playing: playback.playing, controls, running, outcomes });
+    return h(RoutineTransport, { run, time: playback.time, playing: playback.playing, controls: store, running });
   }
 
   function App() {
     const [project, setProject] = useState(() => freshProject());
+    const plannerId = project.plannerId;
     const [activeIdx, setActiveIdx] = useState(0);
     const [sel, setSel] = useState({ kind: null, idx: -1 });
     const [page, setPage] = useState('plan');
@@ -210,12 +177,10 @@ import { UnitPrefs } from "../lib/unitPreferences";
     const [inspectorOpen, setInspectorOpen] = useState(true);
     const [secOpen, setSecOpen] = useState({ wp: true, sg: false, rt: false, em: false, cr: false });
     const [times, setTimes] = useState({});
-    const [selPos, setSelPos] = useState(null);
     const [metric, setMetric] = useState('velocity');
     const [tool, setTool] = useState('select');
     const [waypointPreview, setWaypointPreview] = useState(null);
     const [headMenu, setHeadMenu] = useState(null);
-    const [plannerId, setPlannerId] = useState('profiledSpline');
     const [dirty, setDirty] = useState(false);
     const [agentProposal, setAgentProposal] = useState(null);
     const [agentCandidateId, setAgentCandidateId] = useState(null);
@@ -389,7 +354,6 @@ import { UnitPrefs } from "../lib/unitPreferences";
     const accent = ACCENT;
 
     const doc = project.paths[activeIdx];
-    const selectedPlannerId = plannerId;
     const docRef = useRef(doc); docRef.current = doc;
     const hist = useRef({ past: [], future: [] });
     const routineHist = useRef({ past: [], future: [] });
@@ -407,18 +371,18 @@ import { UnitPrefs } from "../lib/unitPreferences";
     useEffect(() => {
       if (skipDirty.current) skipDirty.current = false;
       else setDirty(true);
-    }, [project, plannerId]);
+    }, [project]);
     useEffect(() => { if (window.bordeauxAPI) window.bordeauxAPI.setDirty(dirty); }, [dirty]);
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.autosaveProject !== 'function') return undefined;
       const revision = ++autosaveRevision.current;
       const timer = window.setTimeout(() => {
-        window.bordeauxAPI.autosaveProject({ schemaVersion: '1.0', ...project, routine: project.routine, plannerId })
+        window.bordeauxAPI.autosaveProject(project)
           .then((result) => { if (revision === autosaveRevision.current && result && result.saved) setDirty(false); })
           .catch((error) => console.warn('Could not autosave the Bordeaux project:', error));
       }, 900);
       return () => window.clearTimeout(timer);
-    }, [project, plannerId]);
+    }, [project]);
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.publishAgentSession !== 'function') return;
       let published = false;
@@ -431,7 +395,6 @@ import { UnitPrefs } from "../lib/unitPreferences";
           sessionId: agentSessionId,
           revision,
           project: clone(project),
-          plannerId: selectedPlannerId,
           activePathId: doc.id,
           allianceView: 'blue',
           fieldPack: { id: '2026-rebuilt', revision: '2026-manual-tu19-welded-4' },
@@ -445,7 +408,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
       const timer = window.setTimeout(publish, 150);
       window.addEventListener('pointerup', publish, { once: true });
       return () => { window.clearTimeout(timer); window.removeEventListener('pointerup', publish); };
-    }, [project, selectedPlannerId, activeIdx, agentSessionId, doc.id]);
+    }, [project, activeIdx, agentSessionId, doc.id]);
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.onAgentProposal !== 'function') return;
       let active = true;
@@ -484,9 +447,9 @@ import { UnitPrefs } from "../lib/unitPreferences";
 
     // ---- derived path data ----
     const derivation = useMemo(() => {
-      try { return { value: PM.derivePath(doc, robot, PERSEG, selectedPlannerId), error: null }; }
+      try { return { value: PM.derivePath(doc, robot, PERSEG, plannerId), error: null }; }
       catch (error) { return { value: null, error }; }
-    }, [doc, robot, selectedPlannerId]);
+    }, [doc, robot, plannerId]);
     if (derivation.value) lastDerived.current = derivation.value;
     if (!lastDerived.current) throw derivation.error || new Error('Could not derive the active path');
     const derived = derivation.value || lastDerived.current;
@@ -532,8 +495,6 @@ import { UnitPrefs } from "../lib/unitPreferences";
     }, [writeDoc, project, activeIdx]);
 
     const select = useCallback((kind, idx) => setSel(kind ? { kind, idx } : { kind: null, idx: -1 }), []);
-    const onSelPos = useCallback((p) => setSelPos(p), []);
-
     // ---- field actions ----
     const moveWaypoint = useCallback((i, p) => mutate((d) => {
       p = clampWorld(p);
@@ -585,7 +546,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
 
       // The original cubic planners can be split exactly with de Casteljau,
       // preserving the authored curve instead of reshaping both neighboring spans.
-      if (onPath && originalType === 'bezier' && (selectedPlannerId === 'profiledSpline' || selectedPlannerId === 'optimizedTrajectory')) {
+      if (onPath && originalType === 'bezier' && (plannerId === 'profiledSpline' || plannerId === 'optimizedTrajectory')) {
         const a = wps[segment], b = wps[segment + 1], t = nearest && Number.isFinite(nearest.t) ? Math.max(0.001, Math.min(0.999, nearest.t)) : 0.5;
         if (a && b && a.nextC && b.prevC) {
           const split = PM.splitBezier(a, a.nextC, b.prevC, b, t);
@@ -611,22 +572,22 @@ import { UnitPrefs } from "../lib/unitPreferences";
       }
       candidate._selAfter = insertAt;
       return { doc: candidate, index: insertAt, previewRequired, segmentType: originalType };
-    }, [derived, selectedPlannerId]);
+    }, [derived, plannerId]);
 
     const addWaypoint = useCallback((p, segmentHint, onPath, selectedVisit) => {
       const prepared = prepareWaypointInsertion(p, segmentHint, onPath, selectedVisit);
       if (prepared.previewRequired) {
         try {
-          const previewDerived = PM.derivePath(prepared.doc, robot, PERSEG, selectedPlannerId);
+          const previewDerived = PM.derivePath(prepared.doc, robot, PERSEG, plannerId);
           const message = 'Splitting this ' + prepared.segmentType + ' may rebuild its geometry. Review the dashed path first.';
-          setWaypointPreview({ ...prepared, derived: previewDerived, plannerId: selectedPlannerId, message });
+          setWaypointPreview({ ...prepared, derived: previewDerived, plannerId, message });
         } catch (error) {
           console.error('Could not preview waypoint insertion:', error);
         }
         return;
       }
       commit(() => prepared.doc);
-    }, [commit, selectedPlannerId, prepareWaypointInsertion, robot]);
+    }, [commit, plannerId, prepareWaypointInsertion, robot]);
     const appendWaypoint = useCallback((rawPoint) => {
       const point = clampWorld(rawPoint);
       const candidate = clone(docRef.current);
@@ -668,16 +629,16 @@ import { UnitPrefs } from "../lib/unitPreferences";
 
       if (segmentType === 'clothoid') {
         try {
-          const previewDerived = PM.derivePath(candidate, robot, PERSEG, selectedPlannerId);
+          const previewDerived = PM.derivePath(candidate, robot, PERSEG, plannerId);
           const message = 'The new clothoid join may rebuild the previous turn. Review the dashed path first.';
-          setWaypointPreview({ doc: candidate, index: oldCount, derived: previewDerived, plannerId: selectedPlannerId, message, actionLabel: 'Place endpoint' });
+          setWaypointPreview({ doc: candidate, index: oldCount, derived: previewDerived, plannerId, message, actionLabel: 'Place endpoint' });
         } catch (error) {
           console.error('Could not preview waypoint placement:', error);
         }
         return;
       }
       commit(() => candidate);
-    }, [commit, selectedPlannerId, robot]);
+    }, [commit, plannerId, robot]);
     const setJiggle = useCallback((options) => {
       if (!options) {
         commit((d) => { delete d.waypoints[d.waypoints.length - 1].jiggle; return d; });
@@ -710,7 +671,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
       commit(() => waypointPreview.doc);
       setWaypointPreview(null);
     }, [commit, waypointPreview]);
-    useEffect(() => { setWaypointPreview(null); }, [doc, selectedPlannerId]);
+    useEffect(() => { setWaypointPreview(null); }, [doc, plannerId]);
     useEffect(() => { if (doc._selAfter != null) { select('wp', doc._selAfter); mutate((d) => { delete d._selAfter; return d; }); } }, [doc._selAfter]);
 
     const setWp = useCallback((i, patch) => commit((d) => {
@@ -721,7 +682,6 @@ import { UnitPrefs } from "../lib/unitPreferences";
       }
       Object.assign(w, patch); return d;
     }), [commit]);
-    const toggleStop = useCallback((i, on) => commit((d) => { const w = d.waypoints[i]; w.stop = on; if (on) w.linked = false; else { alignWaypointHandles(w); delete w.wait; delete w.turnInPlace; } return d; }), [commit]);
     const toggleTheta = useCallback((i, on) => commit((d) => { d.waypoints[i].thetaOn = on; return d; }), [commit]);
     const setHandleLen = useCallback((i, key, len) => commit((d) => { const w = d.waypoints[i]; const a = Math.atan2(w[key].y - w.y, w[key].x - w.x); w[key] = { x: w.x + Math.cos(a) * len, y: w.y + Math.sin(a) * len }; return d; }), [commit]);
     const delWp = useCallback((i) => { commit((d) => {
@@ -834,7 +794,6 @@ import { UnitPrefs } from "../lib/unitPreferences";
 
     const setConstraint = useCallback((patch) => commit((d) => { Object.assign(d.constraints, patch); return d; }), [commit]);
     const setDoc = useCallback((patch) => commit((d) => Object.assign(d, patch)), [commit]);
-    const rename = useCallback((nm) => mutate((d) => { d.name = nm; return d; }), [mutate]);
     const setRobot = useCallback((patch) => setProject((pr) => ({ ...pr, robot: { ...pr.robot, ...patch } })), []);
 
     // ---- modeless “add” actions: create + select, then edit on canvas / inspector ----
@@ -850,7 +809,6 @@ import { UnitPrefs } from "../lib/unitPreferences";
     const addRangeMid = useCallback(() => addRange(0.35, 0.6), [addRange]);
 
     // ---- segment + waypoint structural ops (memo §3 / §4 / §7 / §8) ----
-    const PX = { X0: 397, X1: 3502, Y0: 97, Y1: 1486 };
     const setSegMeta = useCallback((i, patch) => commit((d) => { Object.assign(d.waypoints[i], patch); return d; }), [commit]);
     const setSegmentHeadingMode = useCallback((i, mode) => commit((d) => {
       const w = d.waypoints[i], next = d.waypoints[i + 1];
@@ -1017,13 +975,13 @@ import { UnitPrefs } from "../lib/unitPreferences";
       const hi = derived.wpFrac && Number.isFinite(derived.wpFrac[i + 1]) ? derived.wpFrac[i + 1] : (i + 1) / Math.max(1, doc.waypoints.length - 1);
       addWaypoint(PM.pointAtFraction((lo + hi) / 2, pts), i, true);
     }, [addWaypoint, derived, doc.waypoints.length]);
-    const inspActions = { setWp, toggleStop, toggleTheta, setHandleLen, delWp, setTarget, delTarget, setMarker, delMarker, setRange, setRangeAnchor, delRange, setConstraint, setDoc, rename, select, setTool,
+    const inspActions = { setWp, toggleTheta, setHandleLen, delWp, setTarget, delTarget, setMarker, delMarker, setRange, setRangeAnchor, delRange, setConstraint, setDoc, select, setTool,
       addTargetMid, addMarkerMid, addRangeMid,
       setSegMeta, setSegmentHeadingMode, setHeadingTransition, setSegmentLookAt, setJiggle, faceWaypoint, duplicateWp, reversePath, reorderWp, insertWp,
       setStop, setWait, setTurnInPlace, setTurnInPlaceMeta, setHeadingMode, toggleDriveBackward,
       openInspector: () => setInspectorOpen(true) };
     const fieldActions = { addWaypoint, appendWaypoint, moveWaypoint, moveHandle, addTargetAt, addMarkerAt, moveTargetTo, rotateTargetTo, moveMarkerTo, addRange, moveRangeHandle, beginHistory,
-      setWaypointHeading, moveSegmentLookAt, headingMenu, faceWaypoint, delWp, delTarget, delMarker, delRange,
+      setWaypointHeading, moveSegmentLookAt, headingMenu, delWp, delTarget, delMarker, delRange,
       openInspector: () => setInspectorOpen(true),
       select };
 
@@ -1230,7 +1188,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
     }), []);
     const zoomPct = Math.round(FIT.w / view.w * 100);
     const setPlannerFamily = useCallback((nextPlannerId) => {
-      setPlannerId(nextPlannerId === 'optimizedTrajectory' ? 'optimizedTrajectory' : 'profiledSpline');
+      setProject((current) => ({ ...current, plannerId: nextPlannerId === 'optimizedTrajectory' ? 'optimizedTrajectory' : 'profiledSpline' }));
     }, []);
 
     // ---- desktop project workflow ----
@@ -1242,7 +1200,6 @@ import { UnitPrefs } from "../lib/unitPreferences";
       const requestedPathIndex = requestedPathId ? next.paths.findIndex((path) => path.id === requestedPathId) : -1;
       skipDirty.current = true;
       setProject(next);
-      setPlannerId(next.plannerId || 'profiledSpline');
       setActiveIdx(requestedPathIndex >= 0 ? requestedPathIndex : 0); setSel({ kind: null, idx: -1 }); setRoutineSel(null);
       playbackStore.reset();
       routinePlaybackStore.reset();
@@ -1279,13 +1236,13 @@ import { UnitPrefs } from "../lib/unitPreferences";
     const saveProject = useCallback(async (saveAs) => {
       if (!window.bordeauxAPI) return;
       try {
-        const result = await window.bordeauxAPI.saveProject({ ...project, routine, plannerId }, saveAs === true);
+        const result = await window.bordeauxAPI.saveProject(project, saveAs === true);
         if (result && result.canceled) return;
         setDirty(false);
       } catch (error) {
         alert('Could not save project: ' + (error && error.message ? error.message : error));
       }
-    }, [project, routine, plannerId]);
+    }, [project]);
 
     const onExportJava = useCallback(async (destination) => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.exportJava !== 'function') {
@@ -1299,7 +1256,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
       setExportError('');
       setJavaProjectState((current) => ({ ...current, operation: 'export', error: '', notice: '' }));
       try {
-        const result = await window.bordeauxAPI.exportJava({ schemaVersion: '1.0', ...project, routine, plannerId }, destination === 'saveAs' ? 'saveAs' : 'linked');
+        const result = await window.bordeauxAPI.exportJava(project, destination === 'saveAs' ? 'saveAs' : 'linked');
         setJavaProjectState((current) => ({
           ...current,
           operation: null,
@@ -1311,7 +1268,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
         setJavaProjectState((current) => ({ ...current, operation: null }));
         setExportError(message);
       }
-    }, [project, routine, plannerId, javaProjectState.catalog]);
+    }, [project, javaProjectState.catalog]);
 
     useEffect(() => {
       if (!window.bordeauxAPI) return undefined;
@@ -1328,7 +1285,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
         else if (command === 'java-build') void buildJavaCatalog();
         else if (command === 'java-cancel-build') void cancelJavaCatalogBuild();
       });
-    }, [newProject, openProject, saveProject, project, routine, plannerId, onExportJava, linkJavaProject, installJavaSupport, buildJavaCatalog, cancelJavaCatalogBuild]);
+    }, [newProject, openProject, saveProject, onExportJava, linkJavaProject, installJavaSupport, buildJavaCatalog, cancelJavaCatalogBuild]);
 
     // ---- keyboard ----
     useEffect(() => {
@@ -1383,17 +1340,17 @@ import { UnitPrefs } from "../lib/unitPreferences";
     const selNode = (page === 'auto' && routineSel) ? AUTO.findNode(routine, routineSel) : null;
 
     return h('div', { className: 'app' },
-      h(Panels.Toolbar, { project, page, setPage, alliance, setAlliance, exportError, unitSystem, setUnitSystem, onNew: newProject, onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo, onExportJava: () => onExportJava('linked'), javaProject: javaProjectState, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
+      h(Panels.Toolbar, { project, page, setPage, alliance, setAlliance, exportError, unitSystem, setUnitSystem, onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo, onExportJava: () => onExportJava('linked'), javaProject: javaProjectState, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
         routines, activeRoutineId: routine.id, setActiveRoutine, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine }),
       page === 'robot'
-        ? h('main', { className: 'page-main' }, h(RobotPage, { robot, setRobot, accent, mcpEnabled, agentProposal: agentProposal && agentProposal.operation === 'configureRobot' ? agentProposal : null, onApplyProposal: applyAgentProposal, onRejectProposal: rejectAgentProposal }))
+        ? h('main', { className: 'page-main' }, h(RobotPage, { robot, setRobot, mcpEnabled, agentProposal: agentProposal && agentProposal.operation === 'configureRobot' ? agentProposal : null, onApplyProposal: applyAgentProposal, onRejectProposal: rejectAgentProposal }))
         : page === 'auto'
         ? h('main', { className: 'stage stage-auto' },
             h('nav', { className: 'rail rail-l', 'aria-label': 'Autonomous routine steps' },
               h(RoutinePanelPlayback, { store: routinePlaybackStore, routine, run, paths: project.paths, selId: routineSel, onSelect: setRoutineSel, acq })),
             h('div', { className: 'fieldcol' },
-              h(RoutineFieldPlayback, { store: routinePlaybackStore, run, selectedId: routineSel, doc, derived, sel: { kind: null, idx: -1 }, tool: 'select', view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, actions: autoFieldActions, onSelPos: () => {} }),
-              h(RoutineTransportPlayback, { store: routinePlaybackStore, run, outcomes: routineOutcomes }),
+              h(RoutineFieldPlayback, { store: routinePlaybackStore, run, selectedId: routineSel, doc, derived, sel: { kind: null, idx: -1 }, tool: 'select', view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, actions: autoFieldActions }),
+              h(RoutineTransportPlayback, { store: routinePlaybackStore, run }),
               h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
             h('aside', { className: 'rail rail-r' + (selNode ? '' : ' collapsed'), 'aria-label': 'Routine step inspector' },
               selNode && h(StepInspector, { node: selNode, paths: project.paths, acq, run, javaProject: { ...javaProjectState, link: linkJavaProject } })))
@@ -1408,7 +1365,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
               derivation.error && h('div', { className: 'insert-preview derivation-error', role: 'alert' },
                 h('div', { className: 'insert-preview-copy' }, h('b', null, 'Path preview unavailable'), h('span', null, derivation.error.message || String(derivation.error))),
                 h('span', null, 'Showing the last valid preview. Undo or edit the selected geometry.')),
-              h(PlaybackField, { store: playbackStore, doc, derived, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, actions: fieldActions, onSelPos, showHandles: true }),
+              h(PlaybackField, { store: playbackStore, doc, derived, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, actions: fieldActions, showHandles: true }),
               tool !== 'select' && !waypointPreview && h('div', { className: 'stage-hint', dangerouslySetInnerHTML: { __html: toolHint(tool) } }),
               waypointPreview && h('div', { className: 'insert-preview', role: 'region', 'aria-label': 'Preview waypoint insertion' },
                 h('div', { className: 'insert-preview-copy' },
@@ -1432,11 +1389,11 @@ import { UnitPrefs } from "../lib/unitPreferences";
                   agentProposal.status === 'ready' && h('button', { type: 'button', onClick: rejectAgentProposal }, 'Reject'),
                   agentProposal.status === 'ready' && h('button', { className: 'primary', type: 'button', disabled: !agentCandidate || agentCandidate.valid === false || (agentProposal.blockingIssues && agentProposal.blockingIssues.length > 0), onClick: applyAgentProposal }, agentProposal.operation === 'replace' ? 'Apply repair' : 'Add path'))),
               h(Panels.ConstraintBar, { c: doc.constraints, robot, onOpen: () => select(null, -1) }),
-              h(PlaybackTransport, { store: playbackStore, derived, doc, metric, setMetric, graphOpen, setGraphOpen, plannerId: selectedPlannerId }),
+              h(PlaybackTransport, { store: playbackStore, derived, doc, metric, setMetric, graphOpen, setGraphOpen }),
               h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid, graphOpen })),
             h('aside', { className: 'rail rail-r' + (inspectorOpen ? '' : ' collapsed'), 'aria-label': 'Path inspector' },
               inspectorOpen
-                ? h(ContextInspector, { doc, sel, derived, actions: inspActions, accent, drive: robot.drive, robot, plannerId: selectedPlannerId, javaProject: { ...javaProjectState, link: linkJavaProject, openRecent: openRecentJavaProject, refresh: refreshJavaProject, install: installJavaSupport, build: buildJavaCatalog, cancelBuild: cancelJavaCatalogBuild, export: () => onExportJava('linked') }, onClose: () => setInspectorOpen(false) })
+                ? h(ContextInspector, { doc, sel, derived, actions: inspActions, drive: robot.drive, robot, javaProject: { ...javaProjectState, link: linkJavaProject, openRecent: openRecentJavaProject, refresh: refreshJavaProject, install: installJavaSupport, build: buildJavaCatalog, cancelBuild: cancelJavaCatalogBuild, export: () => onExportJava('linked') }, onClose: () => setInspectorOpen(false) })
                 : h('button', { className: 'inspector-tab', type: 'button', title: 'Show inspector', onClick: () => setInspectorOpen(true) }, h(UI.Icon, { name: 'sliders', size: 16 }), h('span', null, 'Inspector'))),
             headMenu && h(UI.ContextMenu, { x: headMenu.x, y: headMenu.y, items: headMenu.items, onClose: () => setHeadMenu(null) })));
   }

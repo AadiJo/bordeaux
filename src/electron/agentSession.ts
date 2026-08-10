@@ -37,15 +37,14 @@ export type AgentPlanningRunner = (job: AgentPlanningJob, signal?: AbortSignal) 
 export async function runAgentPlanningJobDirect(job: AgentPlanningJob): Promise<unknown> {
   if (job.kind === "analyze") {
     return analyzePath(job.snapshot.project, job.pathId, {
-      plannerId: job.snapshot.plannerId,
       sampleLimit: job.sampleLimit,
       minimumClearanceM: job.minimumClearanceM,
     });
   }
   if (job.kind === "repair") {
-    return generateRepairCandidates(job.snapshot.project, job.pathId, job.findingIds, job.snapshot.plannerId, job.minimumClearanceM);
+    return generateRepairCandidates(job.snapshot.project, job.pathId, job.findingIds, job.minimumClearanceM);
   }
-  return generateRouteCandidates(job.snapshot.project, job.request, job.snapshot.plannerId);
+  return generateRouteCandidates(job.snapshot.project, job.request);
 }
 
 function requireSnapshot(snapshot: AgentSessionSnapshot | null): AgentSessionSnapshot {
@@ -68,7 +67,7 @@ function publicSession(snapshot: AgentSessionSnapshot, catalog: JavaCommandCatal
       heightM: snapshot.project.robot.heightM ?? null,
       heightKnown: snapshot.project.robot.heightM !== undefined,
     },
-    plannerId: snapshot.plannerId,
+    plannerId: snapshot.project.plannerId,
     allianceView: snapshot.allianceView,
     coordinateContext: {
       authoredFrame: "Bordeaux overhead-image coordinates: red is low-X/left, blue is high-X/right, +Y is screen-up.",
@@ -287,14 +286,14 @@ export class AgentSessionService {
     const pathId = "pathId" in request.params && request.params.pathId ? request.params.pathId : snapshot.activePathId;
     if (request.method === "analyze_path") {
       return this.executePlanning({
-        kind: "analyze", snapshot: clone(snapshot), pathId,
+        kind: "analyze", snapshot, pathId,
         sampleLimit: request.params.sampleLimit,
         minimumClearanceM: request.params.minimumClearanceM,
       }, snapshot, signal);
     }
     if (request.method === "repair_path") {
       const candidates = await this.executePlanning<ReturnType<typeof generateRepairCandidates>>({
-        kind: "repair", snapshot: clone(snapshot), pathId,
+        kind: "repair", snapshot, pathId,
         findingIds: request.params.findingIds,
         minimumClearanceM: request.params.minimumClearanceM,
       }, snapshot, signal);
@@ -324,7 +323,7 @@ export class AgentSessionService {
       throw new Error("This robot profile requires target-facing shooter alignment. Add finishFacing with an official HUB reference before requesting shoot-fuel.");
     }
     const candidates = await this.executePlanning<ReturnType<typeof generateRouteCandidates>>({
-      kind: "route", snapshot: clone(snapshot), request: clone(request.params),
+      kind: "route", snapshot, request: request.params,
     }, snapshot, signal);
     if (candidates.length === 0) throw new Error("Bordeaux could not generate route candidates for that request.");
     if (request.params.endAction) {

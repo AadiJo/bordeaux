@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { buildBdxExport } from "./bdx";
 import { DEFAULT_SAMPLES_PER_SEGMENT } from "../planners/limits";
 import { validateProjectJavaInvocations } from "../javaCommands";
-import type { AutonomousRoutine, BordeauxProject, CommandInvocation, FollowMode, JavaCommandCatalog, PathDoc, RoutineNode, TrajectorySample } from "../types";
+import { activeRoutine } from "../project/routines";
+import type { BordeauxProject, CommandInvocation, FollowMode, JavaCommandCatalog, PathDoc, RoutineNode, TrajectorySample } from "../types";
 
 const MAX_SAMPLE_COUNT = 100_000;
 const MAX_EVENT_COUNT = 2_000;
@@ -57,8 +58,13 @@ export interface JavaTrajectoryDocument {
     acceleration: "meters_per_second_squared";
   };
   robot: ReturnType<typeof buildBdxExport>["robot"];
-  routine: AutonomousRoutine | null;
+  routine: JavaTrajectoryRoutine | null;
   paths: JavaTrajectoryPath[];
+}
+
+interface JavaTrajectoryRoutine {
+  name: string;
+  nodes: RoutineNode[];
 }
 
 export interface BuiltJavaTrajectory {
@@ -160,8 +166,9 @@ function assertExportSize(value: unknown): void {
   }
 }
 
-function deployableRoutine(project: BordeauxProject, pathIds: Set<string>): AutonomousRoutine | null {
-  if (!project.routine) return null;
+function deployableRoutine(project: BordeauxProject, pathIds: Set<string>): JavaTrajectoryRoutine | null {
+  const routine = activeRoutine(project);
+  if (!routine) return null;
   const nodes = (source: RoutineNode[]): RoutineNode[] => source.map((node) => {
     if (node.type === "path") {
       if (!pathIds.has(node.ref)) throw new Error(`Routine path ${node.ref} is not Java-exportable`);
@@ -176,7 +183,7 @@ function deployableRoutine(project: BordeauxProject, pathIds: Set<string>): Auto
     }
     return { id: node.id, type: "function", cat: "command", title: node.title, invocation: node.invocation };
   });
-  return { name: project.routine.name, nodes: nodes(project.routine.nodes) };
+  return { name: routine.name, nodes: nodes(routine.nodes) };
 }
 
 export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaCommandCatalog): BuiltJavaTrajectory {
@@ -224,9 +231,10 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
   native.paths.forEach((path, pathIndex) => {
     sampleCount += path.samples.length;
     if (sampleCount > MAX_SAMPLE_COUNT) throw new Error(`Java trajectory export exceeds ${MAX_SAMPLE_COUNT} samples`);
+    const sourceMarkers = new Map(sourcePaths[pathIndex].markers.map((marker) => [marker.id, marker]));
     const events = path.markers.flatMap((marker) => {
       if (!marker.invocation) return [];
-      const source = sourcePaths[pathIndex].markers.find((candidate) => candidate.id === marker.id);
+      const source = sourceMarkers.get(marker.id);
       if (source?.schedule?.endTimeS !== undefined && source.schedule.endTimeS < marker.timeS) {
         throw new Error(`Event ${marker.name} ends before it starts`);
       }

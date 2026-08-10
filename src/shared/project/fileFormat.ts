@@ -2,16 +2,10 @@ import type { BordeauxProject } from "../types";
 import { validateProject } from "../validation";
 import { normalizeProject } from "./normalize";
 
-export const CURRENT_PROJECT_SCHEMA_VERSION = "1.0" as const;
-
-export type ProjectSourceFormat =
-  | "bordeaux-project-1.0"
-  | "unversioned-project"
-  | "browser-path-2.0";
+const CURRENT_PROJECT_SCHEMA_VERSION = "1.0" as const;
 
 export interface DecodedProjectFile {
   project: BordeauxProject;
-  sourceFormat: ProjectSourceFormat;
   migrated: boolean;
 }
 
@@ -38,22 +32,32 @@ function needsV1Migration(value: Record<string, unknown>): boolean {
   const hasMissingPathId = Array.isArray(value.paths) && value.paths.some((path) =>
     isRecord(path) && (typeof path.id !== "string" || !path.id.trim()),
   );
-  const routine = isRecord(value.routine) ? value.routine : undefined;
-  return hasMissingPathId || hasNumericRoutineReference(routine?.nodes);
+  const routines = Array.isArray(value.routines) ? value.routines : [];
+  const routineIds = new Set(routines.flatMap((routine) =>
+    isRecord(routine) && typeof routine.id === "string" && routine.id.trim() ? [routine.id] : [],
+  ));
+  const hasInvalidRoutineState = routines.length === 0
+    || routines.some((routine) => !isRecord(routine) || typeof routine.id !== "string" || !routine.id.trim())
+    || typeof value.activeRoutineId !== "string"
+    || !routineIds.has(value.activeRoutineId);
+  const hasNumericReference = routines.some((routine) => isRecord(routine) && hasNumericRoutineReference(routine.nodes))
+    || (isRecord(value.routine) && hasNumericRoutineReference(value.routine.nodes));
+  const hasInvalidPlanner = value.plannerId !== "profiledSpline" && value.plannerId !== "optimizedTrajectory";
+  return hasMissingPathId || "routine" in value || hasInvalidRoutineState || hasNumericReference || hasInvalidPlanner;
 }
 
-function validatedProject(value: unknown, sourceFormat: ProjectSourceFormat, migrated: boolean): DecodedProjectFile {
+function validatedProject(value: unknown, migrated: boolean): DecodedProjectFile {
   const project = normalizeProject(value);
   const validation = validateProject(project);
   if (!validation.ok) {
     const message = validation.issues.map((item) => `${item.path}: ${item.message}`).join("\n");
     throw new Error(`Invalid Bordeaux project:\n${message}`);
   }
-  return { project: project as BordeauxProject, sourceFormat, migrated };
+  return { project: project as BordeauxProject, migrated };
 }
 
 export function decodeProjectValue(value: unknown): DecodedProjectFile {
-  if (!isRecord(value)) return validatedProject(value, "bordeaux-project-1.0", false);
+  if (!isRecord(value)) return validatedProject(value, false);
 
   if (value.schemaVersion !== undefined) {
     if (value.schemaVersion !== CURRENT_PROJECT_SCHEMA_VERSION) {
@@ -62,13 +66,12 @@ export function decodeProjectValue(value: unknown): DecodedProjectFile {
         `This version of Bordeaux supports ${CURRENT_PROJECT_SCHEMA_VERSION}.`,
       );
     }
-    return validatedProject(value, "bordeaux-project-1.0", needsV1Migration(value));
+    return validatedProject(value, needsV1Migration(value));
   }
 
   if (Array.isArray(value.paths)) {
     return validatedProject(
       { ...value, schemaVersion: CURRENT_PROJECT_SCHEMA_VERSION },
-      "unversioned-project",
       true,
     );
   }
@@ -87,15 +90,13 @@ export function decodeProjectValue(value: unknown): DecodedProjectFile {
         name,
         robot,
         paths: [path],
-        routine: { name: "Autonomous Routine", nodes: [] },
         plannerId: "profiledSpline",
       },
-      "browser-path-2.0",
       true,
     );
   }
 
-  return validatedProject(value, "bordeaux-project-1.0", false);
+  return validatedProject(value, false);
 }
 
 export function decodeProjectFile(contents: string): DecodedProjectFile {

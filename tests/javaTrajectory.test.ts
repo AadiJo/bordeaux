@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildJavaTrajectory, javaTrajectoryFileName } from "../src/shared/export/javaTrajectory";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
-import type { JavaCommandCatalog } from "../src/shared/types";
+import type { AutonomousRoutine, JavaCommandCatalog } from "../src/shared/types";
 
 function generatedCatalog(): JavaCommandCatalog {
   return {
@@ -94,7 +94,7 @@ describe("Java trajectory export", () => {
   it("exports decisions and bound commands between paths", () => {
     const project = createDemoProject();
     const pathId = project.paths[0].id;
-    project.routine = { name: "Choose note", nodes: [{
+    const selectedRoutine: AutonomousRoutine = { id: "routine_selected", name: "Choose note", nodes: [{
       id: "note-present", type: "decision", cond: "frc.robot.Conditions#hasNote",
       thenLabel: "present", elseLabel: "missing",
       then: [{ id: "score", type: "function", cat: "command", invocation: {
@@ -103,9 +103,12 @@ describe("Java trajectory export", () => {
       } }, { id: "run-a", type: "path", ref: pathId }],
       else: [{ id: "run-b", type: "path", ref: pathId }],
     }] };
+    project.routines.push(selectedRoutine);
+    project.activeRoutineId = selectedRoutine.id;
 
     const routine = buildJavaTrajectory(project, generatedCatalog()).document.routine!;
 
+    expect(routine.name).toBe(selectedRoutine.name);
     expect(routine.nodes[0]).toEqual(expect.objectContaining({ type: "decision", cond: "frc.robot.Conditions#hasNote" }));
     expect((routine.nodes[0] as { then: unknown[] }).then[0]).toEqual(expect.objectContaining({ cat: "command" }));
   });

@@ -14,7 +14,6 @@ export interface AgentSessionSnapshot {
   sessionId: string;
   revision: number;
   project: BordeauxProject;
-  plannerId: TrajectoryPlannerId;
   activePathId: string;
   allianceView: AllianceColor;
   fieldPack: {

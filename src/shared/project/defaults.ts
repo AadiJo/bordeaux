@@ -1,5 +1,6 @@
 import { PM } from "../math/pm";
 import { FIELD_H, FIELD_W, clampWorldPoint } from "../math/fieldBounds";
+import { createPathId, createRoutineId } from "./ids";
 import type {
   BordeauxProject,
   PathConstraints,
@@ -9,6 +10,7 @@ import type {
 } from "../types";
 
 export { FIELD_H, FIELD_W, clampWorldPoint };
+export { createMarkerId, createPathId, createPathLinkId, createRoutineId } from "./ids";
 
 export const DEFAULT_CONSTRAINTS: PathConstraints = {
   maxVel: 4.2,
@@ -20,22 +22,6 @@ export const DEFAULT_CONSTRAINTS: PathConstraints = {
   maxJerk: 0,
   maxAngJerk: 0,
 };
-
-export function createPathId(): string {
-  return `path_${globalThis.crypto.randomUUID()}`;
-}
-
-export function createMarkerId(): string {
-  return `event_${globalThis.crypto.randomUUID()}`;
-}
-
-export function createRoutineId(): string {
-  return `routine_${globalThis.crypto.randomUUID()}`;
-}
-
-export function createPathLinkId(): string {
-  return `pathlink_${globalThis.crypto.randomUUID()}`;
-}
 
 type RawWaypoint = Partial<Waypoint> & {
   x: number;
@@ -83,7 +69,7 @@ export function blankPath(name = "NewPath"): PathDoc {
     targets: [],
     markers: [],
     ranges: [],
-    constraints: clone(DEFAULT_CONSTRAINTS),
+    constraints: { ...DEFAULT_CONSTRAINTS },
     headingMode: "targets",
     startVel: 0,
     goalVel: 0,
@@ -106,7 +92,7 @@ export function createDemoProject(): BordeauxProject {
     pathLinks: [],
     routines: [routine],
     activeRoutineId: routine.id,
-    routine,
+    plannerId: "profiledSpline",
     editor: { activePathId: path.id },
   };
 }

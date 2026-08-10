@@ -8,10 +8,6 @@ import type { DecodedProjectFile } from "../shared/project/fileFormat";
 const writeQueues = new Map<string, Promise<void>>();
 const MAX_PROJECT_FILE_BYTES = 16 * 1024 * 1024;
 
-export function parseProject(contents: string): BordeauxProject {
-  return decodeProjectFile(contents).project;
-}
-
 export async function readProject(filePath: string): Promise<DecodedProjectFile> {
   const stat = await fs.lstat(filePath);
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Bordeaux project must be a regular file");

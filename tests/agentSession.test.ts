@@ -12,7 +12,6 @@ function snapshot(revision = 0) {
     sessionId: "session_test",
     revision,
     project,
-    plannerId: "profiledSpline" as const,
     activePathId: project.paths[0].id,
     allianceView: "blue" as const,
     fieldPack: { id: "2026-rebuilt" as const, revision: "test" },
