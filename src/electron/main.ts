@@ -750,7 +750,8 @@ handle("project:save", async (_event, project, rawSaveAs) => {
   }
   await writeProject(target, project);
   await rememberFile(target);
-  dirty = false;
+  // The renderer owns edit revisions and acknowledges a clean save through
+  // project:setDirty only if the project stayed unchanged during this write.
   return { saved: true };
 });
 
