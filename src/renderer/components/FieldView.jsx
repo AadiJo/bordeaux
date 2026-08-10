@@ -326,7 +326,7 @@ import { UI } from "./ui";
       if (d.role === 'head') {
         const w = doc.waypoints[d.idx];
         if (w) {
-          if (!d.historyStarted && actions.beginHistory) { actions.beginHistory(); d.historyStarted = true; }
+          if (!d.historyStarted && actions.beginEdit) { actions.beginEdit(); d.historyStarted = true; }
           let deg = Math.atan2(world.y - w.y, world.x - w.x) * 180 / Math.PI;
           let label = null;
           if (e.shiftKey) deg = Math.round(deg / 15) * 15;
@@ -346,7 +346,7 @@ import { UI } from "./ui";
         d.moved = true; return;
       }
       d.moved = true;
-      if (!d.historyStarted && actions.beginHistory) { actions.beginHistory(); d.historyStarted = true; }
+      if (!d.historyStarted && actions.beginEdit) { actions.beginEdit(); d.historyStarted = true; }
       const p = d.role === 'ct' ? world : clampWorld(world);
       if (d.role === 'wp') actions.moveWaypoint(d.idx, p);
       else if (d.role === 'ct') actions.moveHandle(d.idx >> 1, d.idx & 1, p);
@@ -376,6 +376,7 @@ import { UI } from "./ui";
       setSnap(null);
       try { svgRef.current.releasePointerCapture(e.pointerId); } catch (_) {}
       if (!d) return;
+      if (d.historyStarted && actions.finishEdit) actions.finishEdit();
       if (d.role === 'newrange') {
         setPreview(null);
         const f0 = d.f0, f1 = d.f1;
@@ -426,7 +427,9 @@ import { UI } from "./ui";
 
     const onCancel = (event) => {
       if (moveFrame.current) cancelAnimationFrame(moveFrame.current);
+      const d = drag.current;
       moveFrame.current = 0; pendingMove.current = null; drag.current = null; setSnap(null);
+      if (d && d.historyStarted && actions.cancelEdit) actions.cancelEdit();
       try { svgRef.current.releasePointerCapture(event.pointerId); } catch (_) {}
     };
     useEffect(() => {

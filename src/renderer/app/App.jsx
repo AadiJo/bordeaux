@@ -1,4 +1,5 @@
 import * as React from "react";
+import { PathPreview } from "../assets/path-preview";
 import { ContextInspector } from "../components/ContextInspector";
 import { FIELD_DIMS, FieldView } from "../components/FieldView";
 import { Panels } from "../components/Panels";
@@ -163,6 +164,38 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     return h(RoutineTransport, { run, time: playback.time, playing: playback.playing, controls: store, running });
   }
 
+  /** Keeps the last valid preview visible while new geometry is derived off-thread. */
+  function usePathPreview(doc, robot, plannerId, quality) {
+    const previewer = useMemo(() => PathPreview.create(), []);
+    const fallback = useMemo(() => {
+      try { return { value: PM.derivePath(doc, robot, 14, plannerId), error: null }; }
+      catch (error) { return { value: null, error }; }
+    }, [doc.id, robot, plannerId]);
+    const lastValid = useRef(fallback.value);
+    const [snapshot, setSnapshot] = useState(() => ({
+      status: fallback.value ? 'ready' : 'error',
+      key: doc.id,
+      value: fallback.value,
+      error: fallback.error,
+      durationMs: 0,
+    }));
+
+    useEffect(() => previewer.subscribe(() => setSnapshot(previewer.getSnapshot())), [previewer]);
+    useEffect(() => {
+      previewer.request({ key: doc.id, path: doc, robot, plannerId, quality });
+    }, [previewer, doc, robot, plannerId, quality]);
+    useEffect(() => () => previewer.destroy(), [previewer]);
+
+    const current = snapshot.key === doc.id ? snapshot.value : fallback.value;
+    if (current) lastValid.current = current;
+    return {
+      value: current || lastValid.current,
+      error: snapshot.key === doc.id ? snapshot.error : fallback.error,
+      pending: snapshot.status === 'pending',
+      durationMs: snapshot.durationMs || 0,
+    };
+  }
+
   function App() {
     const [project, setProject] = useState(() => freshProject());
     const plannerId = project.plannerId;
@@ -181,6 +214,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const [tool, setTool] = useState('select');
     const [waypointPreview, setWaypointPreview] = useState(null);
     const [headMenu, setHeadMenu] = useState(null);
+    const [draftDoc, setDraftDoc] = useState(null);
     const [dirty, setDirty] = useState(false);
     const [agentProposal, setAgentProposal] = useState(null);
     const [agentCandidateId, setAgentCandidateId] = useState(null);
@@ -194,6 +228,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const javaRestoreGeneration = useRef(0);
     const skipDirty = useRef(true);
     const keyboardNavigation = useRef(false);
+    const draftRef = useRef(null);
     const playbackStore = useMemo(() => createPlaybackStore(), []);
     const routinePlaybackStore = useMemo(() => createPlaybackStore(), []);
     useEffect(() => () => { playbackStore.destroy(); routinePlaybackStore.destroy(); }, [playbackStore, routinePlaybackStore]);
@@ -353,13 +388,13 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const robot = project.robot;
     const accent = ACCENT;
 
-    const doc = project.paths[activeIdx];
+    const persistedDoc = project.paths[activeIdx];
+    const doc = draftDoc && persistedDoc && draftDoc.id === persistedDoc.id ? draftDoc : persistedDoc;
     const docRef = useRef(doc); docRef.current = doc;
     const hist = useRef({ past: [], future: [] });
     const routineHist = useRef({ past: [], future: [] });
     const projectHist = useRef({ past: [], future: [] });
     const autosaveRevision = useRef(0);
-    const lastDerived = useRef(null);
     const [, force] = useState(0);
 
     useEffect(() => {
@@ -452,13 +487,9 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }, []);
 
     // ---- derived path data ----
-    const derivation = useMemo(() => {
-      try { return { value: PM.derivePath(doc, robot, PERSEG, plannerId), error: null }; }
-      catch (error) { return { value: null, error }; }
-    }, [doc, robot, plannerId]);
-    if (derivation.value) lastDerived.current = derivation.value;
-    if (!lastDerived.current) throw derivation.error || new Error('Could not derive the active path');
-    const derived = derivation.value || lastDerived.current;
+    const derivation = usePathPreview(doc, robot, plannerId, draftDoc ? 'interactive' : 'final');
+    if (!derivation.value) throw derivation.error || new Error('Could not derive the active path');
+    const derived = derivation.value;
 
     useEffect(() => { setTimes((t) => (t[doc.id] === derived.prof.totalTime ? t : { ...t, [doc.id]: derived.prof.totalTime })); }, [derived, doc.id]);
 
@@ -469,7 +500,34 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }); }, [activeIdx]);
     const beginHistory = useCallback(() => { hist.current.past.push(clone(docRef.current)); if (hist.current.past.length > 80) hist.current.past.shift(); hist.current.future = []; projectHist.current.future = []; force((x) => x + 1); }, []);
     const commit = useCallback((fn) => { beginHistory(); writeDoc(fn(clone(docRef.current))); }, [beginHistory, writeDoc]);
-    const mutate = useCallback((fn) => { writeDoc(fn(clone(docRef.current))); }, [writeDoc]);
+    const beginEdit = useCallback(() => {
+      if (draftRef.current) return;
+      beginHistory();
+      draftRef.current = clone(docRef.current);
+    }, [beginHistory]);
+    const finishEdit = useCallback(() => {
+      const next = draftRef.current;
+      if (!next) return;
+      draftRef.current = null;
+      setDraftDoc(null);
+      writeDoc(next);
+    }, [writeDoc]);
+    const cancelEdit = useCallback(() => {
+      if (!draftRef.current) return;
+      draftRef.current = null;
+      setDraftDoc(null);
+      hist.current.past.pop();
+      force((x) => x + 1);
+    }, []);
+    useEffect(() => {
+      if (draftRef.current && persistedDoc && draftRef.current.id !== persistedDoc.id) cancelEdit();
+    }, [persistedDoc && persistedDoc.id, cancelEdit]);
+    const mutate = useCallback((fn) => {
+      if (!draftRef.current) { writeDoc(fn(clone(docRef.current))); return; }
+      const next = fn(clone(draftRef.current));
+      draftRef.current = next;
+      setDraftDoc(next);
+    }, [writeDoc]);
 
     const undo = useCallback(() => {
       const H = hist.current;
@@ -986,8 +1044,8 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       setSegMeta, setSegmentHeadingMode, setHeadingTransition, setSegmentLookAt, setJiggle, faceWaypoint, duplicateWp, reversePath, reorderWp, insertWp,
       setStop, setWait, setTurnInPlace, setTurnInPlaceMeta, setHeadingMode, toggleDriveBackward,
       openInspector: () => setInspectorOpen(true) };
-    const fieldActions = { addWaypoint, appendWaypoint, moveWaypoint, moveHandle, addTargetAt, addMarkerAt, moveTargetTo, rotateTargetTo, moveMarkerTo, addRange, moveRangeHandle, beginHistory,
-      setWaypointHeading, moveSegmentLookAt, headingMenu, delWp, delTarget, delMarker, delRange,
+    const fieldActions = { addWaypoint, appendWaypoint, moveWaypoint, moveHandle, addTargetAt, addMarkerAt, moveTargetTo, rotateTargetTo, moveMarkerTo, addRange, moveRangeHandle, beginEdit, finishEdit, cancelEdit,
+      setWaypointHeading, moveSegmentLookAt, headingMenu, faceWaypoint, delWp, delTarget, delMarker, delRange,
       openInspector: () => setInspectorOpen(true),
       select };
 

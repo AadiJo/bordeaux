@@ -118,9 +118,20 @@ describe("renderer application", () => {
 
   it("contains planner failures and retains the last valid preview", () => {
     const app = fs.readFileSync(new URL("../src/renderer/app/App.jsx", import.meta.url), "utf8");
-    expect(app).toContain("const lastDerived = useRef(null)");
+    expect(app).toContain("PathPreview.create()");
+    expect(app).toContain("const lastValid = useRef(fallback.value)");
     expect(app).toContain("derivation.error && h('div'");
     expect(app).toContain("class AppErrorBoundary");
+  });
+
+  it("commits canvas edits once per completed pointer gesture", () => {
+    const app = fs.readFileSync(new URL("../src/renderer/app/App.jsx", import.meta.url), "utf8");
+    const field = fs.readFileSync(new URL("../src/renderer/components/FieldView.jsx", import.meta.url), "utf8");
+    expect(app).toContain("const [draftDoc, setDraftDoc] = useState(null)");
+    expect(app).toContain("beginEdit, finishEdit, cancelEdit");
+    expect(field).toContain("actions.finishEdit()");
+    expect(field).toContain("actions.cancelEdit()");
+    expect(field).not.toContain("actions.beginHistory");
   });
 
   it("coalesces pointer motion and cleans up global drag listeners", () => {
