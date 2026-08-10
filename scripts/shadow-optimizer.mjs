@@ -7,10 +7,21 @@ const { fixedPathSamples, getPlanner, normalizePhysicalPlannerInput } = require(
 const { validateOptimizedTrajectory } = require('../dist-electron/shared/planners/trajectoryValidation.js');
 const { buildDenseValidationSamples } = require('../dist-electron/shared/planners/optimizedTrajectory.js');
 const { translationPriorityStartIndex } = require('../dist-electron/shared/planners/rotationPriority.js');
+
+function positiveNumberFromEnvironment(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  if (!(value > 0) || !Number.isFinite(value)) throw new Error(`${name} must be finite and positive.`);
+  return value;
+}
+
 const requestedRuns = Number.parseInt(process.env.BORDEAUX_SHADOW_RUNS ?? '20', 10);
 if (!Number.isInteger(requestedRuns) || requestedRuns < 5 || requestedRuns > 200) {
   throw new Error('BORDEAUX_SHADOW_RUNS must be an integer from 5 through 200.');
 }
+const commonP95LimitMs = positiveNumberFromEnvironment('BORDEAUX_SHADOW_COMMON_P95_LIMIT_MS', 30);
+const stressP95LimitMs = positiveNumberFromEnvironment('BORDEAUX_SHADOW_STRESS_P95_LIMIT_MS', 100);
 
 function percentile(values, fraction) {
   const sorted = values.toSorted((left, right) => left - right);
@@ -40,6 +51,8 @@ const aggregate = {
   deterministicMismatches: 0,
   latencyMs: {
     runsPerCase: requestedRuns,
+    commonP95Limit: commonP95LimitMs,
+    stressP95Limit: stressP95LimitMs,
     commonP50Max: 0,
     commonP95Max: 0,
     stressP50Max: 0,
@@ -82,7 +95,7 @@ for (const corpusCase of optimizerCorpus()) {
   aggregate.latencyMs[`${latencyKind}P50Max`] = Math.max(aggregate.latencyMs[`${latencyKind}P50Max`], p50);
   aggregate.latencyMs[`${latencyKind}P95Max`] = Math.max(aggregate.latencyMs[`${latencyKind}P95Max`], p95);
   aggregate.latencyMs.max = Math.max(aggregate.latencyMs.max, ...durations);
-  if (p95 > (corpusCase.stress ? 100 : 30)) aggregate.latencyFailures += 1;
+  if (p95 > (corpusCase.stress ? stressP95LimitMs : commonP95LimitMs)) aggregate.latencyFailures += 1;
 
   aggregate.cases += 1;
   aggregate.statuses[status] = (aggregate.statuses[status] || 0) + 1;

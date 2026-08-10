@@ -39,6 +39,10 @@ jobs:
       - run: npm test
       - run: npm run typecheck
       - run: npm run shadow:optimizer
+        env:
+          # Keep package runners gated without applying workstation thresholds.
+          BORDEAUX_SHADOW_COMMON_P95_LIMIT_MS: "75"
+          BORDEAUX_SHADOW_STRESS_P95_LIMIT_MS: "150"
       - run: npm run ${{ matrix.command }}
       - run: npm run verify:package -- release
       - uses: actions/upload-artifact@v4

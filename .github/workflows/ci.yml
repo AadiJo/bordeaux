@@ -24,6 +24,10 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm run shadow:optimizer
+        env:
+          # Hosted runners are slower and noisier than the reference-machine gate.
+          BORDEAUX_SHADOW_COMMON_P95_LIMIT_MS: "75"
+          BORDEAUX_SHADOW_STRESS_P95_LIMIT_MS: "150"
       - run: npm run test:java-integration:built
       - run: npm audit --audit-level=high
       - name: Configure Electron sandbox

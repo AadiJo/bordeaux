@@ -172,7 +172,10 @@
     const baseline = baselineResult.derived;
     const baselineClearance = window.TrajectoryClearance.clearanceReport(authored, robot, baseline);
     if (!baselineClearance.heightValid) {
-      return { status: 'unchanged', corridorM, clearanceM, reason: 'The authored robot is too tall for a TRENCH crossing on this path.' };
+      const reason = Number.isFinite(robot.heightM)
+        ? 'The authored robot is too tall for a TRENCH crossing on this path.'
+        : 'Robot height is required to verify TRENCH clearance for this path.';
+      return { status: 'unchanged', corridorM, clearanceM, reason };
     }
     if (baselineClearance.official < -1e-6) {
       return { status: 'unchanged', corridorM, clearanceM, reason: 'The authored robot footprint intersects an official field obstacle. Fix that collision before refining geometry.' };

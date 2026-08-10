@@ -169,7 +169,7 @@
     const checkHeight = (section, portals) => {
       const matching = portals.filter((portal) => section.minY >= portal.minY - EPSILON && section.maxY <= portal.maxY + EPSILON);
       if (matching.length === 1 && matching[0].traversal === 'trench'
-        && Number.isFinite(robot.heightM) && robot.heightM > TRENCH_CLEARANCE_M + EPSILON) heightValid = false;
+        && (!Number.isFinite(robot.heightM) || robot.heightM > TRENCH_CLEARANCE_M + EPSILON)) heightValid = false;
     };
     barriers.forEach((barrier) => {
       poses.forEach((pose) => {
@@ -182,7 +182,7 @@
         ), -Infinity);
         if (section) {
           minimum = Math.min(minimum, lateral);
-          checkHeight(section, barrier.portals);
+          if (Math.abs(pose.x - barrier.x) <= EPSILON) checkHeight(section, barrier.portals);
         }
         else if (lateral < 0) {
           const longitudinal = barrier.x < footprintBox.min.x
