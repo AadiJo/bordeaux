@@ -123,6 +123,11 @@ import { PM } from "../lib/pathMath";
         inFlight = null;
         nextWorker.terminate();
         worker = null;
+        if (!queued && completed && completed.retried) {
+          queued = completed;
+          runDirect();
+          return;
+        }
         let next = queued;
         queued = null;
         if (!next && completed && !completed.retried) next = { ...completed, retried: true };

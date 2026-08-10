@@ -16,7 +16,7 @@ class FakeWorker {
 
 function previewModule() {
   return loadRendererExport<{
-    create(options: { workerFactory: () => FakeWorker }): {
+    create(options: { workerFactory: () => FakeWorker; derive?: (job: unknown) => unknown }): {
       request(input: { path: unknown; robot: unknown; plannerId: string; quality: "interactive" | "final"; key?: string }): number;
       getSnapshot(): { status: string; revision: number; quality: string; path: unknown; value: unknown };
       retain(): () => void;
@@ -116,6 +116,28 @@ describe("renderer path preview scheduler", () => {
     expect(workers[0].terminated).toBe(true);
     expect(workers[1].jobs).toEqual([expect.objectContaining({ id: second })]);
     expect(workers[1].jobs).not.toContainEqual(expect.objectContaining({ id: first }));
+  });
+
+  it("falls back to direct derivation when a retried worker job also fails", async () => {
+    const workers = [new FakeWorker(), new FakeWorker(), new FakeWorker()];
+    let workerIndex = 0;
+    const preview = previewModule().create({
+      workerFactory: () => workers[workerIndex++],
+      derive: () => ({ recovered: true }),
+    });
+    const revision = preview.request({ path: { id: "path" }, robot: {}, plannerId: "profiledSpline", quality: "interactive", key: "path" });
+
+    workers[0].fail();
+    workers[1].fail();
+    await Promise.resolve();
+
+    expect(workerIndex).toBe(2);
+    expect(preview.getSnapshot()).toMatchObject({ status: "ready", revision, value: { recovered: true } });
+
+    const nextRevision = preview.request({ path: { id: "path", x: 2 }, robot: {}, plannerId: "profiledSpline", quality: "interactive", key: "path" });
+    expect(workerIndex).toBe(3);
+    workers[2].resolve({ id: nextRevision, value: { recovered: "worker" }, durationMs: 1 });
+    expect(preview.getSnapshot()).toMatchObject({ status: "ready", revision: nextRevision, value: { recovered: "worker" } });
   });
 
   it("survives a StrictMode cleanup followed immediately by remount", async () => {
