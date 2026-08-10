@@ -18,7 +18,7 @@ function option(name, fallback) {
 const mergeBase = execFileSync("git", ["merge-base", "origin/main", "HEAD"], { cwd: repository, encoding: "utf8" }).trim();
 const baselineRef = option("baseline", mergeBase);
 const candidateRef = option("candidate", "HEAD");
-const trials = Number.parseInt(option("trials", process.env.BORDEAUX_BROWSER_TRIALS || "3"), 10);
+const trials = Number.parseInt(option("trials", process.env.BORDEAUX_BROWSER_TRIALS || "4"), 10);
 const latencySamples = option("latency-samples", process.env.BORDEAUX_BROWSER_LATENCY_SAMPLES || "24");
 const stressMs = option("stress-ms", process.env.BORDEAUX_BROWSER_STRESS_MS || "2000");
 const correctnessOnly = process.argv.includes("--correctness-only");
@@ -26,6 +26,7 @@ const variantTimeoutMs = Number.parseInt(option("variant-timeout-ms", process.en
 const output = path.resolve(repository, option("output", ".benchmark-results/renderer-browser.json"));
 
 if (!Number.isInteger(trials) || trials < 1) throw new Error("--trials must be at least 1");
+if (!correctnessOnly && trials % 2 !== 0) throw new Error("--trials must be even so measured runs are counterbalanced");
 if (!Number.isFinite(variantTimeoutMs) || variantTimeoutMs < 1000) throw new Error("--variant-timeout-ms must be at least 1000");
 if (!correctnessOnly && (!Number.isInteger(Number.parseInt(latencySamples, 10)) || Number.parseInt(latencySamples, 10) < 1)) {
   throw new Error("--latency-samples must be at least 1");
@@ -177,7 +178,7 @@ const deviation = (values) => {
   return Math.sqrt(values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length);
 };
 
-function aggregate(runs, workerBundle) {
+function aggregate(runs, workerBundle, correctness = null) {
   const latency = runs.flatMap((run) => run.latency.samples);
   const frames = runs.flatMap((run) => run.stress.frameDeltas);
   const dropped = runs.reduce((sum, run) => sum + run.stress.droppedFrames, 0);
@@ -186,7 +187,7 @@ function aggregate(runs, workerBundle) {
   const updates = runs.reduce((sum, run) => sum + run.stress.correctCurveUpdates, 0);
   return {
     workerBundle,
-    correctness: runs.find((run) => run.correctness)?.correctness || null,
+    correctness,
     correctPaintMs: { p50: percentile(latency, 0.5), p95: percentile(latency, 0.95), trialP95Deviation: deviation(runs.map((run) => run.latency.correctPaintMs.p95)) },
     frameTimeMs: { p95: percentile(frames, 0.95), trialP95Deviation: deviation(runs.map((run) => run.stress.frameTimeMs.p95)) },
     droppedFramePercent: expected ? dropped / expected * 100 : 0,
@@ -216,13 +217,25 @@ function comparison(upstream, candidate) {
 
 const format = (value, digits = 2) => value === null || !Number.isFinite(value) ? "n/a" : Number(value.toFixed(digits));
 
+function correctnessFailures(checks, workerBundle) {
+  const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  if (!workerBundle) failedChecks.push("realWorkerBundle");
+  return failedChecks;
+}
+
+function measuredTransportFailures(runs) {
+  return runs.flatMap((run, index) => [
+    ...(!run.latency.applicationWorkerTransport ? [`candidate-${index + 1}:latencyApplicationWorkerTransport`] : []),
+    ...(!run.stress.applicationWorkerTransport ? [`candidate-${index + 1}:stressApplicationWorkerTransport`] : []),
+  ]);
+}
+
 try {
   if (correctnessOnly) {
     const candidateVariant = await buildVariant(candidateRef, "candidate");
     const run = await runVariant("candidate-correctness", candidateVariant, true, true);
     const checks = run.correctness || {};
-    const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
-    if (!candidateVariant.workerBundle) failedChecks.push("realWorkerBundle");
+    const failedChecks = correctnessFailures(checks, candidateVariant.workerBundle);
     if (failedChecks.length) throw new Error(`Candidate correctness checks failed: ${failedChecks.join(", ")}`);
     const report = {
       generatedAt: new Date().toISOString(),
@@ -241,32 +254,47 @@ try {
     buildVariant(baselineRef, "upstream"),
     buildVariant(candidateRef, "candidate"),
   ]);
+  const correctnessRun = await runVariant("candidate-correctness", candidateVariant, true, true);
+  const candidateChecks = correctnessRun.correctness || {};
+  const failedChecks = correctnessFailures(candidateChecks, candidateVariant.workerBundle);
+  if (failedChecks.length) throw new Error(`Candidate correctness checks failed: ${failedChecks.join(", ")}`);
+
+  const variantsByKey = { upstream: upstreamVariant, candidate: candidateVariant };
+  const warmupOrder = ["upstream", "candidate"];
+  for (const key of warmupOrder) {
+    await runVariant(`${key}-warmup`, variantsByKey[key], false);
+  }
+
   const runs = { upstream: [], candidate: [] };
+  const measuredSchedule = [];
   for (let trial = 0; trial < trials; trial++) {
     const order = trial % 2 === 0 ? ["upstream", "candidate"] : ["candidate", "upstream"];
+    measuredSchedule.push(order);
     for (const key of order) {
-      const variant = key === "upstream" ? upstreamVariant : candidateVariant;
-      runs[key].push(await runVariant(`${key}-${trial + 1}`, variant, key === "candidate" && trial === 0));
+      runs[key].push(await runVariant(`${key}-${trial + 1}`, variantsByKey[key], false));
     }
   }
+  const transportFailures = measuredTransportFailures(runs.candidate);
+  if (transportFailures.length) throw new Error(`Candidate application worker checks failed: ${transportFailures.join(", ")}`);
   const variants = {
     upstream: aggregate(runs.upstream, upstreamVariant.workerBundle),
-    candidate: aggregate(runs.candidate, candidateVariant.workerBundle),
+    candidate: aggregate(runs.candidate, candidateVariant.workerBundle, candidateChecks),
   };
-  const candidateChecks = variants.candidate.correctness || {};
-  const failedChecks = Object.entries(candidateChecks).filter(([, passed]) => !passed).map(([name]) => name);
-  if (!variants.candidate.workerBundle) failedChecks.push("realWorkerBundle");
-  if (failedChecks.length) throw new Error(`Candidate correctness checks failed: ${failedChecks.join(", ")}`);
   const report = {
     generatedAt: new Date().toISOString(),
     revisions: { upstream: revision(baselineRef), candidate: revision(candidateRef) },
     protocol: {
       fixture: "100-waypoint profiled spline plus a 3-waypoint path-switch fixture",
       viewport: "1440x900 offscreen Electron compositor at 60 Hz",
-      input: `mouse input at 120 Hz; ${latencySamples} isolated latency samples; ${stressMs} ms stress; ${trials} alternating trials`,
+      input: `mouse input at 120 Hz; ${latencySamples} isolated latency samples; ${stressMs} ms stress; ${trials} measured trials per variant`,
+      execution: {
+        correctness: "candidate-only child before warmups; excluded from timing",
+        discardedWarmups: warmupOrder,
+        measuredSchedule,
+      },
       correctPaint: "input dispatch to the first compositor bitmap containing per-input colors on the exact waypoint and centerline nodes after their screen/SVG geometry matches",
       droppedFrames: "missed 16.67 ms requestAnimationFrame slots between the bounded start and end of continuous input",
-      worker: "production Vite worker bundle loaded directly and required to complete a structured-clone request/result round trip",
+      worker: "query-gated application scheduler instrumentation proves a discarded preflight, then silently counts measured interactive worker round trips and direct fallbacks before emitting one summary",
       paintProof: "the offscreen NativeImage must contain the sample's unique waypoint color at the target and its unique centerline color immediately outside the waypoint",
     },
     variants,
