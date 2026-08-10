@@ -20,7 +20,10 @@ import { PM } from "../lib/pathMath";
     let queued = null;
     let directScheduled = false;
     let latestRevision = 0;
+    let publishedRevision = 0;
     let destroyed = false;
+    let retainCount = 0;
+    let retireRevision = 0;
     let snapshot = {
       status: 'idle',
       revision: 0,
@@ -34,23 +37,21 @@ import { PM } from "../lib/pathMath";
       durationMs: 0,
     };
 
-    try {
-      worker = workerFactory();
-    } catch (_error) {
-      worker = null;
-    }
-
     const notify = () => {
       listeners.forEach((listener) => listener());
     };
 
     const publish = (job, result) => {
-      if (destroyed || job.revision !== latestRevision) return;
+      if (destroyed || job.revision < publishedRevision) return;
+      const current = job.revision === latestRevision;
+      if (result.error && !current) return;
+      if (!result.error) publishedRevision = job.revision;
       snapshot = result.error
-        ? { ...snapshot, status: 'error', revision: job.revision, quality: job.quality, error: result.error, errorKey: job.key, errorPath: job.path }
+        ? { ...snapshot, status: 'error', revision: latestRevision, sourceRevision: job.revision, quality: job.quality, error: result.error, errorKey: job.key, errorPath: job.path }
         : {
-            status: 'ready',
-            revision: job.revision,
+            status: current ? 'ready' : 'pending',
+            revision: latestRevision,
+            sourceRevision: job.revision,
             quality: job.quality,
             key: job.key,
             path: job.path,
@@ -93,27 +94,57 @@ import { PM } from "../lib/pathMath";
       });
     };
 
-    if (worker) {
-      worker.onmessage = (event) => {
+    const destroy = () => {
+      if (destroyed) return;
+      destroyed = true;
+      queued = null;
+      inFlight = null;
+      listeners.clear();
+      if (worker) worker.terminate();
+      worker = null;
+    };
+
+    const attachWorker = (nextWorker) => {
+      worker = nextWorker;
+      nextWorker.onmessage = (event) => {
+        if (worker !== nextWorker || !inFlight || event.data.id !== inFlight.revision) return;
         const completed = inFlight;
         inFlight = null;
-        if (completed && event.data.id === completed.revision) publish(completed, event.data);
+        publish(completed, event.data);
         if (queued) {
           const next = queued;
           queued = null;
           send(next);
         }
       };
-      worker.onerror = (event) => {
+      nextWorker.onerror = (event) => {
+        if (worker !== nextWorker) return;
         const completed = inFlight;
         inFlight = null;
-        if (completed) publish(completed, { error: { message: event.message || 'Path preview worker failed.' } });
-        if (queued) {
-          const next = queued;
-          queued = null;
-          send(next);
+        nextWorker.terminate();
+        worker = null;
+        let next = queued;
+        queued = null;
+        if (!next && completed && !completed.retried) next = { ...completed, retried: true };
+        try {
+          attachWorker(workerFactory());
+          if (next) send(next);
+        } catch (_error) {
+          worker = null;
+          if (next) {
+            queued = next;
+            runDirect();
+          } else if (completed) {
+            publish(completed, { error: { message: event.message || 'Path preview worker failed.' } });
+          }
         }
       };
+    };
+
+    try {
+      attachWorker(workerFactory());
+    } catch (_error) {
+      worker = null;
     }
 
     return {
@@ -145,12 +176,22 @@ import { PM } from "../lib/pathMath";
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
-      destroy() {
-        destroyed = true;
-        queued = null;
-        listeners.clear();
-        if (worker) worker.terminate();
+      retain() {
+        if (destroyed) return () => {};
+        retainCount += 1;
+        retireRevision += 1;
+        let retained = true;
+        return () => {
+          if (!retained || destroyed) return;
+          retained = false;
+          retainCount -= 1;
+          const revision = ++retireRevision;
+          queueMicrotask(() => {
+            if (!destroyed && retainCount === 0 && revision === retireRevision) destroy();
+          });
+        };
       },
+      destroy,
     };
   }
 

@@ -3,7 +3,7 @@ import { createUnitPreferences } from "../src/renderer/lib/unitPreferences";
 import { wheelZoomFactor } from "../src/renderer/lib/zoom";
 import { loadRendererExport } from "./helpers/loadRendererExport";
 
-interface PointerEventLike { pointerId: number; clientX?: number }
+interface PointerEventLike { pointerId: number; clientX?: number; clientY?: number }
 type PointerListener = (event: PointerEventLike) => void;
 
 function unitPreferences(stored?: string) {
@@ -36,7 +36,7 @@ function pointerDragHarness() {
     begin(
       event: PointerEventLike & { currentTarget: typeof target },
       handlers: { move: PointerListener; end?: PointerListener; cancel?: PointerListener; coalesce?: boolean },
-    ): () => void;
+    ): (options?: { flush?: boolean }) => void;
   }>(new URL("../src/renderer/hooks/usePointerDrag.js", import.meta.url), "PointerDrag", {
     context: {
       document,
@@ -119,5 +119,46 @@ describe("renderer utilities", () => {
     expect(snapshots).toEqual([{ x: 80 }, null]);
     expect(canceled).toEqual([]);
     expect(harness.captureListeners).not.toContain("lostpointercapture");
+  });
+
+  it("commits the pointer-up position and can discard a queued move", () => {
+    const released = pointerDragHarness();
+    const moves: number[] = [];
+    released.pointerDrag.begin({ currentTarget: released.target, pointerId: 3, clientX: 0, clientY: 0 }, {
+      coalesce: true,
+      move: (event) => { if (event.clientX !== undefined) moves.push(event.clientX); },
+    });
+    released.dispatch("pointermove", { pointerId: 3, clientX: 40, clientY: 0 });
+    released.dispatch("pointerup", { pointerId: 3, clientX: 75, clientY: 0 });
+    expect(moves).toEqual([40, 75]);
+
+    const canceled = pointerDragHarness();
+    const canceledMoves: number[] = [];
+    const stop = canceled.pointerDrag.begin({ currentTarget: canceled.target, pointerId: 4, clientX: 0, clientY: 0 }, {
+      coalesce: true,
+      move: (event) => { if (event.clientX !== undefined) canceledMoves.push(event.clientX); },
+    });
+    canceled.dispatch("pointermove", { pointerId: 4, clientX: 90, clientY: 0 });
+    stop({ flush: false });
+    canceled.flushFrame();
+    expect(canceledMoves).toEqual([]);
+  });
+
+  it("materializes an active path edit for persistence", () => {
+    const edit = loadRendererExport<{
+      create<T extends { id: string }>(): {
+        begin(value: T): boolean;
+        update(value: T): boolean;
+        materialize<P extends { paths: T[] }>(project: P): P;
+      };
+    }>(new URL("../src/renderer/assets/path-edit.js", import.meta.url), "PathEdit").create<{ id: string; x: number }>();
+    const project = { name: "demo", paths: [{ id: "a", x: 1 }, { id: "b", x: 2 }] };
+    edit.begin(project.paths[0]);
+    edit.update({ id: "a", x: 9 });
+
+    const persisted = edit.materialize(project);
+    expect(persisted).not.toBe(project);
+    expect(persisted.paths).toEqual([{ id: "a", x: 9 }, { id: "b", x: 2 }]);
+    expect(project.paths[0].x).toBe(1);
   });
 });

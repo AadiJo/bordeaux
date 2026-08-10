@@ -8,6 +8,16 @@
     return low;
   }
 
+  function pointAtDistance(points, distance) {
+    const afterIndex = Math.min(points.length - 1, lowerBoundByDistance(points, distance));
+    const after = points[afterIndex];
+    const before = points[Math.max(0, afterIndex - 1)];
+    const span = (after.s || 0) - (before.s || 0);
+    if (span <= 1e-9) return { ...after, s: distance };
+    const t = Math.max(0, Math.min(1, (distance - (before.s || 0)) / span));
+    return { ...after, x: before.x + (after.x - before.x) * t, y: before.y + (after.y - before.y) * t, s: distance };
+  }
+
   /** Finds the sampled point span for a path-fraction interval in logarithmic time. */
   function fractionRange(points, totalDistance, first, last) {
     if (!points.length) return { start: 0, end: -1 };
@@ -16,7 +26,12 @@
     const total = totalDistance || points[points.length - 1].s || 0;
     const start = Math.max(0, lowerBoundByDistance(points, lowFraction * total) - 1);
     const end = Math.min(points.length - 1, lowerBoundByDistance(points, highFraction * total));
-    return { start, end: Math.max(start, end) };
+    return {
+      start,
+      end: Math.max(start, end),
+      first: pointAtDistance(points, lowFraction * total),
+      last: pointAtDistance(points, highFraction * total),
+    };
   }
 
   function segmentRange(derived, segment) {
@@ -37,13 +52,24 @@
     const end = Math.min(points.length - 1, range ? range.end : points.length - 1);
     if (end < start) return '';
     const parts = [];
+    const append = (point) => {
+      if (!point) return;
+      const projected = project(point);
+      const x = Number.isInteger(precision) ? projected.x.toFixed(precision) : projected.x;
+      const y = Number.isInteger(precision) ? projected.y.toFixed(precision) : projected.y;
+      const value = x + ' ' + y;
+      if (parts.length && parts[parts.length - 1].value === value) return;
+      parts.push({ value, command: parts.length ? 'L ' : 'M ' });
+    };
+    append(range && range.first);
     for (let index = start; index <= end; index++) {
-      const point = project(points[index]);
-      const x = Number.isInteger(precision) ? point.x.toFixed(precision) : point.x;
-      const y = Number.isInteger(precision) ? point.y.toFixed(precision) : point.y;
-      parts.push(index === start ? 'M ' + x + ' ' + y : 'L ' + x + ' ' + y);
+      const point = points[index];
+      if (range && range.first && (point.s || 0) <= range.first.s + 1e-9) continue;
+      if (range && range.last && (point.s || 0) >= range.last.s - 1e-9) continue;
+      append(point);
     }
-    return parts.join(' ');
+    append(range && range.last);
+    return parts.map((part) => part.command + part.value).join(' ');
   }
 
 export const FieldScene = Object.freeze({ fractionRange, segmentRange, pathData });

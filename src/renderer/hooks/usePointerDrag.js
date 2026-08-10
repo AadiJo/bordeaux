@@ -7,14 +7,19 @@ import * as React from "react";
     let active = true;
     let pendingMove = null;
     let moveFrame = 0;
+    let lastMove = event;
     const previousCursor = document.body.style.cursor;
 
+    const dispatchMove = (next) => {
+      handlers.move(next);
+      lastMove = next;
+    };
     const flushMove = () => {
       if (moveFrame) cancelAnimationFrame(moveFrame);
       moveFrame = 0;
       const next = pendingMove;
       pendingMove = null;
-      if (next) handlers.move(next);
+      if (next) dispatchMove(next);
     };
     const cleanup = () => {
       if (!active) return;
@@ -33,19 +38,21 @@ import * as React from "react";
     };
     const move = (next) => {
       if (!active || next.pointerId !== pointerId) return;
-      if (!handlers.coalesce) { handlers.move(next); return; }
+      if (!handlers.coalesce) { dispatchMove(next); return; }
       pendingMove = next;
       if (!moveFrame) moveFrame = requestAnimationFrame(flushMove);
     };
     const end = (next) => {
       if (!active || next.pointerId !== pointerId) return;
       flushMove();
+      if (Number.isFinite(next.clientX) && Number.isFinite(next.clientY)
+        && (next.clientX !== lastMove.clientX || next.clientY !== lastMove.clientY)) dispatchMove(next);
       cleanup();
       if (handlers.end) handlers.end(next);
     };
-    const cancel = (next) => {
+    const cancel = (next, options) => {
       if (!active || (next && next.pointerId != null && next.pointerId !== pointerId)) return;
-      flushMove();
+      if (!options || options.flush !== false) flushMove();
       cleanup();
       if (handlers.cancel) handlers.cancel(next);
     };
@@ -56,7 +63,7 @@ import * as React from "react";
     window.addEventListener('pointerup', end);
     window.addEventListener('pointercancel', cancel);
     window.addEventListener('blur', cancel);
-    return cancel;
+    return (options) => cancel(null, options);
   }
 
   function useController() {
@@ -72,7 +79,7 @@ import * as React from "react";
         });
         active.current = cancel;
       },
-      cancel() { if (active.current) active.current(); active.current = null; },
+      cancel(options) { if (active.current) active.current(options); active.current = null; },
     }), []);
   }
 

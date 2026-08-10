@@ -2,16 +2,20 @@
   function create() {
     const listeners = new Set();
     let draft = null;
+    let revision = 0;
+    let cancelRevision = 0;
     const emit = () => listeners.forEach((listener) => listener());
     return {
       begin(value) {
         if (draft) return false;
         draft = value;
+        revision += 1;
         return true;
       },
       update(value) {
         if (!draft) return false;
         draft = value;
+        revision += 1;
         emit();
         return true;
       },
@@ -19,17 +23,34 @@
         if (!draft) return null;
         const value = draft;
         draft = null;
+        revision += 1;
         emit();
         return value;
       },
       cancel() {
-        if (!draft) return false;
+        const hadDraft = Boolean(draft);
         draft = null;
+        revision += 1;
+        cancelRevision += 1;
         emit();
-        return true;
+        return hadDraft;
       },
       getSnapshot() {
         return draft;
+      },
+      getRevision() {
+        return revision;
+      },
+      getCancelRevision() {
+        return cancelRevision;
+      },
+      materialize(project) {
+        if (!draft || !project || !Array.isArray(project.paths)) return project;
+        const index = project.paths.findIndex((path) => path.id === draft.id);
+        if (index < 0 || project.paths[index] === draft) return project;
+        const paths = project.paths.slice();
+        paths[index] = draft;
+        return { ...project, paths };
       },
       subscribe(listener) {
         listeners.add(listener);

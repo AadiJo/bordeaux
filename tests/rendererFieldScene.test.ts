@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { loadRendererExport } from "./helpers/loadRendererExport";
 
 interface Point { x: number; y: number; s: number }
-interface Range { start: number; end: number }
+interface Range { start: number; end: number; first?: Point; last?: Point }
 
 function fieldScene() {
   return loadRendererExport<{
@@ -17,7 +17,7 @@ describe("renderer field scene construction", () => {
 
   it("constructs bounded path spans from sampled indexes", () => {
     const scene = fieldScene();
-    expect(scene.fractionRange(points, 100, 0.7, 0.8)).toEqual({ start: 69, end: 80 });
+    expect(scene.fractionRange(points, 100, 0.7, 0.8)).toMatchObject({ start: 69, end: 80 });
     const derived = { sample: { pts: points, length: 100 }, wpIdx: [0, 30, 70, 100] };
     expect(scene.segmentRange(derived, 1)).toEqual({ start: 30, end: 70 });
     let projections = 0;
@@ -27,6 +27,10 @@ describe("renderer field scene construction", () => {
     }, 1);
     expect(data).toBe("M 30.0 15.0 L 31.0 15.5 L 32.0 16.0");
     expect(projections).toBe(3);
+
+    const shortRange = scene.fractionRange(points, 100, 0.3025, 0.303);
+    expect(scene.pathData(points, shortRange, (point) => point, 3))
+      .toBe("M 30.250 15.125 L 30.300 15.150");
   });
 });
 
