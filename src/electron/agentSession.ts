@@ -337,6 +337,7 @@ export class AgentSessionService {
   }
 
   private claimPreviewOwnership(): number {
+    this.previewPlanningAbort?.abort();
     this.previewGeneration += 1;
     return this.previewGeneration;
   }
@@ -495,7 +496,7 @@ export class AgentSessionService {
         status: "ready",
         createdAt: new Date().toISOString(),
       };
-      const staged = await this.stage(proposal, signal);
+      const staged = await this.stage(proposal, signal, this.claimPreviewOwnership());
       return proposalSummary(staged.proposal, staged.supersededProposalId);
     }
     if (request.method === "resolve_field_terms") {

@@ -318,6 +318,35 @@ describe("agent session and private bridge", () => {
     expect((await service.request({ method: "get_proposal", params: { proposalId: proposal.proposalId } }) as any).status).toBe("stale");
   });
 
+  it("keeps a newer robot-profile proposal ahead of an older path request", async () => {
+    let pathStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => { pathStarted = resolve; });
+    const notifications: string[] = [];
+    const service = new AgentSessionService((proposal) => { notifications.push(proposal.intent); }, () => null, (job, signal) => {
+      if (job.kind !== "route") return runAgentPlanningJobDirect(job);
+      pathStarted?.();
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("older path planning aborted")), { once: true });
+      });
+    });
+    service.publishSnapshot(snapshot());
+
+    const olderPath = service.request({ method: "plan_path", params: {
+      intent: "Older path preview", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 3, y: 1 }], maximumCandidates: 1,
+    } });
+    const olderRejected = expect(olderPath).rejects.toThrow("older path planning aborted");
+    await started;
+    const profile: any = await service.request({ method: "propose_robot_profile", params: {
+      intent: "Newer robot profile",
+      planning: { intake: { name: "Front intake", centerM: { x: 0.42, y: 0 }, directionDeg: 0, captureWidthM: 0.72, maxCollectSpeedMps: 2 } },
+    } });
+    await olderRejected;
+
+    expect(profile).toMatchObject({ status: "ready", operation: "configureRobot" });
+    expect(service.getActiveProposal()?.id).toBe(profile.proposalId);
+    expect(notifications.at(-1)).toBe("Newer robot profile");
+  });
+
   it("merges partial robot interview answers without erasing existing mechanism facts", async () => {
     const service = new AgentSessionService(() => {}, () => null);
     const initial = snapshot();
