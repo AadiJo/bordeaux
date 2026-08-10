@@ -1,6 +1,6 @@
+import fs from "node:fs";
+import vm from "node:vm";
 import { describe, expect, it } from "vitest";
-import { PathPreview } from "../src/renderer/assets/path-preview";
-import { processPathPreviewJob } from "../src/renderer/assets/path-preview-worker";
 
 interface WorkerJob {
   id: number;
@@ -29,7 +29,16 @@ class FakeWorker {
 }
 
 function previewModule(worker: FakeWorker) {
-  return (PathPreview as {
+  const window: Record<string, unknown> = {};
+  const source = fs.readFileSync(new URL("../src/renderer/assets/path-preview.js", import.meta.url), "utf8")
+    .replace('import { PM } from "../lib/pathMath";\n', "")
+    .replace(
+      "const workerFactory = config.workerFactory || (() => new Worker(new URL('./path-preview-worker.js', import.meta.url), { type: 'module' }));",
+      "const workerFactory = config.workerFactory;",
+    )
+    .replace("export const PathPreview =", "window.PathPreview =");
+  vm.runInNewContext(source, { window, Error, Set, Object, String, performance, queueMicrotask });
+  return (window.PathPreview as {
     create(options: { workerFactory: () => FakeWorker }): {
       request(input: { path: unknown; robot: unknown; plannerId: string; quality: "interactive" | "final"; key?: string }): number;
       getSnapshot(): { status: string; revision: number; quality: string; path: unknown; value: unknown };
@@ -105,12 +114,20 @@ describe("renderer path preview scheduler", () => {
 
 describe("renderer path preview worker", () => {
   it("derives the requested sampling quality and reports timing", () => {
-    const result = processPathPreviewJob(
-      { id: 7, path: {}, robot: {}, plannerId: "profiledSpline", quality: "interactive", perSegment: 14 },
-      (_path: unknown, _robot: unknown, perSegment: number) => ({ perSegment }),
-    );
+    const posted: unknown[] = [];
+    const self: Record<string, unknown> = { postMessage: (message: unknown) => posted.push(message) };
+    const source = fs.readFileSync(new URL("../src/renderer/assets/path-preview-worker.js", import.meta.url), "utf8")
+      .replace('import { PM } from "../lib/pathMath";\n', "")
+      .replace("export function processPathPreviewJob", "function processPathPreviewJob");
+    vm.runInNewContext(source, {
+      self,
+      performance,
+      PM: { derivePath: (_path: unknown, _robot: unknown, perSegment: number) => ({ perSegment }) },
+    });
+    const onmessage = self.onmessage as (event: { data: unknown }) => void;
+    onmessage({ data: { id: 7, path: {}, robot: {}, plannerId: "profiledSpline", quality: "interactive", perSegment: 14 } });
 
-    expect(result).toMatchObject({ id: 7, quality: "interactive", value: { perSegment: 14 } });
-    expect(result).toHaveProperty("durationMs");
+    expect(posted[0]).toMatchObject({ id: 7, quality: "interactive", value: { perSegment: 14 } });
+    expect(posted[0]).toHaveProperty("durationMs");
   });
 });

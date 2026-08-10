@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { PointerDrag } from "../src/renderer/hooks/usePointerDrag";
+import fs from "node:fs";
+import vm from "node:vm";
+import { describe, expect, it } from "vitest";
 import { createUnitPreferences } from "../src/renderer/lib/unitPreferences";
 import { wheelZoomFactor } from "../src/renderer/lib/zoom";
 
@@ -15,39 +16,46 @@ function unitPreferences(stored?: string) {
 }
 
 function pointerDragHarness() {
-  const windowListeners = new Map<string, Set<(event: any) => void>>();
-  const targetListeners = new Map<string, Set<(event: any) => void>>();
-  const add = (listeners: Map<string, Set<(event: any) => void>>, type: string, listener: (event: any) => void) => {
+  interface PointerEventLike { pointerId: number; clientX?: number }
+  type Listener = (event: PointerEventLike) => void;
+  const windowListeners = new Map<string, Set<Listener>>();
+  const targetListeners = new Map<string, Set<Listener>>();
+  const add = (listeners: Map<string, Set<Listener>>, type: string, listener: Listener) => {
     const current = listeners.get(type) ?? new Set();
     current.add(listener);
     listeners.set(type, current);
   };
-  const remove = (listeners: Map<string, Set<(event: any) => void>>, type: string, listener: (event: any) => void) => listeners.get(type)?.delete(listener);
+  const remove = (listeners: Map<string, Set<Listener>>, type: string, listener: Listener) => listeners.get(type)?.delete(listener);
   const window = {
-    addEventListener: (type: string, listener: (event: any) => void) => add(windowListeners, type, listener),
-    removeEventListener: (type: string, listener: (event: any) => void) => remove(windowListeners, type, listener),
-  } as Record<string, any>;
+    addEventListener: (type: string, listener: Listener) => add(windowListeners, type, listener),
+    removeEventListener: (type: string, listener: Listener) => remove(windowListeners, type, listener),
+  } as Record<string, unknown>;
   const target = {
     setPointerCapture: () => undefined,
     hasPointerCapture: () => false,
-    addEventListener: (type: string, listener: (event: any) => void) => add(targetListeners, type, listener),
-    removeEventListener: (type: string, listener: (event: any) => void) => remove(targetListeners, type, listener),
+    addEventListener: (type: string, listener: Listener) => add(targetListeners, type, listener),
+    removeEventListener: (type: string, listener: Listener) => remove(targetListeners, type, listener),
   };
   const document = { body: { style: { cursor: "" } } };
-  vi.stubGlobal("window", window);
-  vi.stubGlobal("document", document);
-  const dispatch = (listeners: Map<string, Set<(event: any) => void>>, type: string, event: any) => {
+  const source = fs.readFileSync(new URL("../src/renderer/hooks/usePointerDrag.js", import.meta.url), "utf8")
+    .replace('import * as React from "react";\n', "")
+    .replace("export const PointerDrag =", "window.PointerDrag =");
+  vm.runInNewContext(source, { window, document, React: {} });
+  const dispatch = (listeners: Map<string, Set<Listener>>, type: string, event: PointerEventLike) => {
     listeners.get(type)?.forEach((listener) => listener(event));
   };
   return {
-    pointerDrag: PointerDrag,
+    pointerDrag: window.PointerDrag as {
+      begin(
+        event: PointerEventLike & { currentTarget: typeof target },
+        handlers: { move: Listener; end?: Listener; cancel?: Listener },
+      ): () => void;
+    },
     target,
     dispatchWindow: (type: string, event: any) => dispatch(windowListeners, type, event),
     dispatchTarget: (type: string, event: any) => dispatch(targetListeners, type, event),
   };
 }
-
-afterEach(() => vi.unstubAllGlobals());
 
 describe("renderer utilities", () => {
   it("converts display units without changing canonical SI values", () => {
@@ -104,8 +112,8 @@ describe("renderer utilities", () => {
     const ended: number[] = [];
     const canceled: number[] = [];
     harness.pointerDrag.begin({ currentTarget: harness.target, pointerId: 7 }, {
-      move: (event) => moved.push(event.clientX),
-      end: (event) => ended.push(event.clientX),
+      move: (event) => { if (event.clientX !== undefined) moved.push(event.clientX); },
+      end: (event) => { if (event.clientX !== undefined) ended.push(event.clientX); },
       cancel: (event) => canceled.push(event.pointerId),
     });
 

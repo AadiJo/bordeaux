@@ -1,8 +1,13 @@
+import fs from "node:fs";
+import vm from "node:vm";
 import { describe, expect, it, vi } from "vitest";
-import { PathEdit } from "../src/renderer/assets/path-edit";
 
 function editModule() {
-  return PathEdit as {
+  const window: Record<string, unknown> = {};
+  const source = fs.readFileSync(new URL("../src/renderer/assets/path-edit.js", import.meta.url), "utf8")
+    .replace("export const PathEdit =", "window.PathEdit =");
+  vm.runInNewContext(source, { window, Object, Set });
+  return window.PathEdit as {
     create<T>(): {
       begin(value: T): boolean;
       update(value: T): boolean;

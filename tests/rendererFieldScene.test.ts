@@ -1,12 +1,16 @@
+import fs from "node:fs";
+import vm from "node:vm";
 import { describe, expect, it } from "vitest";
-import { FieldScene } from "../src/renderer/assets/field-scene";
-import { PM } from "../src/renderer/lib/pathMath";
 
 interface Point { x: number; y: number; s: number }
 interface Range { start: number; end: number }
 
 function fieldScene() {
-  return FieldScene as {
+  const window: Record<string, unknown> = {};
+  const source = fs.readFileSync(new URL("../src/renderer/assets/field-scene.js", import.meta.url), "utf8")
+    .replace("export const FieldScene =", "window.FieldScene =");
+  vm.runInNewContext(source, { window, Object, Math, Number });
+  return window.FieldScene as {
     fractionRange(points: Point[], total: number, first: number, last: number): Range;
     segmentRange(derived: { sample: { pts: Point[]; length: number }; wpIdx: number[] }, segment: number): Range;
     pathData(points: Point[], range: Range | null, project: (point: Point) => Point, precision?: number): string;
@@ -38,7 +42,11 @@ describe("renderer field scene construction", () => {
 
 describe("renderer path hit testing", () => {
   it("keeps separate visits when a path crosses the same field point", () => {
-    const math = PM as {
+    const window: Record<string, unknown> = {};
+    const source = fs.readFileSync(new URL("../src/renderer/lib/pathMath.js", import.meta.url), "utf8")
+      .replace("export const PM =", "window.PM =");
+    vm.runInNewContext(source, { window, console, Math, Number, Set, Map, Infinity, isFinite });
+    const math = window.PM as {
       nearestVisits(x: number, y: number, points: Array<Point & { seg: number; t: number; heading: number }>, options: { tolerance: number }): Array<{ f: number }>;
     };
     const crossing = [
