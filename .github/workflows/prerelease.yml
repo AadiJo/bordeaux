@@ -109,12 +109,6 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: node scripts/verify-signing-env.mjs mac
-      - name: Require Windows signing credentials
-        if: matrix.platform == 'windows'
-        env:
-          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-        run: node scripts/verify-signing-env.mjs windows
       - name: Build signed and notarized macOS packages
         if: matrix.platform == 'mac'
         env:
@@ -124,12 +118,12 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npm run package:mac:ci -- --config.mac.notarize=true --config.forceCodeSigning=true
-      - name: Build signed Windows packages
+      - name: Build Windows packages
         if: matrix.platform == 'windows'
         env:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-        run: npm run package:win -- --config.forceCodeSigning=true
+        run: npm run package:win
       - name: Build Linux AppImages
         if: matrix.platform == 'linux'
         run: npm run package:linux

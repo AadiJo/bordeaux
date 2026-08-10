@@ -45,14 +45,14 @@ git push origin main
 gh workflow run prerelease.yml -f version=0.2.0-beta.2 -f notes="Beta notes"
 ```
 
-The workflow runs only from `main`, tests both platforms, produces signed packages, validates their public beta manifests, atomically creates the matching tag at the dispatched commit, and creates a non-draft GitHub prerelease only after both builds succeed. Each version can be published once; increment the beta number for every attempt that creates its Git tag.
+The workflow runs only from `main`, tests all supported platforms, produces their packages, validates the public beta manifests, atomically creates the matching tag at the dispatched commit, and creates a non-draft GitHub prerelease only after every build succeeds. Each version can be published once; increment the beta number for every attempt that creates its Git tag.
 
 Configure these GitHub Actions repository secrets before the first run:
 
 - macOS: `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID`
-- Windows: `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD`
+- Windows (optional): `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD`
 
-The workflow deliberately fails before packaging when credentials are absent. macOS automatic updates require a signed app, and the workflow also notarizes it. Never publish unsigned replacement artifacts under an existing release version.
+The workflow deliberately fails before macOS packaging when its credentials are absent because macOS automatic updates require a signed app; the workflow also notarizes it. Windows prereleases may be published unsigned while its secrets are absent and are signed automatically when both secrets are configured. Unsigned Windows installers display an unknown-publisher warning. Never publish replacement artifacts under an existing release version.
 
 ## Local artifact hygiene
 
