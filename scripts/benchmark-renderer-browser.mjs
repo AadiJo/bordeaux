@@ -125,6 +125,7 @@ async function buildVariant(reference, key) {
     html: path.join(outDir, "index.html"),
     workerAsset,
     workerBundle: Boolean(workerAsset),
+    requireWorkerTransport: key === "candidate",
   };
 }
 
@@ -140,6 +141,7 @@ function runVariant(label, variant, checkCorrectness, runCorrectnessOnly = false
       BORDEAUX_BROWSER_STRESS_MS: stressMs,
       BORDEAUX_BROWSER_CHECK_CORRECTNESS: checkCorrectness ? "1" : "0",
       BORDEAUX_BROWSER_CORRECTNESS_ONLY: runCorrectnessOnly ? "1" : "0",
+      BORDEAUX_BENCHMARK_REQUIRE_WORKER_TRANSPORT: variant.requireWorkerTransport ? "1" : "0",
       DISPLAY: process.env.DISPLAY || ":0",
       XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || "/mnt/wslg/runtime-dir",
       ELECTRON_DISABLE_SECURITY_WARNINGS: "true",
@@ -294,7 +296,7 @@ try {
       },
       correctPaint: "input dispatch to the first compositor bitmap containing per-input colors on the exact waypoint and centerline nodes after their screen/SVG geometry matches",
       droppedFrames: "missed 16.67 ms requestAnimationFrame slots between the bounded start and end of continuous input",
-      worker: "query-gated application scheduler instrumentation proves a discarded preflight, then silently counts measured interactive worker round trips and direct fallbacks before emitting one summary",
+      worker: "the candidate's query-gated application scheduler instrumentation proves a discarded preflight, then silently counts measured interactive worker round trips and direct fallbacks before emitting one summary; upstream performs the same discarded movement without requiring candidate-only instrumentation",
       paintProof: "the offscreen NativeImage must contain the sample's unique waypoint color at the target and its unique centerline color immediately outside the waypoint",
     },
     variants,

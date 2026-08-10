@@ -14,9 +14,10 @@ preview scheduler's worker request/result transport, then checks terminal pointe
 coordinates, save/dirty behavior, undo, path-switch cancellation, and matching
 waypoint/curve geometry. The transport observer is enabled only by the benchmark
 file URL and is inert during normal application use. Each timing process performs
-the same discarded application input preflight, then switches to a silent timed
-sentinel. The sentinel counts matching interactive worker round trips and direct
-fallbacks without dispatching per-job events, and emits one summary after timing.
+the same discarded application input movement. The candidate additionally proves
+its worker transport, then switches to a silent timed sentinel that counts matching
+interactive worker round trips and direct fallbacks without dispatching per-job
+events. Upstream does not require this candidate-only observer.
 
 Latency is measured from Electron input dispatch to the first compositor bitmap
 that contains sample-specific colors on the exact dragged waypoint and

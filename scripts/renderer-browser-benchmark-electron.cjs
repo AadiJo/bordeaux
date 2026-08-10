@@ -10,6 +10,7 @@ const inputHz = Number.parseInt(process.env.BORDEAUX_BROWSER_INPUT_HZ || "120", 
 const checkCorrectness = process.env.BORDEAUX_BROWSER_CHECK_CORRECTNESS === "1";
 const correctnessOnly = process.env.BORDEAUX_BROWSER_CORRECTNESS_ONLY === "1";
 const forceDirectPreview = process.env.BORDEAUX_BENCHMARK_FORCE_DIRECT === "1";
+const requireWorkerTransport = process.env.BORDEAUX_BENCHMARK_REQUIRE_WORKER_TRANSPORT === "1";
 const mainClockOffsetMs = Number.parseFloat(process.env.BORDEAUX_BENCHMARK_MAIN_CLOCK_OFFSET_MS || "0");
 const frameBudgetMs = 1000 / 60;
 const primaryPath = { id: "browser_benchmark_path", name: "100-waypoint browser benchmark" };
@@ -455,13 +456,14 @@ app.whenReady().then(async () => {
   const proveApplicationWorkerTransport = async (origin) => {
     const target = { x: origin.x + 24, y: origin.y - 9 };
     const expectedLocal = await localAt(target);
-    await window.webContents.executeJavaScript("window.__rendererBenchmark.startTransportProof()");
+    if (requireWorkerTransport) await window.webContents.executeJavaScript("window.__rendererBenchmark.startTransportProof()");
     moveMouse(target);
     await waitForCorrect(target, expectedLocal);
     const correct = await waitFor(async () => {
       const value = await window.webContents.executeJavaScript("window.__rendererBenchmark.lastCorrect()");
       return value && Math.hypot(value.x - target.x, value.y - target.y) <= 1 ? value : null;
     }, 5000, "the discarded application worker preflight");
+    if (!requireWorkerTransport) return null;
     await window.webContents.executeJavaScript("window.dispatchEvent(new CustomEvent('bordeaux-benchmark:path-preview-transport-control', { detail: { mode: 'stop' } }))");
     return correct.workerTransport === true;
   };
@@ -603,6 +605,11 @@ app.whenReady().then(async () => {
     const undoCancelsDrag = matchesTarget(afterUndoRelease, undoOrigin, { x: undoOrigin.localX, y: undoOrigin.localY });
 
     await loadFixture();
+    const cancelPublishedSession = await waitFor(async () => {
+      const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
+      return state.publishedSessions.at(-1) || null;
+    }, 3000, "the pre-cancel agent session to publish");
+    const cancelPublishedSessionCount = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState().publishedSessions.length");
     const cancelOrigin = await center();
     const cancelTarget = { x: cancelOrigin.x + 44, y: cancelOrigin.y - 20 };
     const originalProject = JSON.parse(Buffer.from(process.env.BORDEAUX_BENCHMARK_PROJECT, "base64").toString("utf8"));
@@ -628,6 +635,31 @@ app.whenReady().then(async () => {
         : null;
     }, 500, "the canceled draft autosave to be rolled back immediately");
     const cancelAutosaveRestored = Boolean(restoredAutosave);
+    const cancelRepublishedSession = await waitFor(async () => {
+      const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
+      const latest = state.publishedSessions.at(-1);
+      return state.publishedSessions.length > cancelPublishedSessionCount && latest.revision > cancelPublishedSession.revision ? latest : null;
+    }, 3000, "the agent session to republish after canceling the drag");
+    const postCancelProposal = {
+      ...proposal,
+      id: "browser_benchmark_post_cancel_proposal",
+      baseSessionId: cancelRepublishedSession.sessionId,
+      baseRevision: cancelRepublishedSession.revision,
+      baseActivePathId: cancelRepublishedSession.activePathId,
+      candidates: proposal.candidates.map((candidate) => ({ ...candidate, id: "browser_benchmark_post_cancel_candidate" })),
+      recommendedCandidateId: "browser_benchmark_post_cancel_candidate",
+    };
+    await window.webContents.executeJavaScript(`window.bordeauxAPI.__benchmarkAgentProposal(${JSON.stringify(postCancelProposal)})`);
+    await waitFor(
+      () => window.webContents.executeJavaScript("document.querySelector('.agent-proposal-status')?.textContent.startsWith('Preview only') === true"),
+      1000,
+      "a new proposal to remain ready after canceling the drag",
+    );
+    await window.webContents.executeJavaScript("document.querySelector('.agent-proposal button.primary')?.click()");
+    const proposalUsableAfterCancel = Boolean(await waitFor(async () => {
+      const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
+      return state.proposalStatuses.some((entry) => entry.id === postCancelProposal.id && entry.status === "applied") ? state : null;
+    }, 1000, "the post-cancel proposal to apply"));
 
     await loadFixture();
     const commandOrigin = await center();
@@ -840,7 +872,7 @@ app.whenReady().then(async () => {
       && Math.hypot(sourceEnd.x - targetStart.x, sourceEnd.y - targetStart.y) <= 1e-6
       && Math.hypot(sourceEnd.x - expectedSourceEnd.x, sourceEnd.y - expectedSourceEnd.y) <= 1e-6;
 
-    return { applicationWorkerTransport, nativeImagePaintProof, restoreConflictStaysDirty, staleProposalBlockedDuringDrag, releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, commandSurvivesDrag, commandUndoRestores, cancelPreservesRedo, pathSwitchCancelsDrag, openDuringDragKeepsFile, saveOpenKeepsFile, renameSurvivesDrag, moveSurvivesDrag, linkSurvivesDrag };
+    return { applicationWorkerTransport, nativeImagePaintProof, restoreConflictStaysDirty, staleProposalBlockedDuringDrag, proposalUsableAfterCancel, releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, commandSurvivesDrag, commandUndoRestores, cancelPreservesRedo, pathSwitchCancelsDrag, openDuringDragKeepsFile, saveOpenKeepsFile, renameSurvivesDrag, moveSurvivesDrag, linkSurvivesDrag };
   }
 
   async function measureLatency() {
@@ -876,10 +908,12 @@ app.whenReady().then(async () => {
       correctPaintSamples.push(correctPaint - sentAt);
     }
     const timedTransport = await window.webContents.executeJavaScript("window.__rendererBenchmark.finishTimedTransport('latency')");
-    const applicationWorkerTransport = preflightWorkerTransport
-      && timedTransport.matchingWorkerResults >= latencySamples
-      && timedTransport.interactiveWorkerRequests === timedTransport.matchingWorkerResults
-      && timedTransport.directResults === 0;
+    const applicationWorkerTransport = requireWorkerTransport
+      ? preflightWorkerTransport
+        && timedTransport.matchingWorkerResults >= latencySamples
+        && timedTransport.interactiveWorkerRequests === timedTransport.matchingWorkerResults
+        && timedTransport.directResults === 0
+      : null;
     await window.webContents.executeJavaScript("window.__rendererBenchmark.clearPaintToken()");
     releaseMouse(target);
     await waitForPaintQuiet(100);
@@ -924,10 +958,12 @@ app.whenReady().then(async () => {
     releaseMouse(target);
     const probe = await window.webContents.executeJavaScript("window.__rendererBenchmark.stop()");
     const timedTransport = await window.webContents.executeJavaScript("window.__rendererBenchmark.finishTimedTransport('stress')");
-    const applicationWorkerTransport = preflightWorkerTransport
-      && timedTransport.matchingWorkerResults >= 1
-      && timedTransport.interactiveWorkerRequests === timedTransport.matchingWorkerResults
-      && timedTransport.directResults === 0;
+    const applicationWorkerTransport = requireWorkerTransport
+      ? preflightWorkerTransport
+        && timedTransport.matchingWorkerResults >= 1
+        && timedTransport.interactiveWorkerRequests === timedTransport.matchingWorkerResults
+        && timedTransport.directResults === 0
+      : null;
     const { startedAt, endedAt } = probe.inputBoundsRendererMs;
     if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt) || endedAt <= startedAt) {
       throw new Error("The renderer did not observe a bounded stress input window.");
