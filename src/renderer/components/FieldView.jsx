@@ -1,4 +1,5 @@
 import * as React from "react";
+import { FieldScene } from "../assets/field-scene";
 import fieldImage from "../assets/field.png";
 import { PM } from "../lib/pathMath";
 import { wheelZoomFactor } from "../lib/zoom";
@@ -515,16 +516,14 @@ import { UI } from "./ui";
       if (pts.length > 1) {
         const totalS = derived.sample.length || 1;
         const ranges = derived.effRanges || doc.ranges || [];
+        const rangeSpans = ranges.map((range) => FieldScene.fractionRange(pts, totalS, range.f0, range.f1));
         // constraint range bands (under the centerline)
         ranges.forEach((rg, ri) => {
-          const lo = Math.min(rg.f0, rg.f1), hi = Math.max(rg.f0, rg.f1);
           const isSel = sel.kind === 'cr' && sel.idx === ri;
-          let dd = ''; let started = false;
-          for (let k = 0; k < pts.length; k++) { const f = pts[k].s / totalS; if (f >= lo && f <= hi) { const q = W2P(pts[k]); dd += (started ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); started = true; } }
+          const dd = FieldScene.pathData(pts, rangeSpans[ri], W2P, 1);
           if (dd) els.push(h('path', { key: 'rb' + ri, d: dd, fill: 'none', stroke: isSel ? accent : '#caa23a', strokeOpacity: isSel ? 0.5 : 0.32, strokeWidth: P(12), strokeLinecap: 'round', strokeLinejoin: 'round', style: { pointerEvents: 'none' } }));
         });
-        let dCase = `M ${W2P(pts[0]).x} ${W2P(pts[0]).y}`;
-        for (let i = 1; i < pts.length; i++) { const q = W2P(pts[i]); dCase += ` L ${q.x} ${q.y}`; }
+        const dCase = FieldScene.pathData(pts, null, W2P);
         els.push(h('path', { key: 'case', d: dCase, fill: 'none', stroke: '#05060a', strokeOpacity: 0.75, strokeWidth: P(5), strokeLinecap: 'round', strokeLinejoin: 'round' }));
         const segEls = [];
         const stride = Math.max(1, Math.floor(pts.length / 200));
@@ -535,17 +534,13 @@ import { UI } from "./ui";
         els.push(h('g', { key: 'pathbody' }, segEls));
         // selected-segment highlight (memo §3)
         if (sel.kind === 'seg' && derived.wpFrac && derived.wpFrac.length > sel.idx + 1) {
-          const lo = derived.wpFrac[sel.idx], hi = derived.wpFrac[sel.idx + 1];
-          let sd = '', st = false;
-          for (let k = 0; k < pts.length; k++) { const f = pts[k].s / totalS; if (f >= lo - 1e-4 && f <= hi + 1e-4) { const q = W2P(pts[k]); sd += (st ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); st = true; } }
+          const sd = FieldScene.pathData(pts, FieldScene.segmentRange(derived, sel.idx), W2P, 1);
           if (sd) els.push(h('path', { key: 'segsel', d: sd, fill: 'none', stroke: accent, strokeWidth: P(5.5), strokeOpacity: 0.92, strokeLinecap: 'round', strokeLinejoin: 'round', style: { pointerEvents: 'none' } }));
         }
         // per-segment hit paths — click selects the segment; alt-click / waypoint-tool inserts (memo §3)
         if (derived.wpFrac) {
           for (let si = 0; si < doc.waypoints.length - 1; si++) {
-            const lo = derived.wpFrac[si], hi = derived.wpFrac[si + 1];
-            let sd = '', st = false;
-            for (let k = 0; k < pts.length; k++) { const f = pts[k].s / totalS; if (f >= lo - 1e-4 && f <= hi + 1e-4) { const q = W2P(pts[k]); sd += (st ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); st = true; } }
+            const sd = FieldScene.pathData(pts, FieldScene.segmentRange(derived, si), W2P, 1);
             if (sd) els.push(h('path', { key: 'seghit' + si, d: sd, fill: 'none', stroke: 'transparent', strokeWidth: P(18), strokeLinecap: 'round', 'data-role': 'seg', 'data-idx': si, style: { cursor: tool === 'range' ? 'crosshair' : tool === 'waypoint' ? 'copy' : 'pointer' } }));
           }
         }
@@ -661,15 +656,7 @@ import { UI } from "./ui";
         rangeOrder.forEach(({ rg, ri }) => {
           const isSel = sel.kind === 'cr' && sel.idx === ri;
           const col = isSel ? accent : '#caa23a';
-          let rangeHit = '', rangeStarted = false;
-          for (let k = 0; k < pts.length; k++) {
-            const f = pts[k].s / totalS;
-            if (f >= Math.min(rg.f0, rg.f1) && f <= Math.max(rg.f0, rg.f1)) {
-              const q = W2P(pts[k]);
-              rangeHit += (rangeStarted ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1);
-              rangeStarted = true;
-            }
-          }
+          const rangeHit = FieldScene.pathData(pts, rangeSpans[ri], W2P, 1);
           if (rangeHit) els.push(h('path', { key: 'rhit' + ri, d: rangeHit, fill: 'none', stroke: 'transparent', strokeWidth: P(11), strokeLinecap: 'round', 'data-role': 'cr', 'data-idx': ri, style: { cursor: 'pointer' } }));
           [['f0', 'rs'], ['f1', 're']].forEach(([fk, role]) => {
             const pf = PM.pointAtFraction(rg[fk], pts); const c = W2P(pf);
