@@ -1,0 +1,55 @@
+name: Package Microsoft Store app
+
+on:
+  workflow_dispatch:
+    inputs:
+      identity_name:
+        description: Partner Center Package/Identity/Name; repository variable is used when blank
+        required: false
+        type: string
+      publisher:
+        description: Partner Center Package/Identity/Publisher; repository variable is used when blank
+        required: false
+        type: string
+      publisher_display_name:
+        description: Partner Center publisher display name; repository variable is used when blank
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-latest
+    env:
+      WINDOWS_STORE_IDENTITY_NAME: ${{ inputs.identity_name || vars.WINDOWS_STORE_IDENTITY_NAME }}
+      WINDOWS_STORE_PUBLISHER: ${{ inputs.publisher || vars.WINDOWS_STORE_PUBLISHER }}
+      WINDOWS_STORE_PUBLISHER_DISPLAY_NAME: ${{ inputs.publisher_display_name || vars.WINDOWS_STORE_PUBLISHER_DISPLAY_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/wrapper-validation@v4
+      - uses: gradle/actions/setup-gradle@v4
+      - run: npm ci
+      - name: Require the main branch
+        if: github.ref != 'refs/heads/main'
+        run: throw "Microsoft Store packages must be built from main; selected ref is $env:GITHUB_REF."
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run package:win:store
+      - run: npm run verify:package -- release
+      - run: node scripts/verify-windows-store-package.mjs release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bordeaux-microsoft-store
+          if-no-files-found: error
+          retention-days: 14
+          path: release/*-windows-store-x64.appx
