@@ -64,6 +64,7 @@ async function waitFor(predicate, timeoutMs, description) {
 }
 
 function installProbe(waypointIndex) {
+  window.confirm = () => true;
   const epoch = () => performance.timeOrigin + performance.now();
   const state = {
     active: false,
@@ -408,7 +409,40 @@ app.whenReady().then(async () => {
     await delay(150);
     const pathSwitchCancelsDrag = switched && await window.webContents.executeJavaScript('document.querySelectorAll(\'[data-role="wp"]\').length === 3');
 
-    return { realWorkerRoundTrip, releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, commandSurvivesDrag, commandUndoRestores, cancelPreservesRedo, pathSwitchCancelsDrag };
+    await loadFixture();
+    const openDragOrigin = await center();
+    const openDragTarget = { x: openDragOrigin.x + 46, y: openDragOrigin.y - 18 };
+    await pressMouse(openDragOrigin);
+    const openDragTargetLocal = await localAt(openDragTarget);
+    moveMouse(openDragTarget);
+    await waitForCorrect(openDragTarget, openDragTargetLocal);
+    await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkCommand('open-project')");
+    const openDuringDragState = await waitFor(async () => {
+      const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
+      return state.projectOperations.some((entry) => entry === "open:finish:opened") ? state : null;
+    }, 3000, "the project opened during a drag");
+    releaseMouse(openDragTarget);
+    const openDuringDragKeepsFile = !openDuringDragState.projectWrites.some((write) =>
+      write.kind === "autosave" && write.target === "opened" && write.projectName === originalProject.name);
+
+    await loadFixture();
+    await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkConfigure({ saveDelayMs: 120 })");
+    await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkCommand('save-project')");
+    await waitFor(
+      () => window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState().projectOperations.includes('save:start:original')"),
+      2000,
+      "the delayed project save",
+    );
+    await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkCommand('open-project')");
+    const overlappingSaveOpenState = await waitFor(async () => {
+      const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
+      const finished = state.projectOperations.filter((entry) => entry.startsWith("save:finish:") || entry.startsWith("open:finish:"));
+      return finished.length >= 2 ? state : null;
+    }, 4000, "the save and project-open sequence");
+    const saveOpenKeepsFile = overlappingSaveOpenState.currentFile === "opened"
+      && overlappingSaveOpenState.maxConcurrentProjectOperations === 1;
+
+    return { realWorkerRoundTrip, releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, commandSurvivesDrag, commandUndoRestores, cancelPreservesRedo, pathSwitchCancelsDrag, openDuringDragKeepsFile, saveOpenKeepsFile };
   }
 
   async function measureLatency() {

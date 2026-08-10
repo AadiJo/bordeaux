@@ -42,6 +42,7 @@ process.stderr.on("error", ignoreClosedStandardStream);
 let mainWindow: BrowserWindow | null = null;
 let recentFiles: string[] = [];
 let currentProjectPath: string | null = null;
+let projectTargetGeneration = 0;
 let dirty = false;
 let allowClose = false;
 let appUpdates: AppUpdateController | null = null;
@@ -209,8 +210,12 @@ function createAppUpdateController(): AppUpdateController {
   });
 }
 
-async function rememberFile(filePath: string, saveTarget: string | null = filePath) {
-  currentProjectPath = saveTarget;
+function activateProjectTarget(filePath: string | null): void {
+  currentProjectPath = filePath;
+  projectTargetGeneration += 1;
+}
+
+async function rememberFile(filePath: string) {
   recentFiles = rememberRecentProject(recentFiles, filePath);
   app.addRecentDocument(filePath);
   buildMenu();
@@ -332,7 +337,7 @@ function handle(channel: string, listener: (event: Electron.IpcMainInvokeEvent, 
 }
 
 function createWindow() {
-  currentProjectPath = null;
+  activateProjectTarget(null);
   dirty = false;
   allowClose = false;
   mainWindow = new BrowserWindow({
@@ -403,7 +408,7 @@ function createWindow() {
     if (mainWindow === window) mainWindow = null;
     rejectProposalReceipts("The Bordeaux editor closed before acknowledging the proposal.");
     agentSessions.clearSnapshot();
-    currentProjectPath = null;
+    activateProjectTarget(null);
     dirty = false;
     allowClose = false;
   });
@@ -702,7 +707,8 @@ async function openProjectFile(filePath: string) {
   const decoded = await readProject(filePath);
   const { project } = decoded;
   clearLinkedJavaProject();
-  await rememberFile(filePath, saveTargetForOpenedProject(filePath, decoded));
+  await rememberFile(filePath);
+  activateProjectTarget(saveTargetForOpenedProject(filePath, decoded));
   dirty = false;
   return { project };
 }
@@ -730,7 +736,7 @@ handle("project:restoreLast", async () => {
 });
 
 handle("project:new", () => {
-  currentProjectPath = null;
+  activateProjectTarget(null);
   dirty = false;
   clearLinkedJavaProject();
 });
@@ -738,6 +744,7 @@ handle("project:new", () => {
 handle("project:save", async (_event, project, rawSaveAs) => {
   const validation = validateProject(project);
   if (!validation.ok) throw new Error(validation.issues.map((item) => `${item.path}: ${item.message}`).join("\n"));
+  const sourceGeneration = projectTargetGeneration;
   let target = rawSaveAs === true ? null : currentProjectPath;
   if (!target) {
     if (smokeDirectory) target = path.join(smokeDirectory, "project.bordeaux.json");
@@ -750,6 +757,7 @@ handle("project:save", async (_event, project, rawSaveAs) => {
   }
   await writeProject(target, project);
   await rememberFile(target);
+  if (sourceGeneration === projectTargetGeneration && currentProjectPath !== target) activateProjectTarget(target);
   // The renderer owns edit revisions and acknowledges a clean save through
   // project:setDirty only if the project stayed unchanged during this write.
   return { saved: true };

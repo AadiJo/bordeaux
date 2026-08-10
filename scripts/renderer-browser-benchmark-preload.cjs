@@ -2,18 +2,65 @@ const { contextBridge } = require("electron");
 
 const fixture = JSON.parse(Buffer.from(process.env.BORDEAUX_BENCHMARK_PROJECT, "base64").toString("utf8"));
 const clone = (value) => JSON.parse(JSON.stringify(value));
-const state = { savedProjects: [], autosavedProjects: [], dirtyValues: [], publishedProjects: [] };
+const openedFixture = clone(fixture);
+openedFixture.name = "Opened renderer browser benchmark";
+const state = {
+  savedProjects: [],
+  autosavedProjects: [],
+  dirtyValues: [],
+  publishedProjects: [],
+  currentFile: "original",
+  files: { original: clone(fixture), opened: clone(openedFixture) },
+  projectWrites: [],
+  projectOperations: [],
+  activeProjectOperations: 0,
+  maxConcurrentProjectOperations: 0,
+  saveDelayMs: 0,
+};
 let menuListener = null;
 const unsubscribe = () => undefined;
+const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const projectOperation = async (kind, operation) => {
+  state.activeProjectOperations += 1;
+  state.maxConcurrentProjectOperations = Math.max(state.maxConcurrentProjectOperations, state.activeProjectOperations);
+  state.projectOperations.push(`${kind}:start:${state.currentFile}`);
+  try {
+    return await operation();
+  } finally {
+    state.projectOperations.push(`${kind}:finish:${state.currentFile}`);
+    state.activeProjectOperations -= 1;
+  }
+};
+const openProject = () => projectOperation("open", async () => {
+  state.currentFile = "opened";
+  return { project: clone(openedFixture) };
+});
 
 contextBridge.exposeInMainWorld("bordeauxAPI", {
   platform: "linux",
   restoreLastProject: async () => ({ project: clone(fixture) }),
-  openProject: async () => ({ project: clone(fixture) }),
-  openRecentProject: async () => ({ project: clone(fixture) }),
-  newProject: async () => ({ project: clone(fixture) }),
-  saveProject: async (project) => { state.savedProjects.push(clone(project)); return { saved: true }; },
-  autosaveProject: async (project) => { state.autosavedProjects.push(clone(project)); return { saved: true }; },
+  openProject,
+  openRecentProject: openProject,
+  newProject: async () => { state.currentFile = null; return { project: clone(fixture) }; },
+  saveProject: (project) => projectOperation("save", async () => {
+    const target = state.currentFile;
+    if (state.saveDelayMs) await delay(state.saveDelayMs);
+    const saved = clone(project);
+    state.savedProjects.push(saved);
+    state.projectWrites.push({ kind: "save", target, projectName: saved.name });
+    if (target) state.files[target] = saved;
+    // Models the old main-process behavior: a late save reattached its target.
+    state.currentFile = target;
+    return { saved: true };
+  }),
+  autosaveProject: (project) => projectOperation("autosave", async () => {
+    const target = state.currentFile;
+    const saved = clone(project);
+    state.autosavedProjects.push(saved);
+    state.projectWrites.push({ kind: "autosave", target, projectName: saved.name });
+    if (target) state.files[target] = saved;
+    return { saved: Boolean(target) };
+  }),
   exportJava: async () => ({ exported: false }),
   validateProject: async () => ({ ok: true, errors: [] }),
   listRecentJavaProjects: async () => [],
@@ -33,5 +80,6 @@ contextBridge.exposeInMainWorld("bordeauxAPI", {
   onAgentProposal: () => unsubscribe,
   onMenuCommand: (listener) => { menuListener = listener; return () => { if (menuListener === listener) menuListener = null; }; },
   __benchmarkCommand: (command) => menuListener?.({ command }),
+  __benchmarkConfigure: (options) => { state.saveDelayMs = Math.max(0, Number(options?.saveDelayMs) || 0); },
   __benchmarkState: () => clone(state),
 });

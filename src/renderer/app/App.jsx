@@ -426,6 +426,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const projectHist = useRef({ past: [], future: [] });
     const autosaveRevision = useRef(0);
     const autosaveTimer = useRef(0);
+    const persistenceTail = useRef(Promise.resolve());
     const [, force] = useState(0);
     const updateDirty = useCallback((next) => {
       dirtyRef.current = next;
@@ -440,19 +441,29 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       const before = base.paths.find((path) => path.id === draft.id);
       return PathLinks.sync(materialized, draft.id, before);
     }, [editStore]);
+    const enqueuePersistence = useCallback((operation) => {
+      const pending = persistenceTail.current.catch(() => undefined).then(operation);
+      persistenceTail.current = pending.then(() => undefined, () => undefined);
+      return pending;
+    }, []);
+    const invalidateScheduledAutosave = useCallback(() => {
+      autosaveRevision.current += 1;
+      if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);
+      autosaveTimer.current = 0;
+    }, []);
     const scheduleAutosave = useCallback((immediate) => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.autosaveProject !== 'function') return;
       const revision = ++autosaveRevision.current;
       if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);
       autosaveTimer.current = 0;
-      const persist = async () => {
+      const persist = () => enqueuePersistence(async () => {
         if (revision !== autosaveRevision.current) return;
         const sourceProject = projectRef.current;
         const editRevision = editStore.getRevision();
         const result = await window.bordeauxAPI.autosaveProject(materializeProject());
         if (revision === autosaveRevision.current && sourceProject === projectRef.current
           && editRevision === editStore.getRevision() && !editStore.getSnapshot() && result && result.saved) updateDirty(false);
-      };
+      });
       if (immediate === true) {
         void persist().catch((error) => console.warn('Could not autosave the Bordeaux project:', error));
         return;
@@ -461,7 +472,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         autosaveTimer.current = 0;
         void persist().catch((error) => console.warn('Could not autosave the Bordeaux project:', error));
       }, 900);
-    }, [editStore, materializeProject, updateDirty]);
+    }, [editStore, enqueuePersistence, materializeProject, updateDirty]);
 
     useEffect(() => {
       const activePathId = project.paths[activeIdx] && project.paths[activeIdx].id;
@@ -1328,14 +1339,16 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }, []);
 
     // ---- desktop project workflow ----
-    const canReplaceProject = useCallback(() => !dirty || confirm('Discard unsaved changes to this project?'), [dirty]);
+    const canReplaceProject = useCallback(() => !dirtyRef.current || confirm('Discard unsaved changes to this project?'), []);
     const loadProject = useCallback((incoming) => {
+      invalidateScheduledAutosave();
       cancelEdit();
       const next = normalizeProject(incoming);
       const javaGeneration = ++javaRestoreGeneration.current;
       const requestedPathId = next.editor && next.editor.activePathId;
       const requestedPathIndex = requestedPathId ? next.paths.findIndex((path) => path.id === requestedPathId) : -1;
       skipDirty.current = true;
+      projectRef.current = next;
       setProject(next);
       setActiveIdx(requestedPathIndex >= 0 ? requestedPathIndex : 0); setSel({ kind: null, idx: -1 }); setRoutineSel(null);
       playbackStore.reset();
@@ -1347,42 +1360,63 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       updateDirty(false);
       setJavaProjectState((current) => ({ ...current, status: 'unlinked', operation: null, catalog: null, integration: null, bookmarkId: null, error: '', notice: '' }));
       if (next.editor && next.editor.javaProjectBookmarkId) void openRecentJavaProject(next.editor.javaProjectBookmarkId, javaGeneration);
-    }, [cancelEdit, openRecentJavaProject, playbackStore, routinePlaybackStore, updateDirty]);
+    }, [cancelEdit, invalidateScheduledAutosave, openRecentJavaProject, playbackStore, routinePlaybackStore, updateDirty]);
     useEffect(() => {
       let active = true;
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.restoreLastProject !== 'function') return undefined;
-      window.bordeauxAPI.restoreLastProject().then((result) => { if (active && result) loadProject(result.project); }).catch((error) => console.warn('Could not restore the last project:', error));
+      const sourceProject = projectRef.current;
+      const editRevision = editStore.getRevision();
+      void enqueuePersistence(() => window.bordeauxAPI.restoreLastProject()).then(async (result) => {
+        if (!active || !result) return;
+        if (sourceProject !== projectRef.current || editRevision !== editStore.getRevision() || dirtyRef.current) {
+          invalidateScheduledAutosave();
+          await window.bordeauxAPI.newProject();
+          return;
+        }
+        loadProject(result.project);
+      }).catch((error) => console.warn('Could not restore the last project:', error));
       return () => { active = false; };
-    }, [loadProject]);
-    const newProject = useCallback(async () => {
+    }, [editStore, enqueuePersistence, invalidateScheduledAutosave, loadProject]);
+    const prepareProjectReplacement = useCallback(() => {
+      invalidateScheduledAutosave();
+      cancelEdit();
+    }, [cancelEdit, invalidateScheduledAutosave]);
+    const newProject = useCallback(() => {
       if (!canReplaceProject()) return;
-      if (window.bordeauxAPI) await window.bordeauxAPI.newProject();
-      loadProject(freshProject());
-    }, [canReplaceProject, loadProject]);
-    const openProject = useCallback(async (recentIndex) => {
+      prepareProjectReplacement();
+      return enqueuePersistence(async () => {
+        if (window.bordeauxAPI) await window.bordeauxAPI.newProject();
+        loadProject(freshProject());
+      });
+    }, [canReplaceProject, enqueuePersistence, loadProject, prepareProjectReplacement]);
+    const openProject = useCallback((recentIndex) => {
       if (!window.bordeauxAPI || !canReplaceProject()) return;
-      try {
-        const result = typeof recentIndex === 'number'
-          ? await window.bordeauxAPI.openRecentProject(recentIndex)
-          : await window.bordeauxAPI.openProject();
-        if (result) loadProject(result.project);
-      } catch (error) {
-        alert('Could not open project: ' + (error && error.message ? error.message : error));
-      }
-    }, [canReplaceProject, loadProject]);
-    const saveProject = useCallback(async (saveAs) => {
+      prepareProjectReplacement();
+      return enqueuePersistence(async () => {
+        try {
+          const result = typeof recentIndex === 'number'
+            ? await window.bordeauxAPI.openRecentProject(recentIndex)
+            : await window.bordeauxAPI.openProject();
+          if (result) loadProject(result.project);
+        } catch (error) {
+          alert('Could not open project: ' + (error && error.message ? error.message : error));
+        }
+      });
+    }, [canReplaceProject, enqueuePersistence, loadProject, prepareProjectReplacement]);
+    const saveProject = useCallback((saveAs) => {
       if (!window.bordeauxAPI) return;
-      try {
-        const sourceProject = projectRef.current;
-        const editRevision = editStore.getRevision();
-        const result = await window.bordeauxAPI.saveProject(materializeProject(), saveAs === true);
-        if (result && result.canceled) return;
-        if (sourceProject === projectRef.current && editRevision === editStore.getRevision()) updateDirty(false);
-        else updateDirty(true);
-      } catch (error) {
-        alert('Could not save project: ' + (error && error.message ? error.message : error));
-      }
-    }, [editStore, materializeProject, updateDirty]);
+      return enqueuePersistence(async () => {
+        try {
+          const sourceProject = projectRef.current;
+          const editRevision = editStore.getRevision();
+          const result = await window.bordeauxAPI.saveProject(materializeProject(), saveAs === true);
+          if (result && result.canceled) return;
+          if (sourceProject === projectRef.current && editRevision === editStore.getRevision()) updateDirty(false);
+        } catch (error) {
+          alert('Could not save project: ' + (error && error.message ? error.message : error));
+        }
+      });
+    }, [editStore, enqueuePersistence, materializeProject, updateDirty]);
 
     const onExportJava = useCallback(async (destination) => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.exportJava !== 'function') {
