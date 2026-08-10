@@ -34,7 +34,7 @@ Do not advertise project file associations until main-process startup handles OS
 
 ## Beta prereleases and automatic updates
 
-Installed macOS and Windows builds use the public `Zw96042/bordeaux` GitHub Releases feed and the `beta` update channel. Bordeaux checks quietly shortly after launch; **Check for Updates…** in the application menu starts a visible check. A downloaded update can restart immediately only when the project has no unsaved changes. Otherwise it is retained for the next clean exit.
+Installed macOS builds and Windows builds downloaded from GitHub use the public `Zw96042/bordeaux` GitHub Releases feed and the `beta` update channel. Bordeaux checks quietly shortly after launch; **Check for Updates…** in the application menu starts a visible check. A downloaded update can restart immediately only when the project has no unsaved changes. Otherwise it is retained for the next clean exit.
 
 To publish a beta, first update and commit the exact prerelease version in `package.json` and `package-lock.json`, then push it to `main`:
 
@@ -53,6 +53,17 @@ Configure these GitHub Actions repository secrets before the first run:
 - Windows (optional): `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD`
 
 The workflow deliberately fails before macOS packaging when its credentials are absent because macOS automatic updates require a signed app; the workflow also notarizes it. Windows prereleases may be published unsigned while its secrets are absent and are signed automatically when both secrets are configured. Unsigned Windows installers display an unknown-publisher warning. Never publish replacement artifacts under an existing release version.
+
+## Microsoft Store Windows builds
+
+Windows has two independent distribution channels:
+
+- GitHub Releases provides the immediately downloadable unsigned NSIS installer and portable executable. Those builds update from GitHub prereleases.
+- Microsoft Store provides an AppX package that Microsoft signs after certification and updates through the Store. Store-installed builds do not contact GitHub for application updates.
+
+After reserving Bordeaux in Partner Center, copy **Package/Identity/Name**, **Package/Identity/Publisher**, and **Publisher display name** from its Product identity page. Add them as GitHub Actions repository variables named `WINDOWS_STORE_IDENTITY_NAME`, `WINDOWS_STORE_PUBLISHER`, and `WINDOWS_STORE_PUBLISHER_DISPLAY_NAME`, then dispatch **Package Microsoft Store app** from `main`. The workflow uploads the unsigned AppX as a temporary Actions artifact for submission to Partner Center; do not offer that unsigned AppX as a direct download.
+
+Store versions use `major.minor.patch.beta` for prereleases and `major.minor.patch.65535` for the stable release. Increase the beta number for every Store submission under the same semantic version.
 
 ## Local artifact hygiene
 

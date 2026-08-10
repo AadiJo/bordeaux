@@ -28,7 +28,7 @@ Run `npm run verify:package` after producing an unpacked package. Release tags m
 
 Large local installers should be archived outside the worktree instead of discarded. See [local artifact hygiene](docs/packaging.md#local-artifact-hygiene) for recoverable archive/restore commands and safe Git cleanup boundaries.
 
-Beta builds can update from GitHub prereleases. See [beta prereleases and automatic updates](docs/packaging.md#beta-prereleases-and-automatic-updates) for the release workflow and platform signing requirements.
+Beta builds downloaded directly can update from GitHub prereleases; Microsoft Store builds use Store-managed updates. See [desktop packaging](docs/packaging.md) for both release channels and their signing requirements.
 
 ## Java robot integration
 
