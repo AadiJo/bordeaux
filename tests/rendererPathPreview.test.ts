@@ -33,6 +33,17 @@ function previewModule() {
 }
 
 describe("renderer path preview scheduler", () => {
+  it("does not allocate a worker until the scheduler receives work", () => {
+    const worker = new FakeWorker();
+    let allocations = 0;
+    const preview = previewModule().create({ workerFactory: () => { allocations += 1; return worker; } });
+
+    expect(allocations).toBe(0);
+    preview.request({ path: {}, robot: {}, plannerId: "profiledSpline", quality: "interactive" });
+    expect(allocations).toBe(1);
+    preview.destroy();
+  });
+
   it("keeps only the latest replacement while a worker job is running", () => {
     const worker = new FakeWorker();
     const module = previewModule();
@@ -111,6 +122,7 @@ describe("renderer path preview scheduler", () => {
     const worker = new FakeWorker();
     const preview = previewModule().create({ workerFactory: () => worker });
     const release = preview.retain();
+    preview.request({ path: {}, robot: {}, plannerId: "profiledSpline", quality: "interactive" });
     release();
     const releaseAfterReplay = preview.retain();
     await Promise.resolve();

@@ -141,11 +141,15 @@ import { PM } from "../lib/pathMath";
       };
     };
 
-    try {
-      attachWorker(workerFactory());
-    } catch (_error) {
-      worker = null;
-    }
+    const ensureWorker = () => {
+      if (worker || destroyed) return Boolean(worker);
+      try {
+        attachWorker(workerFactory());
+      } catch (_error) {
+        worker = null;
+      }
+      return Boolean(worker);
+    };
 
     return {
       request(input) {
@@ -159,6 +163,7 @@ import { PM } from "../lib/pathMath";
         };
         snapshot = { ...snapshot, status: 'pending', revision: job.revision, quality, error: null, errorKey: null, errorPath: null };
         notify();
+        ensureWorker();
         if (!worker) {
           queued = job;
           runDirect();
