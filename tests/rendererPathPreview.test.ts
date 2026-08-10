@@ -194,6 +194,38 @@ describe("renderer path preview scheduler", () => {
     expect(preview.getSnapshot()).toMatchObject({ status: "ready", revision, value: { recovered: true } });
   });
 
+  it("keeps a newer worker request while an older direct fallback is scheduled", async () => {
+    const workers = [new FakeWorker(), new FakeWorker(), new FakeWorker(), new FakeWorker()];
+    let workerIndex = 0;
+    const preview = previewModule().create({
+      workerFactory: () => workers[workerIndex++],
+      derive: (job) => ({ recovered: (job as { path: { x: number } }).path.x }),
+    });
+    preview.request({ path: { id: "path", x: 1 }, robot: {}, plannerId: "profiledSpline", quality: "interactive", key: "path" });
+    workers[0].fail();
+    workers[1].fail();
+
+    const latest = preview.request({ path: { id: "path", x: 2 }, robot: {}, plannerId: "profiledSpline", quality: "interactive", key: "path" });
+    workers[2].fail();
+    await Promise.resolve();
+
+    expect(workers[3].jobs).toEqual([expect.objectContaining({ id: latest })]);
+    workers[3].resolve({ id: latest, value: { recovered: "latest" }, durationMs: 1 });
+    expect(preview.getSnapshot()).toMatchObject({ status: "ready", revision: latest, value: { recovered: "latest" } });
+  });
+
+  it("rejects a worker response without a value or error", () => {
+    const workers = [new FakeWorker(), new FakeWorker()];
+    let workerIndex = 0;
+    const preview = previewModule().create({ workerFactory: () => workers[workerIndex++] });
+    const revision = preview.request({ path: { id: "path" }, robot: {}, plannerId: "profiledSpline", quality: "interactive", key: "path" });
+
+    workers[0].resolve({ id: revision });
+
+    expect(workers[0].terminated).toBe(true);
+    expect(workers[1].jobs).toEqual([expect.objectContaining({ id: revision })]);
+  });
+
   it("survives a StrictMode cleanup followed immediately by remount", async () => {
     const worker = new FakeWorker();
     const preview = previewModule().create({ workerFactory: () => worker });

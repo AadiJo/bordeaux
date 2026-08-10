@@ -20,6 +20,7 @@ import { PM } from "../lib/pathMath";
     let inFlight = null;
     let inFlightTimer = 0;
     let queued = null;
+    let directJob = null;
     let directScheduled = false;
     let latestRevision = 0;
     let publishedRevision = 0;
@@ -71,8 +72,8 @@ import { PM } from "../lib/pathMath";
       directScheduled = true;
       queueMicrotask(() => {
         directScheduled = false;
-        const job = queued;
-        queued = null;
+        const job = directJob;
+        directJob = null;
         if (!job || destroyed) return;
         const startedAt = performance.now();
         try {
@@ -80,7 +81,7 @@ import { PM } from "../lib/pathMath";
         } catch (error) {
           publish(job, { error: { message: error instanceof Error ? error.message : String(error) } });
         }
-        if (queued) runDirect();
+        if (directJob) runDirect();
       });
     };
 
@@ -100,7 +101,7 @@ import { PM } from "../lib/pathMath";
     const send = (job) => {
       const targetWorker = worker;
       if (!targetWorker) {
-        queued = job;
+        directJob = job;
         runDirect();
         return;
       }
@@ -125,6 +126,7 @@ import { PM } from "../lib/pathMath";
       if (destroyed) return;
       destroyed = true;
       queued = null;
+      directJob = null;
       takeInFlight();
       listeners.clear();
       if (worker) worker.terminate();
@@ -135,12 +137,15 @@ import { PM } from "../lib/pathMath";
       worker = nextWorker;
       nextWorker.onmessage = (event) => {
         if (worker !== nextWorker || !inFlight) return;
-        if (!event.data || event.data.id !== inFlight.revision) {
+        const result = event.data;
+        const hasResult = result && typeof result === 'object'
+          && (Object.prototype.hasOwnProperty.call(result, 'value') || Boolean(result.error));
+        if (!hasResult || result.id !== inFlight.revision) {
           recoverWorker(nextWorker, 'Path preview worker returned an invalid response.');
           return;
         }
         const completed = takeInFlight();
-        publish(completed, event.data);
+        publish(completed, result);
         if (queued) {
           const next = queued;
           queued = null;
@@ -159,7 +164,7 @@ import { PM } from "../lib/pathMath";
       failedWorker.terminate();
       worker = null;
       if (!queued && completed && completed.retried) {
-        queued = completed;
+        directJob = completed;
         runDirect();
         return;
       }
@@ -172,7 +177,7 @@ import { PM } from "../lib/pathMath";
         send(next);
       } catch (_error) {
         worker = null;
-        queued = next;
+        directJob = next;
         runDirect();
       }
     };
@@ -201,7 +206,7 @@ import { PM } from "../lib/pathMath";
         notify();
         ensureWorker();
         if (!worker) {
-          queued = job;
+          directJob = job;
           runDirect();
         } else if (inFlight) {
           queued = job;
