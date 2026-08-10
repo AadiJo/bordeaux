@@ -3,15 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 
 const MAX_ASAR_BYTES = 8 * 1024 * 1024;
+const rendererEntry = "dist-renderer/index.html";
 const repositoryManifest = JSON.parse(fs.readFileSync(path.resolve("package.json"), "utf8"));
 const requiredEntries = [
   "package.json",
   repositoryManifest.main,
   "dist-electron/electron/agentPlanningWorker.js",
   "dist-electron/electron/javaTrajectoryWorker.js",
-  "public/renderer/index.html",
-  "public/renderer/assets/react.production.min.js",
-  "public/renderer/assets/react-dom.production.min.js",
+  rendererEntry,
   "node_modules/@modelcontextprotocol/server/package.json",
   "node_modules/electron-updater/package.json",
   "node_modules/zod/package.json",
@@ -63,7 +62,8 @@ for (const archive of archives) {
     /(^|\/)(?:tests?|__tests__)\//i.test(entry)
     || /\.(?:test|spec)\.[^/]+$/i.test(entry)
     || /\.(?:map|d\.[cm]?ts|[cm]?ts|tsx)$/i.test(entry)
-    || /react(?:-dom)?\.development(?:\.min)?\.js$/i.test(entry));
+    || /react(?:-dom)?\.development(?:\.min)?\.js$/i.test(entry)
+    || /^(?:public|src)\/renderer\//i.test(entry));
   if (forbidden) throw new Error(`${archive} contains development-only content: ${forbidden}`);
 
   const packagedManifest = JSON.parse(extractArchiveFile(archive, "package.json").toString("utf8"));
@@ -73,11 +73,39 @@ for (const archive of archives) {
     }
   }
 
-  const rendererHtml = extractArchiveFile(archive, "public/renderer/index.html").toString("utf8");
-  if (/react(?:-dom)?\.development(?:\.min)?\.js/i.test(rendererHtml)
-      || !rendererHtml.includes("assets/react.production.min.js")
-      || !rendererHtml.includes("assets/react-dom.production.min.js")) {
-    throw new Error(`${archive} renderer does not load the vendored production React assets`);
+  const rendererHtml = extractArchiveFile(archive, rendererEntry).toString("utf8");
+  const scriptTags = [...rendererHtml.matchAll(/<script\b[^>]*>/gi)].map((match) => match[0]);
+  const scriptSources = scriptTags.flatMap((tag) => {
+    const match = tag.match(/\bsrc\s*=\s*(["'])(.*?)\1/i);
+    return match ? [match[2]] : [];
+  });
+  const stylesheetSources = [...rendererHtml.matchAll(/<link\b[^>]*>/gi)]
+    .map((match) => match[0])
+    .filter((tag) => /\brel\s*=\s*(["'])stylesheet\1/i.test(tag))
+    .flatMap((tag) => {
+      const match = tag.match(/\bhref\s*=\s*(["'])(.*?)\1/i);
+      return match ? [match[2]] : [];
+    });
+  if (!rendererHtml.includes("Content-Security-Policy") || scriptSources.length === 0 || stylesheetSources.length === 0
+      || scriptTags.some((tag) => !/\btype\s*=\s*(["'])module\1/i.test(tag) || !/\bsrc\s*=/i.test(tag))) {
+    throw new Error(`${archive} renderer is not a CSP-protected production module build`);
+  }
+  const rendererAssets = [...scriptSources, ...stylesheetSources].map((resource) => {
+    if (/^[a-z][a-z\d+.-]*:/i.test(resource) || resource.startsWith("//") || /[?#]/.test(resource)) {
+      throw new Error(`${archive} renderer references a non-local resource: ${resource}`);
+    }
+    const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(rendererEntry), resource));
+    if (!resolved.startsWith("dist-renderer/") || !entrySet.has(resolved)) {
+      throw new Error(`${archive} renderer is missing built resource: ${resource}`);
+    }
+    return resolved;
+  });
+  const rendererJavaScript = rendererAssets
+    .filter((entry) => entry.endsWith(".js"))
+    .map((entry) => extractArchiveFile(archive, entry).toString("utf8"))
+    .join("\n");
+  if (/react(?:-dom)?\.development(?:\.min)?\.js/i.test(rendererJavaScript)) {
+    throw new Error(`${archive} renderer includes a development React payload`);
   }
 
   const resourcesDirectory = path.dirname(archive);

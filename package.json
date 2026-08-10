@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "npm run build && electron dist-electron/electron/main.js",
     "build": "npm run verify:renderer && npm run build:java && npm run build:electron",
+    "build:renderer": "vite build --config vite.renderer.config.mts",
     "build:java": "node scripts/build-java.mjs build",
     "build:electron": "tsc -p tsconfig.electron.build.json",
     "test": "vitest run",
@@ -17,11 +18,11 @@
     "test:java-integration:built": "node scripts/java-project-integration.mjs",
     "test:smoke": "npm run build && npm run test:smoke:built",
     "test:smoke:built": "node scripts/electron-smoke.mjs",
-    "verify:renderer": "node scripts/verify-renderer.mjs",
+    "verify:renderer": "npm run build:renderer && node scripts/verify-renderer.mjs",
     "verify:package": "node scripts/verify-package.mjs",
     "verify:prerelease": "node scripts/verify-prerelease-version.mjs",
     "verify:release-tag": "node scripts/verify-release-tag.mjs",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit --pretty false",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.renderer.json --noEmit --pretty false && tsc -p tsconfig.electron.json --noEmit --pretty false",
     "package:dir": "npm run build && electron-builder --dir",
     "package:mac": "npm run build && electron-builder --mac --arm64 --x64 --publish never",
     "package:mac:ci": "npm run build && electron-builder --mac --arm64 --x64 --publish never --config.mac.icon=build/icon.icns",
@@ -33,10 +34,16 @@
     "@electron/asar": "3.4.1",
     "@modelcontextprotocol/client": "2.0.0",
     "@types/node": "^22.10.2",
+    "@types/react": "18.3.31",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "6.0.5",
     "electron": "^43.3.0",
     "electron-builder": "^26.15.3",
     "js-yaml": "4.3.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
     "typescript": "^5.7.2",
+    "vite": "8.2.1",
     "vitest": "^4.1.10"
   },
   "engines": {
@@ -60,7 +67,7 @@
     },
     "files": [
       "dist-electron/**/*",
-      "public/renderer/**/*",
+      "dist-renderer/**/*",
       "!**/*.map",
       "!**/*.d.ts",
       "!**/*.d.mts",
@@ -73,8 +80,7 @@
       "!**/tests/**",
       "!**/__tests__/**",
       "!**/*.test.*",
-      "!**/*.spec.*",
-      "!public/renderer/assets/*.development.js"
+      "!**/*.spec.*"
     ],
     "electronLanguages": [
       "en-US"

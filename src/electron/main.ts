@@ -408,7 +408,7 @@ function createWindow() {
     allowClose = false;
   });
 
-  void window.loadFile(path.join(__dirname, "../../public/renderer/index.html"));
+  void window.loadFile(path.join(__dirname, "../../dist-renderer/index.html"));
 
   if (process.env.BORDEAUX_SMOKE_TEST === "1") {
     window.webContents.once("did-finish-load", async () => {
@@ -585,7 +585,7 @@ function createWindow() {
         window.bordeauxAPI.setDirty(true);
         const probe = document.createElement('script'); probe.textContent = 'window.__bordeauxInlineScriptRan = true'; document.head.appendChild(probe);
         const editorRestored = opened.project.editor?.activePathId === secondPath.id && opened.project.editor?.javaProjectBookmarkId === recentJavaProjects[0].id;
-        return { title: document.title, api: typeof window.bordeauxAPI?.saveProject === "function", root: Boolean(document.getElementById("root")?.children.length), unnamed, main: document.querySelectorAll('main').length, nav: document.querySelectorAll('nav').length, validation: validation.ok, motorPreset, eventMarkerAutosave, multiRoutineUi, javaDiscovery: javaConnection.catalog.projectName === 'SmokeRobot' && javaConnection.catalog.commands.some((command) => command.id === 'frc.robot.SmokeCommand'), javaInstalled: installedJavaConnection.integration.installed, javaBuilt: builtJavaConnection.catalog.authoritative === true && builtJavaConnection.catalog.catalogHash === reopenedJavaConnection.catalog.catalogHash, javaRecent: recentJavaProjects.length === 1 && reopenedJavaConnection.catalog.projectName === 'SmokeRobot', javaUi, staleJavaExportRejected, javaExported: javaExported.exported && javaExported.eventCount === 1, restored: restored.project.name === persistedProject.name, roundTrip: saved.saved && opened.project.name === persistedProject.name && opened.project.routine.nodes[0].ref === 'path_smoke', editorRestored, nodeGlobalsBlocked: typeof require === 'undefined', popupBlocked: window.open('https://example.com') === null, inlineScriptBlocked: !window.__bordeauxInlineScriptRan };
+        return { title: document.title, api: typeof window.bordeauxAPI?.saveProject === "function", root: Boolean(document.getElementById("root")?.children.length), fatalError: document.querySelector('.fatal-error')?.textContent || '', unnamed, main: document.querySelectorAll('main').length, nav: document.querySelectorAll('nav').length, validation: validation.ok, motorPreset, eventMarkerAutosave, multiRoutineUi, javaDiscovery: javaConnection.catalog.projectName === 'SmokeRobot' && javaConnection.catalog.commands.some((command) => command.id === 'frc.robot.SmokeCommand'), javaInstalled: installedJavaConnection.integration.installed, javaBuilt: builtJavaConnection.catalog.authoritative === true && builtJavaConnection.catalog.catalogHash === reopenedJavaConnection.catalog.catalogHash, javaRecent: recentJavaProjects.length === 1 && reopenedJavaConnection.catalog.projectName === 'SmokeRobot', javaUi, staleJavaExportRejected, javaExported: javaExported.exported && javaExported.eventCount === 1, restored: restored.project.name === persistedProject.name, roundTrip: saved.saved && opened.project.name === persistedProject.name && opened.project.routine.nodes[0].ref === 'path_smoke', editorRestored, nodeGlobalsBlocked: typeof require === 'undefined', popupBlocked: window.open('https://example.com') === null, inlineScriptBlocked: !window.__bordeauxInlineScriptRan };
       })()`);
       await new Promise((resolve) => setTimeout(resolve, 50));
       window.close();
