@@ -30,7 +30,7 @@ class FakeWorker {
 function previewModule(worker: FakeWorker) {
   return (PathPreview as {
     create(options: { workerFactory: () => FakeWorker }): {
-      request(input: { path: unknown; robot: unknown; plannerId: string; quality: "interactive" | "final" }): number;
+      request(input: { path: unknown; robot: unknown; plannerId: string; quality: "interactive" | "final"; key?: string }): number;
       getSnapshot(): { status: string; revision: number; quality: string; value: unknown };
       subscribe(listener: () => void): () => void;
       destroy(): void;
@@ -74,6 +74,17 @@ describe("renderer path preview scheduler", () => {
 
     preview.destroy();
     expect(worker.terminated).toBe(true);
+  });
+
+  it("does not relabel a previous value while a different path is pending", () => {
+    const worker = new FakeWorker();
+    const preview = previewModule(worker).create({ workerFactory: () => worker });
+    const first = preview.request({ path: {}, robot: {}, plannerId: "profiledSpline", quality: "final", key: "first" });
+    worker.resolve({ id: first, value: { path: "first" }, durationMs: 1 });
+
+    preview.request({ path: {}, robot: {}, plannerId: "profiledSpline", quality: "final", key: "second" });
+
+    expect(preview.getSnapshot()).toMatchObject({ status: "pending", key: "first", value: { path: "first" } });
   });
 });
 

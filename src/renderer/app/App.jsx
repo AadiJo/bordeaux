@@ -190,7 +190,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     if (current) lastValid.current = current;
     return {
       value: current || lastValid.current,
-      error: snapshot.key === doc.id ? snapshot.error : fallback.error,
+      error: snapshot.errorKey === doc.id ? snapshot.error : fallback.error,
       pending: snapshot.status === 'pending',
       durationMs: snapshot.durationMs || 0,
     };
