@@ -1,4 +1,5 @@
 import * as React from "react";
+import { PathEdit } from "../assets/path-edit";
 import { PathPreview } from "../assets/path-preview";
 import { ContextInspector } from "../components/ContextInspector";
 import { FIELD_DIMS, FieldView } from "../components/FieldView";
@@ -140,9 +141,18 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
   }
 
   const usePlayback = (store) => useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
-  function PlaybackField({ store, ...props }) {
+  function EditablePlaybackField({ store, editStore, doc, derived, robot, plannerId, ...props }) {
     const playback = usePlayback(store);
-    return h(FieldView, { ...props, playTime: playback.time });
+    const draft = useSyncExternalStore(editStore.subscribe, editStore.getSnapshot, editStore.getSnapshot);
+    const previewer = useMemo(() => PathPreview.create(), []);
+    const [preview, setPreview] = useState(() => previewer.getSnapshot());
+    useEffect(() => previewer.subscribe(() => setPreview(previewer.getSnapshot())), [previewer]);
+    useEffect(() => {
+      if (draft) previewer.request({ key: draft.id, path: draft, robot, plannerId, quality: 'interactive' });
+    }, [previewer, draft, robot, plannerId]);
+    useEffect(() => () => previewer.destroy(), [previewer]);
+    const draftDerived = draft && preview.key === draft.id && preview.value ? preview.value : derived;
+    return h(FieldView, { ...props, doc: draft || doc, derived: draftDerived, robot, playTime: playback.time });
   }
   function PlaybackTransport({ store, ...props }) {
     const playback = usePlayback(store);
@@ -214,7 +224,6 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const [tool, setTool] = useState('select');
     const [waypointPreview, setWaypointPreview] = useState(null);
     const [headMenu, setHeadMenu] = useState(null);
-    const [draftDoc, setDraftDoc] = useState(null);
     const [dirty, setDirty] = useState(false);
     const [agentProposal, setAgentProposal] = useState(null);
     const [agentCandidateId, setAgentCandidateId] = useState(null);
@@ -228,7 +237,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const javaRestoreGeneration = useRef(0);
     const skipDirty = useRef(true);
     const keyboardNavigation = useRef(false);
-    const draftRef = useRef(null);
+    const editStore = useMemo(() => PathEdit.create(), []);
     const playbackStore = useMemo(() => createPlaybackStore(), []);
     const routinePlaybackStore = useMemo(() => createPlaybackStore(), []);
     useEffect(() => () => { playbackStore.destroy(); routinePlaybackStore.destroy(); }, [playbackStore, routinePlaybackStore]);
@@ -388,8 +397,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const robot = project.robot;
     const accent = ACCENT;
 
-    const persistedDoc = project.paths[activeIdx];
-    const doc = draftDoc && persistedDoc && draftDoc.id === persistedDoc.id ? draftDoc : persistedDoc;
+    const doc = project.paths[activeIdx];
     const docRef = useRef(doc); docRef.current = doc;
     const hist = useRef({ past: [], future: [] });
     const routineHist = useRef({ past: [], future: [] });
@@ -487,7 +495,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }, []);
 
     // ---- derived path data ----
-    const derivation = usePathPreview(doc, robot, plannerId, draftDoc ? 'interactive' : 'final');
+    const derivation = usePathPreview(doc, robot, plannerId, 'final');
     if (!derivation.value) throw derivation.error || new Error('Could not derive the active path');
     const derived = derivation.value;
 
@@ -501,33 +509,29 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const beginHistory = useCallback(() => { hist.current.past.push(clone(docRef.current)); if (hist.current.past.length > 80) hist.current.past.shift(); hist.current.future = []; projectHist.current.future = []; force((x) => x + 1); }, []);
     const commit = useCallback((fn) => { beginHistory(); writeDoc(fn(clone(docRef.current))); }, [beginHistory, writeDoc]);
     const beginEdit = useCallback(() => {
-      if (draftRef.current) return;
+      if (editStore.getSnapshot()) return;
       beginHistory();
-      draftRef.current = clone(docRef.current);
-    }, [beginHistory]);
+      editStore.begin(clone(docRef.current));
+    }, [beginHistory, editStore]);
     const finishEdit = useCallback(() => {
-      const next = draftRef.current;
+      const next = editStore.finish();
       if (!next) return;
-      draftRef.current = null;
-      setDraftDoc(null);
       writeDoc(next);
-    }, [writeDoc]);
+    }, [editStore, writeDoc]);
     const cancelEdit = useCallback(() => {
-      if (!draftRef.current) return;
-      draftRef.current = null;
-      setDraftDoc(null);
+      if (!editStore.cancel()) return;
       hist.current.past.pop();
       force((x) => x + 1);
-    }, []);
+    }, [editStore]);
     useEffect(() => {
-      if (draftRef.current && persistedDoc && draftRef.current.id !== persistedDoc.id) cancelEdit();
-    }, [persistedDoc && persistedDoc.id, cancelEdit]);
+      const draft = editStore.getSnapshot();
+      if (draft && doc && draft.id !== doc.id) cancelEdit();
+    }, [doc && doc.id, editStore, cancelEdit]);
     const mutate = useCallback((fn) => {
-      if (!draftRef.current) { writeDoc(fn(clone(docRef.current))); return; }
-      const next = fn(clone(draftRef.current));
-      draftRef.current = next;
-      setDraftDoc(next);
-    }, [writeDoc]);
+      const draft = editStore.getSnapshot();
+      if (!draft) { writeDoc(fn(clone(docRef.current))); return; }
+      editStore.update(fn(clone(draft)));
+    }, [editStore, writeDoc]);
 
     const undo = useCallback(() => {
       const H = hist.current;
@@ -1429,7 +1433,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
               derivation.error && h('div', { className: 'insert-preview derivation-error', role: 'alert' },
                 h('div', { className: 'insert-preview-copy' }, h('b', null, 'Path preview unavailable'), h('span', null, derivation.error.message || String(derivation.error))),
                 h('span', null, 'Showing the last valid preview. Undo or edit the selected geometry.')),
-              h(PlaybackField, { store: playbackStore, doc, derived, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, actions: fieldActions, showHandles: true }),
+              h(EditablePlaybackField, { store: playbackStore, editStore, doc, derived, robot, plannerId, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, drive: robot.drive, accent, metric, actions: fieldActions, onSelPos, showHandles: true }),
               tool !== 'select' && !waypointPreview && h('div', { className: 'stage-hint', dangerouslySetInnerHTML: { __html: toolHint(tool) } }),
               waypointPreview && h('div', { className: 'insert-preview', role: 'region', 'aria-label': 'Preview waypoint insertion' },
                 h('div', { className: 'insert-preview-copy' },

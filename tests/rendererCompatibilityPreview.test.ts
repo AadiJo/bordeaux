@@ -127,7 +127,8 @@ describe("renderer application", () => {
   it("commits canvas edits once per completed pointer gesture", () => {
     const app = fs.readFileSync(new URL("../src/renderer/app/App.jsx", import.meta.url), "utf8");
     const field = fs.readFileSync(new URL("../src/renderer/components/FieldView.jsx", import.meta.url), "utf8");
-    expect(app).toContain("const [draftDoc, setDraftDoc] = useState(null)");
+    expect(app).toContain("PathEdit.create()");
+    expect(app).toContain("useSyncExternalStore(editStore.subscribe");
     expect(app).toContain("beginEdit, finishEdit, cancelEdit");
     expect(field).toContain("actions.finishEdit()");
     expect(field).toContain("actions.cancelEdit()");
