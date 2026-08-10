@@ -42,7 +42,7 @@ public final class BordeauxArguments {
         StrictJson.validate(node, long.class, "Command '" + commandId + "' argument '" + name + "'");
         try {
             if (node.isTextual()) return Long.parseLong(node.textValue());
-        } catch (ArithmeticException | NumberFormatException ignored) {
+        } catch (NumberFormatException ignored) {
             // The common error below is clearer and includes the command and parameter.
         }
         throw error(name, "must be a signed 64-bit integer encoded as a decimal string");

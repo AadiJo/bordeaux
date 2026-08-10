@@ -13,6 +13,8 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** Rejects Jackson coercions before conversion, recursively following the authored Java type. */
 final class StrictJson {
@@ -21,6 +23,9 @@ final class StrictJson {
     private static final int MAX_OBJECT_FIELDS = 256;
     private static final int MAX_EXACT_CHARACTERS = 1_024;
     private static final int MAX_DECIMAL_EXPONENT = 10_000;
+    private static final Pattern EXACT_INTEGER_PATTERN = Pattern.compile("[+-]?\\d+");
+    private static final Pattern EXACT_DECIMAL_PATTERN = Pattern.compile("[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?");
+    private static final Pattern DECIMAL_EXPONENT_PATTERN = Pattern.compile("[eE]([+-]?\\d+)$");
 
     private StrictJson() {}
 
@@ -148,7 +153,7 @@ final class StrictJson {
 
     private static void exactInteger(JsonNode node, String path, BigInteger minimum, BigInteger maximum) {
         if (!node.isTextual() || node.textValue().length() > MAX_EXACT_CHARACTERS
-                || !node.textValue().matches("[+-]?\\d+")) {
+                || !EXACT_INTEGER_PATTERN.matcher(node.textValue()).matches()) {
             fail(path, "must be a signed digit string");
         }
         BigInteger value = new BigInteger(node.textValue());
@@ -159,10 +164,10 @@ final class StrictJson {
 
     private static void exactDecimal(JsonNode node, String path) {
         if (!node.isTextual() || node.textValue().length() > MAX_EXACT_CHARACTERS
-                || !node.textValue().matches("[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?")) {
+                || !EXACT_DECIMAL_PATTERN.matcher(node.textValue()).matches()) {
             fail(path, "must be a decimal string");
         }
-        java.util.regex.Matcher exponent = java.util.regex.Pattern.compile("[eE]([+-]?\\d+)$").matcher(node.textValue());
+        Matcher exponent = DECIMAL_EXPONENT_PATTERN.matcher(node.textValue());
         if (exponent.find() && new BigInteger(exponent.group(1)).abs().compareTo(BigInteger.valueOf(MAX_DECIMAL_EXPONENT)) > 0) {
             fail(path, "decimal exponent exceeds " + MAX_DECIMAL_EXPONENT);
         }
