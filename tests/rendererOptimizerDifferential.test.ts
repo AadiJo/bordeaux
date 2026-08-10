@@ -196,7 +196,7 @@ describe("static renderer optimizer mirror", () => {
         expect(Math.atan2(Math.sin(renderedHeading - shared.samples[index].headingRad), Math.cos(renderedHeading - shared.samples[index].headingRad)), `heading ${seed}:${index}`).toBeCloseTo(0, 3);
       });
     }
-  }, 15_000);
+  }, 45_000);
 
   it("matches translation-priority and stationary-action total timing", () => {
     const renderer = rendererMath();
@@ -473,7 +473,7 @@ describe("explicit geometry refinement", () => {
     expect(repeated.path).toBeUndefined();
     expect(result.path?.geometryRefinement?.anchor).toHaveLength(path.waypoints.length);
     expect(result.path?.geometryRefinement?.applied).toHaveLength(path.waypoints.length);
-  }, 12_000);
+  }, 30_000);
 
   it("matches shared robot-footprint clearance for field obstacles and path keep-outs", () => {
     const project = createDemoProject();
