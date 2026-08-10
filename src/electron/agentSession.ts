@@ -268,6 +268,7 @@ export class AgentSessionService {
   private readonly planningAborts = new Set<AbortController>();
   private previewPlanningAbort: AbortController | null = null;
   private previewGeneration = 0;
+  private committedPreviewId: string | null = null;
 
   constructor(
     private readonly sendProposal: (proposal: AgentProposal, requireReceipt: boolean) => void | Promise<void>,
@@ -277,6 +278,8 @@ export class AgentSessionService {
 
   clearSnapshot(): void {
     this.abortPlanning();
+    this.previewGeneration += 1;
+    this.committedPreviewId = null;
     this.snapshot = null;
     for (const proposal of this.proposals.values()) {
       if (proposal.status === "ready") proposal.status = "stale";
@@ -292,6 +295,9 @@ export class AgentSessionService {
     this.snapshot = value;
     if (!previous || previous.sessionId !== value.sessionId || previous.revision !== value.revision) {
       this.abortPlanning();
+      this.previewGeneration += 1;
+      const committed = this.committedPreviewId ? this.proposals.get(this.committedPreviewId) : undefined;
+      if (!committed || committed.baseSessionId !== value.sessionId || committed.baseRevision !== value.revision) this.committedPreviewId = null;
       for (const proposal of this.proposals.values()) {
         if (proposal.status === "ready" && (proposal.baseSessionId !== value.sessionId || proposal.baseRevision !== value.revision)) {
           proposal.status = "stale";
@@ -315,6 +321,7 @@ export class AgentSessionService {
     const proposal = this.proposals.get(proposalId);
     if (!proposal) return;
     proposal.status = status;
+    if (proposalId === this.committedPreviewId) this.committedPreviewId = null;
     if (status === "applied" && Number.isSafeInteger(appliedRevision)) proposal.appliedRevision = appliedRevision;
   }
 
@@ -331,31 +338,55 @@ export class AgentSessionService {
   private expireProposals(): void {
     const cutoff = Date.now() - PROPOSAL_TTL_MS;
     for (const proposal of this.proposals.values()) {
-      if (proposal.status === "ready" && Date.parse(proposal.createdAt) < cutoff) proposal.status = "expired";
+      if (Date.parse(proposal.createdAt) >= cutoff) continue;
+      if (proposal.status === "ready") proposal.status = "expired";
+      if (proposal.id === this.committedPreviewId) this.committedPreviewId = null;
     }
-    while (this.proposals.size > MAX_PROPOSALS) this.proposals.delete(this.proposals.keys().next().value!);
+    while (this.proposals.size > MAX_PROPOSALS) {
+      const proposalId = this.proposals.keys().next().value!;
+      this.proposals.delete(proposalId);
+      if (proposalId === this.committedPreviewId) this.committedPreviewId = null;
+    }
   }
 
-  private claimPreviewOwnership(): number {
+  private claimPreviewOwnership(signal?: AbortSignal): number {
+    if (signal?.aborted) throw canceledRequestError();
     this.previewPlanningAbort?.abort();
     this.previewGeneration += 1;
+    let displacedPendingPreview = false;
+    for (const proposal of this.proposals.values()) {
+      if (proposal.status !== "ready" || proposal.id === this.committedPreviewId) continue;
+      proposal.status = "stale";
+      displacedPendingPreview = true;
+      void Promise.resolve(this.sendProposal(proposal, false)).catch(() => undefined);
+    }
+    if (displacedPendingPreview) this.restoreCommittedPreview();
     return this.previewGeneration;
   }
 
-  private async stage<T extends AgentProposal>(proposal: T, signal?: AbortSignal, previewGeneration?: number): Promise<{ proposal: T; supersededProposalId?: string }> {
+  private restoreCommittedPreview(): void {
+    if (!this.committedPreviewId || !this.snapshot) return;
+    const committed = this.proposals.get(this.committedPreviewId);
+    if (!committed || committed.baseSessionId !== this.snapshot.sessionId || committed.baseRevision !== this.snapshot.revision) {
+      this.committedPreviewId = null;
+      return;
+    }
+    committed.status = "ready";
+    void Promise.resolve(this.sendProposal(committed, false)).catch(() => undefined);
+  }
+
+  private async stage<T extends AgentProposal>(proposal: T, previewGeneration: number, signal?: AbortSignal): Promise<{ proposal: T; supersededProposalId?: string }> {
     if (signal?.aborted) throw canceledRequestError();
-    if (previewGeneration !== undefined && previewGeneration !== this.previewGeneration) {
+    if (previewGeneration !== this.previewGeneration) {
       throw new Error("Agent preview request was superseded by a newer request.");
     }
     if (!this.snapshot || this.snapshot.sessionId !== proposal.baseSessionId || this.snapshot.revision !== proposal.baseRevision) {
       throw new Error("The Bordeaux editor session changed while the proposal was being generated. Retry against the current session.");
     }
     let supersededProposalId: string | undefined;
-    const superseded: AgentProposal[] = [];
     for (const existing of this.proposals.values()) {
       if (existing.status !== "ready") continue;
       supersededProposalId = existing.id;
-      superseded.push(existing);
       existing.status = "stale";
       void Promise.resolve(this.sendProposal(existing, false)).catch(() => undefined);
     }
@@ -364,26 +395,23 @@ export class AgentSessionService {
     try {
       await waitForAbort(Promise.resolve(this.sendProposal(proposal, true)), signal);
       if (signal?.aborted) throw canceledRequestError();
-      if (previewGeneration !== undefined && previewGeneration !== this.previewGeneration) {
+      if (previewGeneration !== this.previewGeneration) {
         throw new Error("Agent preview request was superseded by a newer request.");
       }
       if (!this.snapshot || this.snapshot.sessionId !== proposal.baseSessionId || this.snapshot.revision !== proposal.baseRevision || proposal.status !== "ready") {
         throw new Error("The Bordeaux editor session changed before it acknowledged the proposal. Retry against the current session.");
       }
     } catch (error) {
-      this.proposals.delete(proposal.id);
       const contextStillCurrent = this.snapshot?.sessionId === proposal.baseSessionId && this.snapshot.revision === proposal.baseRevision;
-      const stillOwnsPreview = previewGeneration === undefined || previewGeneration === this.previewGeneration;
+      const stillOwnsPreview = previewGeneration === this.previewGeneration;
       if (contextStillCurrent && stillOwnsPreview) {
         proposal.status = "stale";
         void Promise.resolve(this.sendProposal(proposal, false)).catch(() => undefined);
-        for (const existing of superseded) {
-          existing.status = "ready";
-          void Promise.resolve(this.sendProposal(existing, false)).catch(() => undefined);
-        }
+        this.restoreCommittedPreview();
       }
       throw error;
     }
+    this.committedPreviewId = proposal.id;
     return { proposal, ...(supersededProposalId ? { supersededProposalId } : {}) };
   }
 
@@ -496,7 +524,8 @@ export class AgentSessionService {
         status: "ready",
         createdAt: new Date().toISOString(),
       };
-      const staged = await this.stage(proposal, signal, this.claimPreviewOwnership());
+      const previewGeneration = this.claimPreviewOwnership(signal);
+      const staged = await this.stage(proposal, previewGeneration, signal);
       return proposalSummary(staged.proposal, staged.supersededProposalId);
     }
     if (request.method === "resolve_field_terms") {
@@ -524,6 +553,7 @@ export class AgentSessionService {
       return request.params.detail === "samples" ? analysis : analysisSummary(analysis);
     }
     if (request.method === "repair_path") {
+      const previewGeneration = this.claimPreviewOwnership(signal);
       const candidates = await this.executePlanning<ReturnType<typeof generateRepairCandidates>>({
         kind: "repair", snapshot, pathId,
         findingIds: request.params.findingIds,
@@ -556,7 +586,7 @@ export class AgentSessionService {
         status: "ready",
         createdAt: new Date().toISOString(),
       };
-      const staged = await this.stage(proposal, signal, this.claimPreviewOwnership());
+      const staged = await this.stage(proposal, previewGeneration, signal);
       return proposalSummary(staged.proposal, staged.supersededProposalId);
     }
     if (request.method !== "plan_path") throw new Error("Unsupported Bordeaux agent request.");
@@ -566,6 +596,7 @@ export class AgentSessionService {
     const planningRequest: PlanPathRequest = request.params.basePathId || !request.params.context
       ? request.params
       : { ...request.params, basePathId: request.params.context.activePathId };
+    const previewGeneration = this.claimPreviewOwnership(signal);
     const candidates = await this.executePlanning<ReturnType<typeof generateRouteCandidates>>({
       kind: "route", snapshot, request: planningRequest,
     }, snapshot, signal);
@@ -638,7 +669,7 @@ export class AgentSessionService {
       status: "ready",
       createdAt: new Date().toISOString(),
     };
-    const staged = await this.stage(proposal, signal, this.claimPreviewOwnership());
+    const staged = await this.stage(proposal, previewGeneration, signal);
     return proposalSummary(staged.proposal, staged.supersededProposalId);
   }
 }

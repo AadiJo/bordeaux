@@ -412,6 +412,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.onAgentProposal !== 'function') return;
       let active = true;
+      let receivedLiveProposal = false;
       let lastProposalKey = '';
       const receiveProposal = (proposal) => {
         if (!active || !proposal) return;
@@ -426,9 +427,14 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         setAgentCandidateId(proposal.recommendedCandidateId || null);
         setPage(proposal.operation === 'configureRobot' ? 'robot' : 'plan');
       };
-      const unsubscribe = window.bordeauxAPI.onAgentProposal(receiveProposal);
+      const unsubscribe = window.bordeauxAPI.onAgentProposal((proposal) => {
+        receivedLiveProposal = true;
+        receiveProposal(proposal);
+      });
       if (typeof window.bordeauxAPI.getActiveAgentProposal === 'function') {
-        Promise.resolve(window.bordeauxAPI.getActiveAgentProposal()).then(receiveProposal).catch(() => undefined);
+        Promise.resolve(window.bordeauxAPI.getActiveAgentProposal()).then((proposal) => {
+          if (!receivedLiveProposal) receiveProposal(proposal);
+        }).catch(() => undefined);
       }
       return () => { active = false; unsubscribe(); };
     }, [agentSessionId]);

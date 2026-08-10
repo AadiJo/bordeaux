@@ -18,6 +18,16 @@ function snapshot(revision = 0) {
   };
 }
 
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("agent session and private bridge", () => {
   it("cancels an in-flight planning job when the editor revision changes", async () => {
     let aborted = false;
@@ -252,6 +262,50 @@ describe("agent session and private bridge", () => {
     ]);
   });
 
+  it.each([
+    { change: "revision", settlement: "success" },
+    { change: "session", settlement: "failure" },
+    { change: "clear", settlement: "cancel" },
+  ] as const)("does not restore a preview after a $change change and late $settlement", async ({ change, settlement }) => {
+    const receipt = deferred();
+    const received = deferred();
+    const notifications: Array<{ intent: string; status: string }> = [];
+    const service = new AgentSessionService((proposal, requireReceipt) => {
+      notifications.push({ intent: proposal.intent, status: proposal.status });
+      if (requireReceipt && proposal.intent === "Pending preview") {
+        received.resolve();
+        return receipt.promise;
+      }
+    }, () => null);
+    const initial = snapshot();
+    service.publishSnapshot(initial);
+    const committed: any = await service.request({ method: "plan_path", params: {
+      intent: "Committed preview", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 2, y: 1 }], maximumCandidates: 1,
+    } });
+    const controller = new AbortController();
+    const pendingRequest = service.request({ method: "plan_path", params: {
+      intent: "Pending preview", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 3, y: 1 }], maximumCandidates: 1,
+    } }, controller.signal).then(
+      () => ({ fulfilled: true as const }),
+      (error: unknown) => ({ fulfilled: false as const, error }),
+    );
+    await received.promise;
+
+    if (change === "revision") service.publishSnapshot({ ...initial, revision: 1 });
+    else if (change === "session") service.publishSnapshot({ ...initial, sessionId: "session_reopened" });
+    else service.clearSnapshot();
+    const notificationsAfterContextChange = notifications.length;
+    if (settlement === "success") receipt.resolve();
+    else if (settlement === "failure") receipt.reject(new Error("late receipt failure"));
+    else controller.abort();
+
+    expect((await pendingRequest).fulfilled).toBe(false);
+    receipt.resolve();
+    expect(service.getActiveProposal()).toBeNull();
+    expect((await service.request({ method: "get_proposal", params: { proposalId: committed.proposalId } }) as any).status).toBe("stale");
+    expect(notifications.slice(notificationsAfterContextChange)).not.toContainEqual(expect.objectContaining({ status: "ready" }));
+  });
+
   it("does not let an older staging failure restore a preview superseded by a newer proposal", async () => {
     let rejectOlder: ((error: Error) => void) | undefined;
     let olderReceived: (() => void) | undefined;
@@ -286,6 +340,118 @@ describe("agent session and private bridge", () => {
     expect(notifications.at(-1)).toEqual({ intent: "Newest preview", status: "ready" });
   });
 
+  it.each([
+    { older: "success", newer: "failure", order: "older-first" },
+    { older: "failure", newer: "failure", order: "older-first" },
+    { older: "cancel", newer: "failure", order: "older-first" },
+    { older: "success", newer: "cancel", order: "newer-first" },
+    { older: "failure", newer: "cancel", order: "newer-first" },
+    { older: "cancel", newer: "cancel", order: "newer-first" },
+  ] as const)("restores only the committed preview when nested staging settles $order ($older/$newer)", async ({ older, newer, order }) => {
+    const olderReceipt = deferred();
+    const newerReceipt = deferred();
+    const olderReceived = deferred();
+    const newerReceived = deferred();
+    const notifications: Array<{ intent: string; status: string }> = [];
+    const service = new AgentSessionService((proposal, requireReceipt) => {
+      notifications.push({ intent: proposal.intent, status: proposal.status });
+      if (!requireReceipt) return;
+      if (proposal.intent === "Older provisional path") {
+        olderReceived.resolve();
+        return olderReceipt.promise;
+      }
+      if (proposal.intent === "Newer provisional profile") {
+        newerReceived.resolve();
+        return newerReceipt.promise;
+      }
+    }, () => null);
+    service.publishSnapshot(snapshot());
+    const original: any = await service.request({ method: "plan_path", params: {
+      intent: "Committed preview", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 2, y: 1 }], maximumCandidates: 1,
+    } });
+
+    const olderController = new AbortController();
+    const olderRequest = service.request({ method: "plan_path", params: {
+      intent: "Older provisional path", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 3, y: 1 }], maximumCandidates: 1,
+    } }, olderController.signal).then(
+      () => ({ fulfilled: true as const }),
+      (error: unknown) => ({ fulfilled: false as const, error }),
+    );
+    await olderReceived.promise;
+
+    const newerController = new AbortController();
+    const newerRequest = service.request({ method: "propose_robot_profile", params: {
+      intent: "Newer provisional profile",
+      planning: { intake: { name: "Front intake", centerM: { x: 0.42, y: 0 }, directionDeg: 0, captureWidthM: 0.72, maxCollectSpeedMps: 2 } },
+    } }, newerController.signal).then(
+      () => ({ fulfilled: true as const }),
+      (error: unknown) => ({ fulfilled: false as const, error }),
+    );
+    await newerReceived.promise;
+
+    const settleOlder = () => {
+      if (older === "success") olderReceipt.resolve();
+      else if (older === "failure") olderReceipt.reject(new Error("older receipt rejected"));
+      else olderController.abort();
+    };
+    const settleNewer = () => {
+      if (newer === "failure") newerReceipt.reject(new Error("newer receipt rejected"));
+      else newerController.abort();
+    };
+    if (order === "older-first") {
+      settleOlder();
+      expect((await olderRequest).fulfilled).toBe(false);
+      settleNewer();
+    } else {
+      settleNewer();
+      expect((await newerRequest).fulfilled).toBe(false);
+      settleOlder();
+    }
+    expect((await olderRequest).fulfilled).toBe(false);
+    expect((await newerRequest).fulfilled).toBe(false);
+    olderReceipt.resolve();
+    newerReceipt.resolve();
+
+    expect(service.getActiveProposal()?.id).toBe(original.proposalId);
+    expect((await service.request({ method: "get_proposal", params: { proposalId: original.proposalId } }) as any).status).toBe("ready");
+    expect(notifications.at(-1)).toEqual({ intent: "Committed preview", status: "ready" });
+  });
+
+  it("does not let an already-canceled proposal invalidate pending staging", async () => {
+    const pendingReceipt = deferred();
+    const pendingReceived = deferred();
+    const notifications: string[] = [];
+    const service = new AgentSessionService((proposal, requireReceipt) => {
+      notifications.push(proposal.intent);
+      if (requireReceipt && proposal.intent === "Pending valid preview") {
+        pendingReceived.resolve();
+        return pendingReceipt.promise;
+      }
+    }, () => null);
+    service.publishSnapshot(snapshot());
+    await service.request({ method: "plan_path", params: {
+      intent: "Committed preview", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 2, y: 1 }], maximumCandidates: 1,
+    } });
+
+    const pending = service.request({ method: "plan_path", params: {
+      intent: "Pending valid preview", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 3, y: 1 }], maximumCandidates: 1,
+    } });
+    await pendingReceived.promise;
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(service.request({ method: "propose_robot_profile", params: {
+      intent: "Canceled robot profile",
+      planning: { intake: { name: "Front intake", centerM: { x: 0.42, y: 0 }, directionDeg: 0, captureWidthM: 0.72, maxCollectSpeedMps: 2 } },
+    } }, controller.signal)).rejects.toThrow("Agent request was canceled");
+    pendingReceipt.resolve();
+    const result: any = await pending;
+
+    expect(service.getActiveProposal()?.id).toBe(result.proposalId);
+    expect(notifications).not.toContain("Canceled robot profile");
+    expect(notifications.at(-1)).toBe("Pending valid preview");
+  });
+
   it("keeps only the newest proposal ready for the single preview surface", async () => {
     const service = new AgentSessionService(() => {}, () => null);
     service.publishSnapshot(snapshot());
@@ -318,28 +484,28 @@ describe("agent session and private bridge", () => {
     expect((await service.request({ method: "get_proposal", params: { proposalId: proposal.proposalId } }) as any).status).toBe("stale");
   });
 
-  it("keeps a newer robot-profile proposal ahead of an older path request", async () => {
+  it("keeps a newer robot-profile proposal ahead of a non-cooperative older path request", async () => {
     let pathStarted: (() => void) | undefined;
+    let finishPath: ((value: unknown) => void) | undefined;
     const started = new Promise<void>((resolve) => { pathStarted = resolve; });
     const notifications: string[] = [];
     const service = new AgentSessionService((proposal) => { notifications.push(proposal.intent); }, () => null, (job, signal) => {
       if (job.kind !== "route") return runAgentPlanningJobDirect(job);
       pathStarted?.();
-      return new Promise((_resolve, reject) => {
-        signal?.addEventListener("abort", () => reject(new Error("older path planning aborted")), { once: true });
-      });
+      return new Promise((resolve) => { finishPath = resolve; });
     });
     service.publishSnapshot(snapshot());
 
     const olderPath = service.request({ method: "plan_path", params: {
       intent: "Older path preview", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 3, y: 1 }], maximumCandidates: 1,
     } });
-    const olderRejected = expect(olderPath).rejects.toThrow("older path planning aborted");
+    const olderRejected = expect(olderPath).rejects.toThrow("Agent planning was canceled");
     await started;
     const profile: any = await service.request({ method: "propose_robot_profile", params: {
       intent: "Newer robot profile",
       planning: { intake: { name: "Front intake", centerM: { x: 0.42, y: 0 }, directionDeg: 0, captureWidthM: 0.72, maxCollectSpeedMps: 2 } },
     } });
+    finishPath?.([]);
     await olderRejected;
 
     expect(profile).toMatchObject({ status: "ready", operation: "configureRobot" });
