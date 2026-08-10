@@ -1,6 +1,6 @@
 import * as React from "react";
 
-// Cancellable pointer drags with capture, blur, and unmount cleanup.
+// Global pointer drags with best-effort capture and terminal cancellation.
   function begin(event, handlers) {
     const target = event.currentTarget;
     const pointerId = event.pointerId;
@@ -14,7 +14,6 @@ import * as React from "react";
       window.removeEventListener('pointerup', end);
       window.removeEventListener('pointercancel', cancel);
       window.removeEventListener('blur', cancel);
-      if (target && target.removeEventListener) target.removeEventListener('lostpointercapture', cancel);
       if (handlers.cursor) document.body.style.cursor = previousCursor;
       try {
         if (target && target.hasPointerCapture && target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId);
@@ -38,7 +37,6 @@ import * as React from "react";
     window.addEventListener('pointerup', end);
     window.addEventListener('pointercancel', cancel);
     window.addEventListener('blur', cancel);
-    if (target && target.addEventListener) target.addEventListener('lostpointercapture', cancel);
     return cancel;
   }
 

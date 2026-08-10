@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PointerDrag } from "../src/renderer/hooks/usePointerDrag";
 import { createUnitPreferences } from "../src/renderer/lib/unitPreferences";
 import { wheelZoomFactor } from "../src/renderer/lib/zoom";
@@ -47,6 +47,8 @@ function pointerDragHarness() {
   };
 }
 
+afterEach(() => vi.unstubAllGlobals());
+
 describe("renderer utilities", () => {
   it("converts display units without changing canonical SI values", () => {
     const { prefs, document, values } = unitPreferences();
@@ -94,6 +96,26 @@ describe("renderer utilities", () => {
     expect(moved).toEqual([7]);
     expect(ended).toEqual([7]);
     expect(canceled).toEqual([]);
-    vi.unstubAllGlobals();
+  });
+
+  it("continues an active drag after pointer capture is lost", () => {
+    const harness = pointerDragHarness();
+    const moved: number[] = [];
+    const ended: number[] = [];
+    const canceled: number[] = [];
+    harness.pointerDrag.begin({ currentTarget: harness.target, pointerId: 7 }, {
+      move: (event) => moved.push(event.clientX),
+      end: (event) => ended.push(event.clientX),
+      cancel: (event) => canceled.push(event.pointerId),
+    });
+
+    harness.dispatchWindow("pointermove", { pointerId: 7, clientX: 20 });
+    harness.dispatchTarget("lostpointercapture", { pointerId: 7 });
+    harness.dispatchWindow("pointermove", { pointerId: 7, clientX: 80 });
+    harness.dispatchWindow("pointerup", { pointerId: 7, clientX: 80 });
+
+    expect(moved).toEqual([20, 80]);
+    expect(ended).toEqual([80]);
+    expect(canceled).toEqual([]);
   });
 });

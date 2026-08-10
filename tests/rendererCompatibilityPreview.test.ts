@@ -145,7 +145,7 @@ describe("renderer application", () => {
     expect(field).not.toContain("onPointerCancel:");
     expect(field).not.toContain("onLostPointerCapture:");
     const pointerDrag = fs.readFileSync(new URL("../src/renderer/hooks/usePointerDrag.js", import.meta.url), "utf8");
-    expect(pointerDrag).toContain("lostpointercapture");
+    expect(pointerDrag).not.toContain("lostpointercapture");
     expect(pointerDrag).toContain("pointercancel");
     expect(pointerDrag).toContain("next.pointerId !== pointerId");
     for (const file of ["Panels.jsx", "RobotPage.jsx", "RoutinePanel.jsx", "ui.jsx"]) {
