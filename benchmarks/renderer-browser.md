@@ -29,3 +29,8 @@ Keep the machine otherwise idle. Compare results from the same machine and
 display stack; Electron, Chrome, Node, revisions, raw trials, and protocol are
 recorded in the JSON report. Generated results are evidence, not source, and
 must not be committed.
+
+The offscreen compositor callback may arrive just before the renderer observes
+the same frame in `requestAnimationFrame`; the harness allows a two-frame phase
+tolerance when associating those cross-process timestamps, but never accepts a
+paint timestamp from before the measured input.

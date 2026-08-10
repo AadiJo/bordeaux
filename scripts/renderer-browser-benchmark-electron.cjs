@@ -335,7 +335,9 @@ app.whenReady().then(async () => {
         const value = await window.webContents.executeJavaScript("window.__rendererBenchmark.lastCorrect()");
         return value && Math.hypot(value.x - target.x, value.y - target.y) <= 1 ? value : null;
       }, 5000, "a correct-geometry frame");
-      const correctPaint = await paintAfter(Math.max(sentAt, correct.correctAtEpochMs - frameBudgetMs));
+      // Chromium's offscreen paint callback and renderer rAF observation can
+      // straddle adjacent compositor phases even though they show one frame.
+      const correctPaint = await paintAfter(Math.max(sentAt, correct.correctAtEpochMs - frameBudgetMs * 2));
       anyPaintSamples.push(anyPaint - sentAt);
       correctPaintSamples.push(correctPaint - sentAt);
     }
