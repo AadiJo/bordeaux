@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { javaTrajectoryFileName, type BuiltJavaTrajectory } from "../shared/export/javaTrajectory";
+import { javaCatalogSemanticSignature } from "../shared/agent/catalogSignature";
 import type { BordeauxProject, JavaCommandCatalog, JavaIntegrationStatus } from "../shared/types";
 import type { AgentSessionSnapshot } from "../shared/agent/types";
 import { validateProject } from "../shared/validation";
@@ -42,6 +43,7 @@ process.stderr.on("error", ignoreClosedStandardStream);
 let mainWindow: BrowserWindow | null = null;
 let recentFiles: string[] = [];
 let currentProjectPath: string | null = null;
+let projectTargetGeneration = 0;
 let dirty = false;
 let allowClose = false;
 let appUpdates: AppUpdateController | null = null;
@@ -88,6 +90,7 @@ function clearLinkedJavaProject(): void {
   linkedJavaProjectBookmarkId = null;
   linkedJavaCatalog = null;
   linkedJavaIntegration = null;
+  agentSessions.refreshJavaCatalog();
 }
 
 function rejectProposalReceipts(message: string): void {
@@ -209,8 +212,12 @@ function createAppUpdateController(): AppUpdateController {
   });
 }
 
-async function rememberFile(filePath: string, saveTarget: string | null = filePath) {
-  currentProjectPath = saveTarget;
+function activateProjectTarget(filePath: string | null): void {
+  currentProjectPath = filePath;
+  projectTargetGeneration += 1;
+}
+
+async function rememberFile(filePath: string) {
   recentFiles = rememberRecentProject(recentFiles, filePath);
   app.addRecentDocument(filePath);
   buildMenu();
@@ -256,7 +263,11 @@ async function rememberLinkedJavaProject(projectPath: string, projectName: strin
 async function connectJavaProject(projectPath: string) {
   const generation = ++javaConnectionGeneration;
   const canonicalPath = await fs.promises.realpath(projectPath);
-  const catalog = await discoverJavaProject(canonicalPath);
+  const discoveredCatalog = await discoverJavaProject(canonicalPath);
+  const catalog: JavaCommandCatalog = {
+    ...discoveredCatalog,
+    semanticFingerprint: `sha256:${createHash("sha256").update(javaCatalogSemanticSignature(discoveredCatalog), "utf8").digest("hex")}`,
+  };
   let integration: JavaIntegrationStatus;
   let integrationWarning: string | undefined;
   try {
@@ -277,6 +288,7 @@ async function connectJavaProject(projectPath: string) {
   linkedJavaProjectBookmarkId = remembered.bookmarkId;
   linkedJavaCatalog = catalog;
   linkedJavaIntegration = integration;
+  agentSessions.refreshJavaCatalog();
   return {
     catalog,
     integration,
@@ -284,6 +296,17 @@ async function connectJavaProject(projectPath: string) {
     recentProjects: summarizeJavaProjectBookmarks(javaProjectBookmarks),
     ...((remembered.warning || integrationWarning) ? { warning: [remembered.warning, integrationWarning].filter(Boolean).join(" ") } : {}),
   };
+}
+
+async function replaceJavaProject(projectPath: string) {
+  const pending = connectJavaProject(projectPath);
+  const generation = javaConnectionGeneration;
+  try {
+    return await pending;
+  } catch (error) {
+    if (generation === javaConnectionGeneration) clearLinkedJavaProject();
+    throw error;
+  }
 }
 
 async function assertSafeJavaExportTarget(projectRoot: string, fileName: string): Promise<string> {
@@ -332,7 +355,7 @@ function handle(channel: string, listener: (event: Electron.IpcMainInvokeEvent, 
 }
 
 function createWindow() {
-  currentProjectPath = null;
+  activateProjectTarget(null);
   dirty = false;
   allowClose = false;
   mainWindow = new BrowserWindow({
@@ -403,7 +426,7 @@ function createWindow() {
     if (mainWindow === window) mainWindow = null;
     rejectProposalReceipts("The Bordeaux editor closed before acknowledging the proposal.");
     agentSessions.clearSnapshot();
-    currentProjectPath = null;
+    activateProjectTarget(null);
     dirty = false;
     allowClose = false;
   });
@@ -702,7 +725,8 @@ async function openProjectFile(filePath: string) {
   const decoded = await readProject(filePath);
   const { project } = decoded;
   clearLinkedJavaProject();
-  await rememberFile(filePath, saveTargetForOpenedProject(filePath, decoded));
+  await rememberFile(filePath);
+  activateProjectTarget(saveTargetForOpenedProject(filePath, decoded));
   dirty = false;
   return { project };
 }
@@ -730,7 +754,7 @@ handle("project:restoreLast", async () => {
 });
 
 handle("project:new", () => {
-  currentProjectPath = null;
+  activateProjectTarget(null);
   dirty = false;
   clearLinkedJavaProject();
 });
@@ -738,6 +762,7 @@ handle("project:new", () => {
 handle("project:save", async (_event, project, rawSaveAs) => {
   const validation = validateProject(project);
   if (!validation.ok) throw new Error(validation.issues.map((item) => `${item.path}: ${item.message}`).join("\n"));
+  const sourceGeneration = projectTargetGeneration;
   let target = rawSaveAs === true ? null : currentProjectPath;
   if (!target) {
     if (smokeDirectory) target = path.join(smokeDirectory, "project.bordeaux.json");
@@ -750,16 +775,19 @@ handle("project:save", async (_event, project, rawSaveAs) => {
   }
   await writeProject(target, project);
   await rememberFile(target);
-  dirty = false;
+  if (sourceGeneration === projectTargetGeneration && currentProjectPath !== target) activateProjectTarget(target);
+  // The renderer owns edit revisions and acknowledges a clean save through
+  // project:setDirty only if the project stayed unchanged during this write.
   return { saved: true };
 });
 
 handle("project:autosave", async (_event, project) => {
-  if (!currentProjectPath) return { saved: false };
+  const target = currentProjectPath;
+  if (!target) return { saved: false };
   const validation = validateProject(project);
   if (!validation.ok) return { saved: false };
   try {
-    await writeProject(currentProjectPath, project);
+    await writeProject(target, project);
     return { saved: true };
   } catch {
     // Autosave is best-effort. Keep the renderer dirty so an explicit save or
@@ -847,9 +875,8 @@ handle("javaProject:link", async () => {
     if (result.canceled || !result.filePaths[0]) return null;
     selectedPath = result.filePaths[0];
   }
-  clearLinkedJavaProject();
   try {
-    return await connectJavaProject(selectedPath);
+    return await replaceJavaProject(selectedPath);
   } catch (error) {
     throw readableJavaProjectError(error, "Selected Java project");
   }
@@ -858,9 +885,8 @@ handle("javaProject:openRecent", async (_event, rawId) => {
   if (typeof rawId !== "string" || rawId.length > 64) throw new Error("Recent Java project selection is invalid");
   const bookmark = javaProjectBookmarks.find((item) => item.id === rawId);
   if (!bookmark) throw new Error("Recent Java project is no longer available");
-  clearLinkedJavaProject();
   try {
-    return await connectJavaProject(bookmark.projectPath);
+    return await replaceJavaProject(bookmark.projectPath);
   } catch (error) {
     throw readableJavaProjectError(error, bookmark.projectName);
   }
@@ -935,12 +961,12 @@ ipcMain.on("agent:proposalStatus", (event, rawId, rawStatus, rawRevision) => {
   if (typeof rawId !== "string" || !["applied", "rejected", "stale"].includes(String(rawStatus))) return;
   agentSessions.updateProposalStatus(rawId, rawStatus as "applied" | "rejected" | "stale", typeof rawRevision === "number" ? rawRevision : undefined);
 });
-ipcMain.on("agent:proposalReceipt", (event, rawId, rawSessionId, rawRevision) => {
+ipcMain.on("agent:proposalReceipt", (event, rawId, rawSessionId, rawRevision, rawActivePathId, rawAccepted) => {
   assertTrustedSender(event);
-  if (typeof rawId !== "string" || typeof rawSessionId !== "string" || !Number.isSafeInteger(rawRevision) || rawRevision < 0) return;
+  if (typeof rawId !== "string" || typeof rawSessionId !== "string" || !Number.isSafeInteger(rawRevision) || rawRevision < 0 || typeof rawActivePathId !== "string") return;
   const receipt = proposalReceipts.get(rawId);
   if (!receipt) return;
-  agentSessions.acknowledgeProposal(rawId, rawSessionId, rawRevision);
+  agentSessions.acknowledgeProposal(rawId, rawSessionId, rawRevision, rawActivePathId, rawAccepted !== false);
   proposalReceipts.delete(rawId);
   clearTimeout(receipt.timer);
   receipt.resolve();

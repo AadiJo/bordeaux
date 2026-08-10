@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createUnitPreferences } from "../src/renderer/lib/unitPreferences";
 import { wheelZoomFactor } from "../src/renderer/lib/zoom";
+import { loadRendererExport } from "./helpers/loadRendererExport";
+
+interface PointerEventLike { pointerId: number; clientX?: number; clientY?: number }
+type PointerListener = (event: PointerEventLike) => void;
 
 function unitPreferences(stored?: string) {
   const values = new Map<string, string>();
@@ -11,6 +15,44 @@ function unitPreferences(stored?: string) {
     setItem: (key: string, value: string) => values.set(key, value),
   };
   return { prefs: createUnitPreferences(localStorage, document.documentElement), document, values };
+}
+
+function pointerDragHarness() {
+  const listeners = new Map<string, PointerListener>();
+  const captureListeners: string[] = [];
+  let frame: FrameRequestCallback | null = null;
+  const window = {
+    addEventListener: (type: string, listener: PointerListener) => listeners.set(type, listener),
+    removeEventListener: (type: string) => listeners.delete(type),
+  } as Record<string, unknown>;
+  const target = {
+    setPointerCapture: () => undefined,
+    hasPointerCapture: () => false,
+    addEventListener: (type: string) => captureListeners.push(type),
+    removeEventListener: () => undefined,
+  };
+  const document = { body: { style: { cursor: "" } } };
+  const pointerDrag = loadRendererExport<{
+    begin(
+      event: PointerEventLike & { currentTarget: typeof target },
+      handlers: { move: PointerListener; end?: PointerListener; cancel?: PointerListener; coalesce?: boolean },
+    ): (options?: { flush?: boolean }) => void;
+  }>(new URL("../src/renderer/hooks/usePointerDrag.js", import.meta.url), "PointerDrag", {
+    context: {
+      document,
+      React: {},
+      requestAnimationFrame: (callback: FrameRequestCallback) => { frame = callback; return 1; },
+      cancelAnimationFrame: () => { frame = null; },
+    },
+    window,
+  });
+  return {
+    pointerDrag,
+    target,
+    captureListeners,
+    dispatch: (type: string, event: PointerEventLike) => listeners.get(type)?.(event),
+    flushFrame: () => { const pending = frame; frame = null; pending?.(0); },
+  };
 }
 
 describe("renderer utilities", () => {
@@ -40,5 +82,83 @@ describe("renderer utilities", () => {
     expect(wheelZoomFactor(10, 0, 800)).toBeCloseTo(Math.pow(wheelZoomFactor(1, 0, 800), 10), 12);
     expect(wheelZoomFactor(10_000, 0, 800)).toBeCloseTo(down, 12);
     expect(wheelZoomFactor(3, 1, 800)).toBeGreaterThan(wheelZoomFactor(3, 0, 800));
+  });
+
+  it("flushes the final coalesced move before a fast drag commits", () => {
+    const harness = pointerDragHarness();
+    const edit = loadRendererExport<{
+      create<T>(): {
+        begin(value: T): boolean;
+        update(value: T): boolean;
+        finish(): T | null;
+        getSnapshot(): T | null;
+        subscribe(listener: () => void): () => void;
+      };
+    }>(new URL("../src/renderer/assets/path-edit.js", import.meta.url), "PathEdit").create<{ x: number }>();
+    const committed: Array<{ x: number }> = [];
+    const snapshots: Array<{ x: number } | null> = [];
+    const canceled: number[] = [];
+    edit.subscribe(() => snapshots.push(edit.getSnapshot()));
+    harness.pointerDrag.begin({ currentTarget: harness.target, pointerId: 7 }, {
+      coalesce: true,
+      move: (event) => {
+        if (event.clientX === undefined) return;
+        if (!edit.getSnapshot()) edit.begin({ x: 0 });
+        edit.update({ x: event.clientX });
+      },
+      end: () => { const value = edit.finish(); if (value) committed.push(value); },
+      cancel: (event) => canceled.push(event.pointerId),
+    });
+
+    harness.dispatch("pointermove", { pointerId: 7, clientX: 20 });
+    harness.dispatch("pointermove", { pointerId: 7, clientX: 80 });
+    harness.dispatch("pointerup", { pointerId: 7, clientX: 80 });
+    harness.flushFrame();
+
+    expect(committed).toEqual([{ x: 80 }]);
+    expect(snapshots).toEqual([{ x: 80 }, null]);
+    expect(canceled).toEqual([]);
+    expect(harness.captureListeners).not.toContain("lostpointercapture");
+  });
+
+  it("commits the pointer-up position and can discard a queued move", () => {
+    const released = pointerDragHarness();
+    const moves: number[] = [];
+    released.pointerDrag.begin({ currentTarget: released.target, pointerId: 3, clientX: 0, clientY: 0 }, {
+      coalesce: true,
+      move: (event) => { if (event.clientX !== undefined) moves.push(event.clientX); },
+    });
+    released.dispatch("pointermove", { pointerId: 3, clientX: 40, clientY: 0 });
+    released.dispatch("pointerup", { pointerId: 3, clientX: 75, clientY: 0 });
+    expect(moves).toEqual([40, 75]);
+
+    const canceled = pointerDragHarness();
+    const canceledMoves: number[] = [];
+    const stop = canceled.pointerDrag.begin({ currentTarget: canceled.target, pointerId: 4, clientX: 0, clientY: 0 }, {
+      coalesce: true,
+      move: (event) => { if (event.clientX !== undefined) canceledMoves.push(event.clientX); },
+    });
+    canceled.dispatch("pointermove", { pointerId: 4, clientX: 90, clientY: 0 });
+    stop({ flush: false });
+    canceled.flushFrame();
+    expect(canceledMoves).toEqual([]);
+  });
+
+  it("materializes an active path edit for persistence", () => {
+    const edit = loadRendererExport<{
+      create<T extends { id: string }>(): {
+        begin(value: T): boolean;
+        update(value: T): boolean;
+        materialize<P extends { paths: T[] }>(project: P): P;
+      };
+    }>(new URL("../src/renderer/assets/path-edit.js", import.meta.url), "PathEdit").create<{ id: string; x: number }>();
+    const project = { name: "demo", paths: [{ id: "a", x: 1 }, { id: "b", x: 2 }] };
+    edit.begin(project.paths[0]);
+    edit.update({ id: "a", x: 9 });
+
+    const persisted = edit.materialize(project);
+    expect(persisted).not.toBe(project);
+    expect(persisted.paths).toEqual([{ id: "a", x: 9 }, { id: "b", x: 2 }]);
+    expect(project.paths[0].x).toBe(1);
   });
 });

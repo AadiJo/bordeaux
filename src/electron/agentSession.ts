@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { analyzePath } from "../shared/agent/pathAnalysis";
 import { robotFootprintVertices } from "../shared/agent/robotFootprint";
 import { generateRepairCandidates } from "../shared/agent/pathRepair";
@@ -24,6 +24,7 @@ import { clone } from "../shared/project/defaults";
 import type { JavaCommandCatalog, RobotPlanningProfile } from "../shared/types";
 import { defaultJavaCommandArguments, javaInvocationErrors } from "../shared/javaCommands";
 import { validateProject } from "../shared/validation";
+import { javaCatalogSemanticSignature } from "../shared/agent/catalogSignature";
 
 const MAX_PROPOSALS = 24;
 const PROPOSAL_TTL_MS = 30 * 60 * 1_000;
@@ -119,6 +120,27 @@ function publicSession(snapshot: AgentSessionSnapshot, catalog: JavaCommandCatal
 
 function snapshotContext(snapshot: AgentSessionSnapshot): AgentContext {
   return { sessionId: snapshot.sessionId, revision: snapshot.revision, activePathId: snapshot.activePathId };
+}
+
+function proposalMatchesSnapshot(proposal: AgentProposal, snapshot: AgentSessionSnapshot | null): boolean {
+  return Boolean(snapshot
+    && proposal.baseSessionId === snapshot.sessionId
+    && proposal.baseRevision === snapshot.revision
+    && proposal.baseActivePathId === snapshot.activePathId);
+}
+
+function javaCatalogFingerprint(catalog: JavaCommandCatalog | null): string | null {
+  if (!catalog) return null;
+  return `sha256:${createHash("sha256").update(javaCatalogSemanticSignature(catalog), "utf8").digest("hex")}`;
+}
+
+function proposalMatchesCatalogFingerprint(proposal: AgentProposal, fingerprint: string | null): boolean {
+  if (!("baseJavaCatalogFingerprint" in proposal) || !proposal.baseJavaCatalogFingerprint) return true;
+  return proposal.baseJavaCatalogFingerprint === fingerprint;
+}
+
+function proposalMatchesCatalog(proposal: AgentProposal, catalog: JavaCommandCatalog | null): boolean {
+  return proposalMatchesCatalogFingerprint(proposal, javaCatalogFingerprint(catalog));
 }
 
 function findingCounts(analysis: PathAnalysis): CandidateSummary["findingCounts"] {
@@ -293,19 +315,32 @@ export class AgentSessionService {
     if (!value.project.paths.some((path) => path.id === value.activePathId)) throw new Error("Agent session active path does not exist");
     const previous = this.snapshot;
     this.snapshot = value;
-    if (!previous || previous.sessionId !== value.sessionId || previous.revision !== value.revision) {
+    if (!previous || previous.sessionId !== value.sessionId || previous.revision !== value.revision || previous.activePathId !== value.activePathId) {
       this.abortPlanning();
       this.previewGeneration += 1;
       const committed = this.committedPreviewId ? this.proposals.get(this.committedPreviewId) : undefined;
-      if (!committed || committed.baseSessionId !== value.sessionId || committed.baseRevision !== value.revision) this.committedPreviewId = null;
+      if (!committed || !proposalMatchesSnapshot(committed, value)) this.committedPreviewId = null;
       for (const proposal of this.proposals.values()) {
-        if (proposal.status === "ready" && (proposal.baseSessionId !== value.sessionId || proposal.baseRevision !== value.revision)) {
+        if (proposal.status === "ready" && !proposalMatchesSnapshot(proposal, value)) {
           proposal.status = "stale";
           void Promise.resolve(this.sendProposal(proposal, false)).catch(() => undefined);
         }
       }
     }
     this.expireProposals();
+  }
+
+  refreshJavaCatalog(): void {
+    let displacedPendingPreview = false;
+    const fingerprint = javaCatalogFingerprint(this.getJavaCatalog());
+    for (const proposal of this.proposals.values()) {
+      if (proposal.status !== "ready" || proposalMatchesCatalogFingerprint(proposal, fingerprint)) continue;
+      proposal.status = "stale";
+      if (proposal.id === this.committedPreviewId) this.committedPreviewId = null;
+      else displacedPendingPreview = true;
+      void Promise.resolve().then(() => this.sendProposal(proposal, false)).catch(() => undefined);
+    }
+    if (displacedPendingPreview) this.restoreCommittedPreview();
   }
 
   tryPublishSnapshot(value: AgentSessionSnapshot): boolean {
@@ -325,18 +360,21 @@ export class AgentSessionService {
     if (status === "applied" && Number.isSafeInteger(appliedRevision)) proposal.appliedRevision = appliedRevision;
   }
 
-  acknowledgeProposal(proposalId: string, sessionId: string, revision: number): void {
+  acknowledgeProposal(proposalId: string, sessionId: string, revision: number, activePathId: string, accepted = true): void {
     const proposal = this.proposals.get(proposalId);
     if (!proposal || proposal.status !== "ready") return;
-    if (proposal.baseSessionId !== sessionId || proposal.baseRevision !== revision) proposal.status = "stale";
+    if (!accepted || proposal.baseSessionId !== sessionId || proposal.baseRevision !== revision || proposal.baseActivePathId !== activePathId) {
+      proposal.status = "stale";
+    }
   }
 
   getActiveProposal(): AgentProposal | null {
+    this.refreshJavaCatalog();
     this.expireProposals();
     const proposals = [...this.proposals.values()];
     for (let index = proposals.length - 1; index >= 0; index -= 1) {
       const proposal = proposals[index];
-      if (proposal.status === "ready" && this.snapshot && proposal.baseSessionId === this.snapshot.sessionId && proposal.baseRevision === this.snapshot.revision) return proposal;
+      if (proposal.status === "ready" && proposalMatchesSnapshot(proposal, this.snapshot) && proposalMatchesCatalog(proposal, this.getJavaCatalog())) return proposal;
     }
     return null;
   }
@@ -379,7 +417,7 @@ export class AgentSessionService {
   private restoreCommittedPreview(): void {
     if (!this.committedPreviewId || !this.snapshot) return;
     const committed = this.proposals.get(this.committedPreviewId);
-    if (!committed || committed.baseSessionId !== this.snapshot.sessionId || committed.baseRevision !== this.snapshot.revision) {
+    if (!committed || !proposalMatchesSnapshot(committed, this.snapshot) || !proposalMatchesCatalog(committed, this.getJavaCatalog())) {
       this.committedPreviewId = null;
       return;
     }
@@ -392,7 +430,7 @@ export class AgentSessionService {
     if (previewGeneration !== this.previewGeneration) {
       throw new Error("Agent preview request was superseded by a newer request.");
     }
-    if (!this.snapshot || this.snapshot.sessionId !== proposal.baseSessionId || this.snapshot.revision !== proposal.baseRevision) {
+    if (!proposalMatchesSnapshot(proposal, this.snapshot) || !proposalMatchesCatalog(proposal, this.getJavaCatalog())) {
       throw new Error("The Bordeaux editor session changed while the proposal was being generated. Retry against the current session.");
     }
     let supersededProposalId: string | undefined;
@@ -410,11 +448,11 @@ export class AgentSessionService {
       if (previewGeneration !== this.previewGeneration) {
         throw new Error("Agent preview request was superseded by a newer request.");
       }
-      if (!this.snapshot || this.snapshot.sessionId !== proposal.baseSessionId || this.snapshot.revision !== proposal.baseRevision || proposal.status !== "ready") {
+      if (!proposalMatchesSnapshot(proposal, this.snapshot) || !proposalMatchesCatalog(proposal, this.getJavaCatalog()) || proposal.status !== "ready") {
         throw new Error("The Bordeaux editor session changed before it acknowledged the proposal. Retry against the current session.");
       }
     } catch (error) {
-      const contextStillCurrent = this.snapshot?.sessionId === proposal.baseSessionId && this.snapshot.revision === proposal.baseRevision;
+      const contextStillCurrent = proposalMatchesSnapshot(proposal, this.snapshot);
       const stillOwnsPreview = previewGeneration === this.previewGeneration;
       if (contextStillCurrent && stillOwnsPreview) {
         proposal.status = "stale";
@@ -445,7 +483,7 @@ export class AgentSessionService {
     try {
       const result = await this.runPlanning(job, controller.signal) as T;
       if (controller.signal.aborted) throw new Error("Agent planning was canceled.");
-      if (!this.snapshot || this.snapshot.sessionId !== snapshot.sessionId || this.snapshot.revision !== snapshot.revision) {
+      if (!this.snapshot || this.snapshot.sessionId !== snapshot.sessionId || this.snapshot.revision !== snapshot.revision || this.snapshot.activePathId !== snapshot.activePathId) {
         throw new Error("The Bordeaux editor session changed while planning. Retry against the current session.");
       }
       return result;
@@ -457,6 +495,7 @@ export class AgentSessionService {
   }
 
   async request(request: AgentRequest, signal?: AbortSignal): Promise<unknown> {
+    this.refreshJavaCatalog();
     this.expireProposals();
     if (request.method === "field_pack") return REBUILT_2026_FIELD;
     if (request.method === "get_current_proposal") {
@@ -625,9 +664,11 @@ export class AgentSessionService {
       };
       return outcome;
     }
+    let baseJavaCatalogFingerprint: string | undefined;
     if (request.params.endAction) {
       const catalog = this.getJavaCatalog();
       if (!catalog?.authoritative) throw new Error("Link and build an authoritative Java command catalog before binding an end action.");
+      baseJavaCatalogFingerprint = javaCatalogFingerprint(catalog) ?? undefined;
       const endAction = request.params.endAction;
       const tagged = catalog.commands.filter((item) => item.runtimeReady === true && item.semanticTags?.includes(endAction.semanticTag));
       const binding = snapshot.project.strategy?.actionBindings?.find((item) => item.semanticTag === endAction.semanticTag);
@@ -672,6 +713,7 @@ export class AgentSessionService {
       baseSessionId: snapshot.sessionId,
       baseRevision: snapshot.revision,
       baseActivePathId: snapshot.activePathId,
+      ...(baseJavaCatalogFingerprint ? { baseJavaCatalogFingerprint } : {}),
       intent: request.params.intent,
       operation: "add",
       candidates,

@@ -22,7 +22,7 @@ const bordeauxAPI = {
   setDirty: (dirty: boolean) => ipcRenderer.send("project:setDirty", dirty),
   publishAgentSession: (snapshot: AgentSessionSnapshot) => ipcRenderer.send("agent:publishSession", snapshot),
   updateAgentProposalStatus: (proposalId: string, status: "applied" | "rejected" | "stale", revision?: number) => ipcRenderer.send("agent:proposalStatus", proposalId, status, revision),
-  acknowledgeAgentProposal: (proposalId: string, sessionId: string, revision: number) => ipcRenderer.send("agent:proposalReceipt", proposalId, sessionId, revision),
+  acknowledgeAgentProposal: (proposalId: string, sessionId: string, revision: number, activePathId: string, accepted = true) => ipcRenderer.send("agent:proposalReceipt", proposalId, sessionId, revision, activePathId, accepted),
   getActiveAgentProposal: (): Promise<AgentProposal | null> => ipcRenderer.invoke("agent:getActiveProposal"),
   getMcpStatus: (): Promise<{ enabled: boolean }> => ipcRenderer.invoke("agent:getMcpStatus"),
   onMcpStatus: (handler: (status: { enabled: boolean }) => void) => {

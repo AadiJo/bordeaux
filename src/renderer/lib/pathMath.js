@@ -127,7 +127,7 @@
   function sample(waypoints, perSeg = 60) {
     const pts = [];
     const segs = waypoints.length - 1;
-    if (segs < 1) return { pts: [], length: 0, segs: 0 };
+    if (segs < 1) return { pts: [], length: 0, segs: 0, wpIdx: [] };
     const steps = perSeg;
 
     const segTypeAt = (i) => (waypoints[i] && waypoints[i].segType) || 'bezier';
@@ -156,6 +156,7 @@
     };
     const jointHeading = waypoints.map((_, i) => blendedJointHeading(i));
     const clothoidSegments = new Set();
+    const wpIdx = [0];
 
     for (let i = 0; i < segs; i++) {
       const w0 = waypoints[i], w1 = waypoints[i + 1];
@@ -192,13 +193,14 @@
         }
         pts.push({ x: pos.x, y: pos.y, seg: i, t, heading: head, curv, s: 0 });
       }
+      wpIdx.push(pts.length - 1);
     }
 
     // Blend curvature across adjacent clothoid joints. Position/heading already use a shared
     // tangent; this removes artificial velocity dips from independent curvature estimates.
     for (let j = 1; j < segs; j++) {
       if (!clothoidSegments.has(j - 1) || !clothoidSegments.has(j)) continue;
-      const center = pts.findIndex((p) => p.seg === j - 1 && p.t > 1 - 1e-9);
+      const center = wpIdx[j];
       if (center < 0) continue;
       const next = Math.min(pts.length - 1, center + 1);
       const jointK = 0.5 * ((pts[center].curv || 0) + (pts[next].curv || 0));
@@ -220,7 +222,7 @@
       s += Math.hypot(dx, dy);
       pts[i].s = s;
     }
-    return { pts, length: s, segs };
+    return { pts, length: s, segs, wpIdx };
   }
 
   // ---- trapezoidal velocity profile with curvature (centripetal) limit ----
@@ -568,22 +570,37 @@
   function nearestVisits(wx, wy, pts, options) {
     if (!pts || pts.length < 2) return [];
     const opts = options || {}, total = pts[pts.length - 1].s || 0;
-    const projected = [];
-    for (let i = 1; i < pts.length; i++) {
+    const requestedTolerance = Number.isFinite(opts.tolerance) ? Math.max(0, opts.tolerance) : null;
+    let minimum = Infinity;
+    const nearby = [];
+    const projectEdge = (i) => {
       const a = pts[i - 1], b = pts[i];
       const dx = b.x - a.x, dy = b.y - a.y, length2 = dx * dx + dy * dy;
       const u = length2 > 1e-12 ? Math.max(0, Math.min(1, ((wx - a.x) * dx + (wy - a.y) * dy) / length2)) : 0;
       const x = lerp(a.x, b.x, u), y = lerp(a.y, b.y, u), distance = Math.hypot(wx - x, wy - y);
+      return { a, b, u, x, y, distance };
+    };
+    const candidateFor = (projection, edge) => {
+      const { a, b, u, x, y, distance } = projection;
       const sameSegment = Number.isInteger(a.seg) && a.seg === b.seg;
       const seg = sameSegment ? a.seg : (u < 0.5 && Number.isInteger(a.seg) ? a.seg : (Number.isInteger(b.seg) ? b.seg : 0));
       const aT = sameSegment && Number.isFinite(a.t) ? a.t : 0;
       const bT = sameSegment && Number.isFinite(b.t) ? b.t : 1;
       const s = lerp(Number.isFinite(a.s) ? a.s : 0, Number.isFinite(b.s) ? b.s : total, u);
-      projected.push({ x, y, s, f: total > 1e-9 ? s / total : 0, seg, t: lerp(aT, bT, u), heading: angLerp(a.heading || 0, b.heading || 0, u), distance, edge: i - 1 });
+      return { x, y, s, f: total > 1e-9 ? s / total : 0, seg, t: lerp(aT, bT, u), heading: angLerp(a.heading || 0, b.heading || 0, u), distance, edge };
+    };
+    for (let i = 1; i < pts.length; i++) {
+      const projection = projectEdge(i);
+      minimum = Math.min(minimum, projection.distance);
+      if (requestedTolerance != null && projection.distance <= requestedTolerance + 1e-9) nearby.push(candidateFor(projection, i - 1));
     }
-    const minimum = projected.reduce((best, candidate) => Math.min(best, candidate.distance), Infinity);
-    const tolerance = Number.isFinite(opts.tolerance) ? Math.max(0, opts.tolerance) : minimum + 1e-9;
-    const nearby = projected.filter((candidate) => candidate.distance <= Math.max(tolerance, minimum + 1e-9)).sort((a, b) => a.s - b.s);
+    if (requestedTolerance == null || minimum > requestedTolerance + 1e-9) {
+      nearby.length = 0;
+      for (let i = 1; i < pts.length; i++) {
+        const projection = projectEdge(i);
+        if (projection.distance <= minimum + 1e-9) nearby.push(candidateFor(projection, i - 1));
+      }
+    }
     const clusters = [];
     nearby.forEach((candidate) => {
       const cluster = clusters[clusters.length - 1];

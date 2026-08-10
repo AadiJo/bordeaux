@@ -1,5 +1,7 @@
 import * as React from "react";
+import { FieldScene } from "../assets/field-scene";
 import fieldImage from "../assets/field.png";
+import { PointerDrag } from "../hooks/usePointerDrag";
 import { PM } from "../lib/pathMath";
 import { wheelZoomFactor } from "../lib/zoom";
 import { UI } from "./ui";
@@ -25,7 +27,8 @@ import { UI } from "./ui";
   const forwardExtent = (robot) => Math.max(...localFootprint(robot).map((point) => point.x)) * SX;
 
   function FieldView(props) {
-    const { doc, derived, insertionPreview, proposalPreviews, sel, tool, view, setView, alliance, showGrid, robot, drive, accent, metric, playTime, actions, routine, routinePose } = props;
+    const { doc, derived, editStore, insertionPreview, proposalPreviews, sel, tool, view, setView, alliance, showGrid, robot, drive, accent, metric, playTime, actions, routine, routinePose } = props;
+    const interactionReady = props.interactionReady !== false;
     const showHandles = props.showHandles !== false;
     const svgRef = useRef(null);
     const [cw, setCw] = useState(1200);
@@ -36,8 +39,7 @@ import { UI } from "./ui";
     const actionsRef = useRef(actions);
     actionsRef.current = actions;
     const drag = useRef(null);
-    const pendingMove = useRef(null);
-    const moveFrame = useRef(0);
+    const pointerDrag = PointerDrag.useController();
     const lastInspectPress = useRef({ key: null, at: 0 });
     const flip = alliance === 'red';
     const isTank = drive === 'tank';
@@ -75,6 +77,16 @@ import { UI } from "./ui";
     }, []);
 
     useEffect(() => updateVisitFocus(null), [doc.id, updateVisitFocus]);
+    useEffect(() => {
+      if (!editStore || typeof editStore.getCancelRevision !== 'function') return undefined;
+      let revision = editStore.getCancelRevision();
+      return editStore.subscribe(() => {
+        const next = editStore.getCancelRevision();
+        if (next === revision) return;
+        revision = next;
+        pointerDrag.cancel({ flush: false });
+      });
+    }, [editStore, pointerDrag]);
 
     const visitsAt = useCallback((world) => {
       const candidates = PM.nearestVisits(world.x, world.y, pts, { tolerance: visitTolerance });
@@ -227,10 +239,16 @@ import { UI } from "./ui";
 
     const onDown = (e) => {
       if (e.button !== 0 && e.button !== 1) return;
+      if (!interactionReady) return;
       e.preventDefault();
       const t = e.target;
       const role = t.getAttribute && t.getAttribute('data-role');
-      try { svgRef.current.setPointerCapture(e.pointerId); } catch (_) {}
+      pointerDrag.start(e, {
+        move: applyMove,
+        coalesce: true,
+        end: onUp,
+        cancel: onInterrupted,
+      });
       if (routine) {
         if (role === 'rpath') { const id = t.getAttribute('data-idx'); if (actions.selectNode) actions.selectNode(id); drag.current = null; return; }
         drag.current = { role: 'bg', start: { cx: e.clientX, cy: e.clientY }, vb0: { ...view }, moved: false, mid: e.button === 1 };
@@ -326,7 +344,7 @@ import { UI } from "./ui";
       if (d.role === 'head') {
         const w = doc.waypoints[d.idx];
         if (w) {
-          if (!d.historyStarted && actions.beginHistory) { actions.beginHistory(); d.historyStarted = true; }
+          if (!d.historyStarted && actions.beginEdit) { actions.beginEdit(); d.historyStarted = true; }
           let deg = Math.atan2(world.y - w.y, world.x - w.x) * 180 / Math.PI;
           let label = null;
           if (e.shiftKey) deg = Math.round(deg / 15) * 15;
@@ -346,7 +364,7 @@ import { UI } from "./ui";
         d.moved = true; return;
       }
       d.moved = true;
-      if (!d.historyStarted && actions.beginHistory) { actions.beginHistory(); d.historyStarted = true; }
+      if (!d.historyStarted && actions.beginEdit) { actions.beginEdit(); d.historyStarted = true; }
       const p = d.role === 'ct' ? world : clampWorld(world);
       if (d.role === 'wp') actions.moveWaypoint(d.idx, p);
       else if (d.role === 'ct') actions.moveHandle(d.idx >> 1, d.idx & 1, p);
@@ -358,24 +376,11 @@ import { UI } from "./ui";
       else if (d.role === 're') { const visit = projectVisit(world, d.lastF); const f = visit ? visit.f : PM.nearestFraction(world.x, world.y, pts); d.lastF = f; actions.moveRangeHandle(d.idx, 1, f); }
     };
 
-    const flushMove = () => {
-      if (moveFrame.current) cancelAnimationFrame(moveFrame.current);
-      moveFrame.current = 0;
-      const event = pendingMove.current;
-      pendingMove.current = null;
-      if (event) applyMove(event);
-    };
-    const onMove = (event) => {
-      pendingMove.current = { clientX: event.clientX, clientY: event.clientY, shiftKey: event.shiftKey };
-      if (!moveFrame.current) moveFrame.current = requestAnimationFrame(flushMove);
-    };
-
     const onUp = (e) => {
-      flushMove();
       const d = drag.current; drag.current = null;
       setSnap(null);
-      try { svgRef.current.releasePointerCapture(e.pointerId); } catch (_) {}
       if (!d) return;
+      if (d.historyStarted && actions.finishEdit) actions.finishEdit();
       if (d.role === 'newrange') {
         setPreview(null);
         const f0 = d.f0, f1 = d.f1;
@@ -424,16 +429,13 @@ import { UI } from "./ui";
       }
     };
 
-    const onCancel = (event) => {
-      if (moveFrame.current) cancelAnimationFrame(moveFrame.current);
-      moveFrame.current = 0; pendingMove.current = null; drag.current = null; setSnap(null);
-      try { svgRef.current.releasePointerCapture(event.pointerId); } catch (_) {}
+    // Preserve the last visible edit if the browser interrupts pointer capture.
+    const onInterrupted = () => {
+      const d = drag.current;
+      drag.current = null; setSnap(null);
+      if (d && d.role === 'newrange') setPreview(null);
+      if (d && d.historyStarted && actionsRef.current.finishEdit) actionsRef.current.finishEdit();
     };
-    useEffect(() => {
-      window.addEventListener('blur', onCancel);
-      return () => { window.removeEventListener('blur', onCancel); if (moveFrame.current) cancelAnimationFrame(moveFrame.current); };
-    }, []);
-
     const onWheel = (e) => {
       e.preventDefault();
       const svg = svgRef.current; const ctm = svg.getScreenCTM();
@@ -512,16 +514,14 @@ import { UI } from "./ui";
       if (pts.length > 1) {
         const totalS = derived.sample.length || 1;
         const ranges = derived.effRanges || doc.ranges || [];
+        const rangeSpans = ranges.map((range) => FieldScene.fractionRange(pts, totalS, range.f0, range.f1));
         // constraint range bands (under the centerline)
         ranges.forEach((rg, ri) => {
-          const lo = Math.min(rg.f0, rg.f1), hi = Math.max(rg.f0, rg.f1);
           const isSel = sel.kind === 'cr' && sel.idx === ri;
-          let dd = ''; let started = false;
-          for (let k = 0; k < pts.length; k++) { const f = pts[k].s / totalS; if (f >= lo && f <= hi) { const q = W2P(pts[k]); dd += (started ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); started = true; } }
+          const dd = FieldScene.pathData(pts, rangeSpans[ri], W2P, 1);
           if (dd) els.push(h('path', { key: 'rb' + ri, d: dd, fill: 'none', stroke: isSel ? accent : '#caa23a', strokeOpacity: isSel ? 0.5 : 0.32, strokeWidth: P(12), strokeLinecap: 'round', strokeLinejoin: 'round', style: { pointerEvents: 'none' } }));
         });
-        let dCase = `M ${W2P(pts[0]).x} ${W2P(pts[0]).y}`;
-        for (let i = 1; i < pts.length; i++) { const q = W2P(pts[i]); dCase += ` L ${q.x} ${q.y}`; }
+        const dCase = FieldScene.pathData(pts, null, W2P);
         els.push(h('path', { key: 'case', d: dCase, fill: 'none', stroke: '#05060a', strokeOpacity: 0.75, strokeWidth: P(5), strokeLinecap: 'round', strokeLinejoin: 'round' }));
         const segEls = [];
         const stride = Math.max(1, Math.floor(pts.length / 200));
@@ -532,17 +532,13 @@ import { UI } from "./ui";
         els.push(h('g', { key: 'pathbody' }, segEls));
         // selected-segment highlight (memo §3)
         if (sel.kind === 'seg' && derived.wpFrac && derived.wpFrac.length > sel.idx + 1) {
-          const lo = derived.wpFrac[sel.idx], hi = derived.wpFrac[sel.idx + 1];
-          let sd = '', st = false;
-          for (let k = 0; k < pts.length; k++) { const f = pts[k].s / totalS; if (f >= lo - 1e-4 && f <= hi + 1e-4) { const q = W2P(pts[k]); sd += (st ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); st = true; } }
+          const sd = FieldScene.pathData(pts, FieldScene.segmentRange(derived, sel.idx), W2P, 1);
           if (sd) els.push(h('path', { key: 'segsel', d: sd, fill: 'none', stroke: accent, strokeWidth: P(5.5), strokeOpacity: 0.92, strokeLinecap: 'round', strokeLinejoin: 'round', style: { pointerEvents: 'none' } }));
         }
         // per-segment hit paths — click selects the segment; alt-click / waypoint-tool inserts (memo §3)
         if (derived.wpFrac) {
           for (let si = 0; si < doc.waypoints.length - 1; si++) {
-            const lo = derived.wpFrac[si], hi = derived.wpFrac[si + 1];
-            let sd = '', st = false;
-            for (let k = 0; k < pts.length; k++) { const f = pts[k].s / totalS; if (f >= lo - 1e-4 && f <= hi + 1e-4) { const q = W2P(pts[k]); sd += (st ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); st = true; } }
+            const sd = FieldScene.pathData(pts, FieldScene.segmentRange(derived, si), W2P, 1);
             if (sd) els.push(h('path', { key: 'seghit' + si, d: sd, fill: 'none', stroke: 'transparent', strokeWidth: P(18), strokeLinecap: 'round', 'data-role': 'seg', 'data-idx': si, style: { cursor: tool === 'range' ? 'crosshair' : tool === 'waypoint' ? 'copy' : 'pointer' } }));
           }
         }
@@ -658,15 +654,7 @@ import { UI } from "./ui";
         rangeOrder.forEach(({ rg, ri }) => {
           const isSel = sel.kind === 'cr' && sel.idx === ri;
           const col = isSel ? accent : '#caa23a';
-          let rangeHit = '', rangeStarted = false;
-          for (let k = 0; k < pts.length; k++) {
-            const f = pts[k].s / totalS;
-            if (f >= Math.min(rg.f0, rg.f1) && f <= Math.max(rg.f0, rg.f1)) {
-              const q = W2P(pts[k]);
-              rangeHit += (rangeStarted ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1);
-              rangeStarted = true;
-            }
-          }
+          const rangeHit = FieldScene.pathData(pts, rangeSpans[ri], W2P, 1);
           if (rangeHit) els.push(h('path', { key: 'rhit' + ri, d: rangeHit, fill: 'none', stroke: 'transparent', strokeWidth: P(11), strokeLinecap: 'round', 'data-role': 'cr', 'data-idx': ri, style: { cursor: 'pointer' } }));
           [['f0', 'rs'], ['f1', 're']].forEach(([fk, role]) => {
             const pf = PM.pointAtFraction(rg[fk], pts); const c = W2P(pf);
@@ -971,10 +959,8 @@ import { UI } from "./ui";
     }, [routine, routinePose, robot, view.w, cw]);
 
     const previewEl = (preview && pts.length > 1) ? (function () {
-      const lo = Math.min(preview.f0, preview.f1), hi = Math.max(preview.f0, preview.f1);
       const totalS = derived.sample.length || 1;
-      let dd = '', started = false;
-      for (let k = 0; k < pts.length; k++) { const f = pts[k].s / totalS; if (f >= lo && f <= hi) { const q = W2P(pts[k]); dd += (started ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); started = true; } }
+      const dd = FieldScene.fractionPathData(pts, totalS, preview.f0, preview.f1, W2P, 1);
       return dd ? h('path', { d: dd, fill: 'none', stroke: accent, strokeOpacity: 0.45, strokeWidth: P(12), strokeLinecap: 'round', style: { pointerEvents: 'none' } }) : null;
     })() : null;
 
@@ -1011,7 +997,7 @@ import { UI } from "./ui";
 
     return h('svg', {
       ref: svgRef, className: 'fieldsvg', viewBox: vb, preserveAspectRatio: 'xMidYMid meet',
-      onPointerDown: onDown, onPointerMove: onMove, onPointerUp: onUp, onPointerCancel: onCancel, onLostPointerCapture: onCancel, onWheel: onWheel, onDoubleClick: onDbl,
+      onPointerDown: onDown, onWheel: onWheel, onDoubleClick: onDbl,
       style: { cursor, userSelect: 'none', WebkitUserSelect: 'none', touchAction: 'none' },
       onContextMenu: onCtx, onDragStart: (e) => e.preventDefault(), draggable: false,
     },

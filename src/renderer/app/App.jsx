@@ -1,4 +1,6 @@
 import * as React from "react";
+import { PathEdit } from "../assets/path-edit";
+import { PathPreview } from "../assets/path-preview";
 import { ContextInspector } from "../components/ContextInspector";
 import { FIELD_DIMS, FieldView } from "../components/FieldView";
 import { Panels } from "../components/Panels";
@@ -28,6 +30,18 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
   const blankRoutine = (name) => ({ id: routineId(), name: name || 'Autonomous Routine', nodes: [] });
   function normalizeProject(raw) {
     return PathLinks.reconcile(normalizeProjectData(raw));
+  }
+
+  function agentProposalMatchesPublishedContext(proposal, sessionId, publishedContext, currentContext) {
+    return Boolean(proposal && publishedContext
+      && proposal.baseSessionId === sessionId
+      && proposal.baseRevision === publishedContext.revision
+      && proposal.baseActivePathId === publishedContext.activePathId
+      && publishedContext.project === currentContext.project
+      && publishedContext.activePathId === currentContext.activePathId
+      && publishedContext.editRevision === currentContext.editRevision
+      && (!proposal.baseJavaCatalogFingerprint || proposal.baseJavaCatalogFingerprint === currentContext.javaCatalogFingerprint)
+      && !currentContext.hasDraft);
   }
 
   const ACCENT = '#3f6fd0';
@@ -139,9 +153,30 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
   }
 
   const usePlayback = (store) => useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
-  function PlaybackField({ store, ...props }) {
+  function EditablePlaybackField({ store, editStore, doc, derived, derivedPath, robot, plannerId, ...props }) {
     const playback = usePlayback(store);
-    return h(FieldView, { ...props, playTime: playback.time });
+    const draft = useSyncExternalStore(editStore.subscribe, editStore.getSnapshot, editStore.getSnapshot);
+    const previewer = useMemo(() => PathPreview.create(), []);
+    const editBase = useRef(null);
+    const [preview, setPreview] = useState(() => previewer.getSnapshot());
+    useEffect(() => previewer.retain(), [previewer]);
+    useEffect(() => previewer.subscribe(() => setPreview(previewer.getSnapshot())), [previewer]);
+    useEffect(() => {
+      if (draft) previewer.request({ key: draft.id, path: draft, robot, plannerId, quality: 'interactive' });
+    }, [previewer, draft, robot, plannerId]);
+    if (draft && !editBase.current) editBase.current = doc;
+    const finished = !draft && editStore.getLastResolution() === 'finish';
+    const bridgeFinishedEdit = finished && editBase.current && (editBase.current === doc || derivedPath !== doc);
+    if (!draft && (!finished || (derivedPath === doc && editBase.current !== doc))) editBase.current = null;
+    const draftPreview = draft && preview.path && preview.path.id === draft.id && preview.value
+      ? { path: preview.path, value: preview.value }
+      : null;
+    const committedPreview = !draft && preview.path && preview.path.id === doc.id && preview.value && bridgeFinishedEdit
+      ? { path: preview.path, value: preview.value }
+      : null;
+    const displayed = draftPreview || committedPreview || { path: derivedPath || doc, value: derived };
+    const currentSource = draft || doc;
+    return h(FieldView, { ...props, editStore, doc: displayed.path, derived: displayed.value, interactionReady: displayed.path === currentSource, robot, playTime: playback.time });
   }
   function PlaybackTransport({ store, ...props }) {
     const playback = usePlayback(store);
@@ -161,6 +196,46 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
   function RoutineTransportPlayback({ store, run }) {
     const playback = usePlayback(store), running = playback.playing || playback.time > 0.001;
     return h(RoutineTransport, { run, time: playback.time, playing: playback.playing, controls: store, running });
+  }
+
+  /** Keeps the last valid preview visible while new geometry is derived off-thread. */
+  function usePathPreview(doc, robot, plannerId, quality) {
+    const previewer = useMemo(() => PathPreview.create(), []);
+    const fallback = useMemo(() => {
+      try { return { path: doc, value: PM.derivePath(doc, robot, 14, plannerId), error: null }; }
+      catch (error) { return { path: doc, value: null, error }; }
+    }, [doc, robot, plannerId]);
+    const lastValid = useRef(fallback.value ? { path: fallback.path, value: fallback.value } : null);
+    const [snapshot, setSnapshot] = useState(() => ({
+      status: fallback.value ? 'ready' : 'error',
+      key: doc.id,
+      path: fallback.path,
+      value: fallback.value,
+      error: fallback.error,
+      errorPath: fallback.error ? fallback.path : null,
+      durationMs: 0,
+    }));
+
+    useEffect(() => previewer.retain(), [previewer]);
+    useEffect(() => previewer.subscribe(() => setSnapshot(previewer.getSnapshot())), [previewer]);
+    useEffect(() => {
+      previewer.request({ key: doc.id, path: doc, robot, plannerId, quality });
+    }, [previewer, doc, robot, plannerId, quality]);
+
+    const current = snapshot.path === doc && snapshot.value
+      ? { path: doc, value: snapshot.value }
+      : fallback.path === doc && fallback.value
+        ? { path: doc, value: fallback.value }
+        : null;
+    if (current) lastValid.current = current;
+    const displayed = current || lastValid.current;
+    return {
+      value: displayed && displayed.value,
+      path: displayed && displayed.path,
+      error: snapshot.errorPath === doc ? snapshot.error : fallback.path === doc ? fallback.error : null,
+      pending: snapshot.status === 'pending',
+      durationMs: snapshot.durationMs || 0,
+    };
   }
 
   function App() {
@@ -186,14 +261,22 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const [agentCandidateId, setAgentCandidateId] = useState(null);
     const [mcpEnabled, setMcpEnabled] = useState(false);
     const [agentSessionId] = useState(() => 'session_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)));
+    const [agentEditResolutionRevision, setAgentEditResolutionRevision] = useState(0);
     const agentRevision = useRef(-1);
+    const agentPublishedContext = useRef(null);
+    const agentProposalRef = useRef(agentProposal); agentProposalRef.current = agentProposal;
+    const agentProposalContext = useRef(null);
     const [javaProjectState, setJavaProjectState] = useState({ status: 'unlinked', operation: null, catalog: null, integration: null, error: '', notice: '', bookmarkId: null, recentProjects: [] });
+    const javaCatalogFingerprint = useRef(null);
+    if (javaProjectState.catalog && javaProjectState.catalog.semanticFingerprint) javaCatalogFingerprint.current = javaProjectState.catalog.semanticFingerprint;
+    else if (!javaProjectState.operation) javaCatalogFingerprint.current = null;
     const [exportError, setExportError] = useState('');
     const [unitSystem, setUnitSystemState] = useState(() => UnitPrefs.current());
     const setUnitSystem = useCallback((next) => setUnitSystemState(UnitPrefs.set(next)), []);
     const javaRestoreGeneration = useRef(0);
     const skipDirty = useRef(true);
     const keyboardNavigation = useRef(false);
+    const editStore = useMemo(() => PathEdit.create(), []);
     const playbackStore = useMemo(() => createPlaybackStore(), []);
     const routinePlaybackStore = useMemo(() => createPlaybackStore(), []);
     useEffect(() => () => { playbackStore.destroy(); routinePlaybackStore.destroy(); }, [playbackStore, routinePlaybackStore]);
@@ -244,7 +327,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         return;
       }
       const generation = ++javaRestoreGeneration.current;
-      setJavaProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', catalog: null, integration: null, bookmarkId: null, error: '', notice: '' }));
+      setJavaProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', error: '', notice: '' }));
       try {
         const result = await window.bordeauxAPI.linkJavaProject();
         if (javaRestoreGeneration.current !== generation) return;
@@ -262,7 +345,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const openRecentJavaProject = useCallback(async (id, expectedGeneration) => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.openRecentJavaProject !== 'function') return;
       const generation = expectedGeneration == null ? ++javaRestoreGeneration.current : expectedGeneration;
-      setJavaProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', catalog: null, integration: null, bookmarkId: null, error: '', notice: '' }));
+      setJavaProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', error: '', notice: '' }));
       try {
         const result = await window.bordeauxAPI.openRecentJavaProject(id);
         if (javaRestoreGeneration.current !== generation) return;
@@ -355,12 +438,70 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
 
     const doc = project.paths[activeIdx];
     const docRef = useRef(doc); docRef.current = doc;
+    const projectRef = useRef(project); projectRef.current = project;
+    const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
     const hist = useRef({ past: [], future: [] });
     const routineHist = useRef({ past: [], future: [] });
     const projectHist = useRef({ past: [], future: [] });
     const autosaveRevision = useRef(0);
-    const lastDerived = useRef(null);
+    const autosaveTimer = useRef(0);
+    const persistenceTail = useRef(Promise.resolve());
     const [, force] = useState(0);
+    const updateDirty = useCallback((next) => {
+      dirtyRef.current = next;
+      setDirty(next);
+      if (window.bordeauxAPI && typeof window.bordeauxAPI.setDirty === 'function') window.bordeauxAPI.setDirty(next);
+    }, []);
+    const markAgentProposalStale = useCallback(() => {
+      const current = agentProposalRef.current;
+      if (!current || current.status !== 'ready') return;
+      const stale = { ...current, status: 'stale' };
+      agentProposalRef.current = stale;
+      setAgentProposal(stale);
+      if (window.bordeauxAPI && typeof window.bordeauxAPI.updateAgentProposalStatus === 'function') {
+        window.bordeauxAPI.updateAgentProposalStatus(current.id, 'stale');
+      }
+    }, []);
+    const materializeProject = useCallback(() => {
+      const base = projectRef.current;
+      const draft = editStore.getSnapshot();
+      const materialized = editStore.materialize(base);
+      if (!draft || materialized === base) return base;
+      const before = base.paths.find((path) => path.id === draft.id);
+      return PathLinks.sync(materialized, draft.id, before);
+    }, [editStore]);
+    const enqueuePersistence = useCallback((operation) => {
+      const pending = persistenceTail.current.catch(() => undefined).then(operation);
+      persistenceTail.current = pending.then(() => undefined, () => undefined);
+      return pending;
+    }, []);
+    const invalidateScheduledAutosave = useCallback(() => {
+      autosaveRevision.current += 1;
+      if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);
+      autosaveTimer.current = 0;
+    }, []);
+    const scheduleAutosave = useCallback((immediate) => {
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.autosaveProject !== 'function') return;
+      const revision = ++autosaveRevision.current;
+      if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);
+      autosaveTimer.current = 0;
+      const persist = () => enqueuePersistence(async () => {
+        if (revision !== autosaveRevision.current) return;
+        const sourceProject = projectRef.current;
+        const editRevision = editStore.getRevision();
+        const result = await window.bordeauxAPI.autosaveProject(materializeProject());
+        if (revision === autosaveRevision.current && sourceProject === projectRef.current
+          && editRevision === editStore.getRevision() && !editStore.getSnapshot() && result && result.saved) updateDirty(false);
+      });
+      if (immediate === true) {
+        void persist().catch((error) => console.warn('Could not autosave the Bordeaux project:', error));
+        return;
+      }
+      autosaveTimer.current = window.setTimeout(() => {
+        autosaveTimer.current = 0;
+        void persist().catch((error) => console.warn('Could not autosave the Bordeaux project:', error));
+      }, 900);
+    }, [editStore, enqueuePersistence, materializeProject, updateDirty]);
 
     useEffect(() => {
       const activePathId = project.paths[activeIdx] && project.paths[activeIdx].id;
@@ -370,45 +511,60 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
 
     useEffect(() => {
       if (skipDirty.current) skipDirty.current = false;
-      else setDirty(true);
-    }, [project]);
-    useEffect(() => { if (window.bordeauxAPI) window.bordeauxAPI.setDirty(dirty); }, [dirty]);
+      else updateDirty(true);
+    }, [project, updateDirty]);
+    useEffect(() => scheduleAutosave(), [project, scheduleAutosave]);
+    useEffect(() => editStore.subscribe(() => {
+      const draft = editStore.getSnapshot();
+      const canceled = !draft && editStore.getLastResolution() === 'cancel';
+      if (!draft && !canceled) return;
+      markAgentProposalStale();
+      if (canceled) setAgentEditResolutionRevision((revision) => revision + 1);
+      if (canceled || !dirtyRef.current) updateDirty(true);
+      scheduleAutosave(canceled);
+    }), [editStore, markAgentProposalStale, scheduleAutosave, updateDirty]);
+    useEffect(() => () => {
+      if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);
+    }, []);
+    useEffect(() => markAgentProposalStale(), [project, activeIdx, markAgentProposalStale]);
     useEffect(() => {
-      if (!window.bordeauxAPI || typeof window.bordeauxAPI.autosaveProject !== 'function') return undefined;
-      const revision = ++autosaveRevision.current;
-      const timer = window.setTimeout(() => {
-        window.bordeauxAPI.autosaveProject(project)
-          .then((result) => { if (revision === autosaveRevision.current && result && result.saved) setDirty(false); })
-          .catch((error) => console.warn('Could not autosave the Bordeaux project:', error));
-      }, 900);
-      return () => window.clearTimeout(timer);
-    }, [project]);
+      if (javaProjectState.operation) return;
+      const current = agentProposalRef.current;
+      if (current?.status === 'ready' && current.baseJavaCatalogFingerprint
+        && current.baseJavaCatalogFingerprint !== javaCatalogFingerprint.current) markAgentProposalStale();
+    }, [javaProjectState.operation, javaProjectState.catalog && javaProjectState.catalog.semanticFingerprint, markAgentProposalStale]);
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.publishAgentSession !== 'function') return;
       let published = false;
       const publish = () => {
         if (published) return;
         published = true;
+        const sourceProject = projectRef.current;
+        const activePathId = docRef.current && docRef.current.id;
+        const editRevision = editStore.getRevision();
         agentRevision.current += 1;
         const revision = agentRevision.current;
+        agentPublishedContext.current = { revision, project: sourceProject, activePathId, editRevision };
         window.bordeauxAPI.publishAgentSession({
           sessionId: agentSessionId,
           revision,
-          project: clone(project),
-          activePathId: doc.id,
+          project: clone(materializeProject()),
+          activePathId,
           allianceView: 'blue',
           fieldPack: { id: '2026-rebuilt', revision: '2026-manual-tu19-welded-4' },
         });
         setAgentProposal((current) => {
           if (!current || current.status !== 'ready' || current.baseRevision === revision) return current;
           window.bordeauxAPI.updateAgentProposalStatus(current.id, 'stale');
-          return { ...current, status: 'stale' };
+          const stale = { ...current, status: 'stale' };
+          agentProposalRef.current = stale;
+          return stale;
         });
       };
       const timer = window.setTimeout(publish, 150);
       window.addEventListener('pointerup', publish, { once: true });
       return () => { window.clearTimeout(timer); window.removeEventListener('pointerup', publish); };
-    }, [project, activeIdx, agentSessionId, doc.id]);
+    }, [project, activeIdx, agentSessionId, agentEditResolutionRevision, doc.id, materializeProject]);
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.onAgentProposal !== 'function') return;
       let active = true;
@@ -419,10 +575,27 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         const proposalKey = proposal.id + ':' + proposal.status;
         if (proposalKey === lastProposalKey) return;
         lastProposalKey = proposalKey;
-        const stale = proposal.baseSessionId !== agentSessionId || proposal.baseRevision !== agentRevision.current;
+        const publishedContext = agentPublishedContext.current;
+        const currentActivePathId = docRef.current && docRef.current.id;
+        const stale = !agentProposalMatchesPublishedContext(proposal, agentSessionId, publishedContext, {
+          project: projectRef.current,
+          activePathId: currentActivePathId,
+          editRevision: editStore.getRevision(),
+          javaCatalogFingerprint: javaCatalogFingerprint.current,
+          hasDraft: Boolean(editStore.getSnapshot()),
+        });
         const received = stale && proposal.status === 'ready' ? { ...proposal, status: 'stale' } : proposal;
-        if (window.bordeauxAPI.acknowledgeAgentProposal) window.bordeauxAPI.acknowledgeAgentProposal(proposal.id, agentSessionId, agentRevision.current);
+        agentProposalContext.current = {
+          id: proposal.id,
+          published: publishedContext,
+        };
+        agentProposalRef.current = received;
         if (stale && proposal.status === 'ready' && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(proposal.id, 'stale');
+        if (window.bordeauxAPI.acknowledgeAgentProposal) {
+          const receiptRevision = publishedContext ? publishedContext.revision : agentRevision.current >= 0 ? agentRevision.current : proposal.baseRevision;
+          const receiptActivePathId = publishedContext ? publishedContext.activePathId : currentActivePathId || proposal.baseActivePathId;
+          window.bordeauxAPI.acknowledgeAgentProposal(proposal.id, agentSessionId, receiptRevision, receiptActivePathId, !stale);
+        }
         setAgentProposal(received);
         setAgentCandidateId(proposal.recommendedCandidateId || null);
         setPage(proposal.operation === 'configureRobot' ? 'robot' : 'plan');
@@ -437,7 +610,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         }).catch(() => undefined);
       }
       return () => { active = false; unsubscribe(); };
-    }, [agentSessionId]);
+    }, [agentSessionId, editStore]);
     useEffect(() => {
       const onPointerDown = () => { keyboardNavigation.current = false; };
       window.addEventListener('pointerdown', onPointerDown, true);
@@ -452,15 +625,16 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }, []);
 
     // ---- derived path data ----
-    const derivation = useMemo(() => {
-      try { return { value: PM.derivePath(doc, robot, PERSEG, plannerId), error: null }; }
-      catch (error) { return { value: null, error }; }
-    }, [doc, robot, plannerId]);
-    if (derivation.value) lastDerived.current = derivation.value;
-    if (!lastDerived.current) throw derivation.error || new Error('Could not derive the active path');
-    const derived = derivation.value || lastDerived.current;
+    const derivation = usePathPreview(doc, robot, plannerId, 'final');
+    if (!derivation.value) throw derivation.error || new Error('Could not derive the active path');
+    const derived = derivation.value;
+    const derivationDoc = derivation.path || doc;
+    const derivationCurrent = derivationDoc === doc;
 
-    useEffect(() => { setTimes((t) => (t[doc.id] === derived.prof.totalTime ? t : { ...t, [doc.id]: derived.prof.totalTime })); }, [derived, doc.id]);
+    useEffect(() => {
+      if (!derivationCurrent) return;
+      setTimes((t) => (t[doc.id] === derived.prof.totalTime ? t : { ...t, [doc.id]: derived.prof.totalTime }));
+    }, [derived, derivationCurrent, doc.id]);
 
     // ---- doc mutation ----
     const writeDoc = useCallback((nd) => { setProject((pr) => {
@@ -468,10 +642,36 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       return PathLinks.sync({ ...pr, paths }, nd.id, before);
     }); }, [activeIdx]);
     const beginHistory = useCallback(() => { hist.current.past.push(clone(docRef.current)); if (hist.current.past.length > 80) hist.current.past.shift(); hist.current.future = []; projectHist.current.future = []; force((x) => x + 1); }, []);
-    const commit = useCallback((fn) => { beginHistory(); writeDoc(fn(clone(docRef.current))); }, [beginHistory, writeDoc]);
-    const mutate = useCallback((fn) => { writeDoc(fn(clone(docRef.current))); }, [writeDoc]);
+    const beginEdit = useCallback(() => {
+      if (editStore.getSnapshot()) return;
+      editStore.begin(clone(docRef.current));
+    }, [editStore]);
+    const finishEdit = useCallback(() => {
+      const next = editStore.finish();
+      if (!next) return;
+      beginHistory();
+      writeDoc(next);
+    }, [beginHistory, editStore, writeDoc]);
+    const cancelEdit = useCallback(() => {
+      return editStore.cancel();
+    }, [editStore]);
+    const commit = useCallback((fn) => {
+      cancelEdit();
+      beginHistory();
+      writeDoc(fn(clone(docRef.current)));
+    }, [beginHistory, cancelEdit, writeDoc]);
+    useEffect(() => {
+      const draft = editStore.getSnapshot();
+      if (draft && doc && draft.id !== doc.id) cancelEdit();
+    }, [doc && doc.id, editStore, cancelEdit]);
+    const mutate = useCallback((fn) => {
+      const draft = editStore.getSnapshot();
+      if (!draft) { writeDoc(fn(clone(docRef.current))); return; }
+      editStore.update(fn(clone(draft)));
+    }, [editStore, writeDoc]);
 
     const undo = useCallback(() => {
+      if (cancelEdit()) return;
       const H = hist.current;
       if (H.past.length) { H.future.push(clone(docRef.current)); writeDoc(H.past.pop()); force((x) => x + 1); return; }
       const R = routineHist.current;
@@ -484,8 +684,9 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       const P = projectHist.current; if (!P.past.length) return;
       P.future.push({ project: clone(project), activeIdx });
       const previous = P.past.pop(); routineHist.current = { past: [], future: [] }; setProject(previous.project); setActiveIdx(previous.activeIdx); setSel({ kind: null, idx: -1 }); force((x) => x + 1);
-    }, [writeDoc, project, activeIdx]);
+    }, [cancelEdit, writeDoc, project, activeIdx]);
     const redo = useCallback(() => {
+      if (cancelEdit()) return;
       const H = hist.current;
       if (H.future.length) { H.past.push(clone(docRef.current)); writeDoc(H.future.pop()); force((x) => x + 1); return; }
       const R = routineHist.current;
@@ -498,7 +699,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       const P = projectHist.current; if (!P.future.length) return;
       P.past.push({ project: clone(project), activeIdx });
       const next = P.future.pop(); routineHist.current = { past: [], future: [] }; setProject(next.project); setActiveIdx(next.activeIdx); setSel({ kind: null, idx: -1 }); force((x) => x + 1);
-    }, [writeDoc, project, activeIdx]);
+    }, [cancelEdit, writeDoc, project, activeIdx]);
 
     const select = useCallback((kind, idx) => setSel(kind ? { kind, idx } : { kind: null, idx: -1 }), []);
     // ---- field actions ----
@@ -986,8 +1187,8 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       setSegMeta, setSegmentHeadingMode, setHeadingTransition, setSegmentLookAt, setJiggle, faceWaypoint, duplicateWp, reversePath, reorderWp, insertWp,
       setStop, setWait, setTurnInPlace, setTurnInPlaceMeta, setHeadingMode, toggleDriveBackward,
       openInspector: () => setInspectorOpen(true) };
-    const fieldActions = { addWaypoint, appendWaypoint, moveWaypoint, moveHandle, addTargetAt, addMarkerAt, moveTargetTo, rotateTargetTo, moveMarkerTo, addRange, moveRangeHandle, beginHistory,
-      setWaypointHeading, moveSegmentLookAt, headingMenu, delWp, delTarget, delMarker, delRange,
+    const fieldActions = { addWaypoint, appendWaypoint, moveWaypoint, moveHandle, addTargetAt, addMarkerAt, moveTargetTo, rotateTargetTo, moveMarkerTo, addRange, moveRangeHandle, beginEdit, finishEdit, cancelEdit,
+      setWaypointHeading, moveSegmentLookAt, headingMenu, faceWaypoint, delWp, delTarget, delMarker, delRange,
       openInspector: () => setInspectorOpen(true),
       select };
 
@@ -1000,8 +1201,13 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       return base + ' ' + suffix;
     };
     const resetForPath = (i) => {
+      cancelEdit();
       setActiveIdx(i); setSel({ kind: null, idx: -1 }); playbackStore.reset();
       hist.current = { past: [], future: [] }; setPage('plan');
+    };
+    const updatePathLibrary = (update) => {
+      cancelEdit();
+      setProject(update);
     };
     const addPath = (folderId) => {
       const name = uniquePathName('New path'), index = project.paths.length;
@@ -1024,7 +1230,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       setProject((pr) => ({ ...pr, paths: [...pr.paths, path], pathLinks: [...(pr.pathLinks || []).filter((item) => item.fromPathId !== source.id), link] }));
       resetForPath(index); return { index, name, id: path.id };
     };
-    const setPathLink = (fromPathId, toPathId) => setProject((pr) => {
+    const setPathLink = (fromPathId, toPathId) => updatePathLibrary((pr) => {
       let pathLinks = (pr.pathLinks || []).filter((link) => link.fromPathId !== fromPathId);
       if (!toPathId || fromPathId === toPathId) return { ...pr, pathLinks };
       pathLinks = pathLinks.filter((link) => link.toPathId !== toPathId);
@@ -1046,12 +1252,12 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       routines.forEach((candidate) => AUTO.walk(candidate.nodes, (node) => { if (node.type === 'path' && node.ref === target.id) referenced = true; }));
       if (referenced) { alert('“' + target.name + '” is used by an autonomous routine. Remove those routine steps before deleting the path.'); return false; }
       if (!confirm('Delete path “' + target.name + '”? This cannot be undone.')) return false;
-      setProject((pr) => { const paths = pr.paths.filter((_, k) => k !== i); return { ...pr, paths, pathLinks: (pr.pathLinks || []).filter((link) => link.fromPathId !== target.id && link.toPathId !== target.id) }; });
+      updatePathLibrary((pr) => { const paths = pr.paths.filter((_, k) => k !== i); return { ...pr, paths, pathLinks: (pr.pathLinks || []).filter((link) => link.fromPathId !== target.id && link.toPathId !== target.id) }; });
       setActiveIdx((a) => Math.max(0, a > i ? a - 1 : a === i ? Math.min(a, project.paths.length - 2) : a));
       setSel({ kind: null, idx: -1 }); playbackStore.reset(); hist.current = { past: [], future: [] };
       return true;
     };
-    const renamePath = (i, name) => { const clean = (name || '').trim(); if (!clean) return false; setProject((pr) => { const paths = pr.paths.slice(); paths[i] = { ...paths[i], name: clean }; return { ...pr, paths }; }); return true; };
+    const renamePath = (i, name) => { const clean = (name || '').trim(); if (!clean) return false; updatePathLibrary((pr) => { const paths = pr.paths.slice(); paths[i] = { ...paths[i], name: clean }; return { ...pr, paths }; }); return true; };
     const addPathFolder = () => {
       const folders = project.pathFolders || [], used = new Set(folders.map((folder) => folder.name.toLowerCase()));
       let name = 'New folder', suffix = 2; while (used.has(name.toLowerCase())) name = 'New folder ' + suffix++;
@@ -1067,10 +1273,10 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       const folder = (project.pathFolders || []).find((candidate) => candidate.id === id); if (!folder) return false;
       const count = project.paths.filter((path) => path.folderId === id).length;
       if (!confirm('Delete folder “' + folder.name + '”?' + (count ? ' Its ' + count + ' path' + (count === 1 ? '' : 's') + ' will move to Unfiled.' : ''))) return false;
-      setProject((pr) => ({ ...pr, pathFolders: (pr.pathFolders || []).filter((candidate) => candidate.id !== id), paths: pr.paths.map((path) => path.folderId === id ? (() => { const next = { ...path }; delete next.folderId; return next; })() : path) }));
+      updatePathLibrary((pr) => ({ ...pr, pathFolders: (pr.pathFolders || []).filter((candidate) => candidate.id !== id), paths: pr.paths.map((path) => path.folderId === id ? (() => { const next = { ...path }; delete next.folderId; return next; })() : path) }));
       return true;
     };
-    const movePathToFolder = (i, folderId) => setProject((pr) => ({ ...pr, paths: pr.paths.map((path, index) => {
+    const movePathToFolder = (i, folderId) => updatePathLibrary((pr) => ({ ...pr, paths: pr.paths.map((path, index) => {
       if (index !== i) return path; const next = { ...path }; if (folderId) next.folderId = folderId; else delete next.folderId; return next;
     }) }));
     const setActive = (i) => resetForPath(i);
@@ -1122,10 +1328,24 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const rejectAgentProposal = useCallback(() => {
       if (!agentProposal) return;
       if (window.bordeauxAPI && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(agentProposal.id, 'rejected');
-      setAgentProposal({ ...agentProposal, status: 'rejected' });
+      const rejected = { ...agentProposal, status: 'rejected' };
+      agentProposalRef.current = rejected;
+      setAgentProposal(rejected);
     }, [agentProposal]);
     const applyAgentProposal = useCallback(() => {
-      if (!agentProposal || agentProposal.status !== 'ready' || agentProposal.baseSessionId !== agentSessionId || agentProposal.baseRevision !== agentRevision.current || (agentProposal.blockingIssues && agentProposal.blockingIssues.length)) return;
+      const proposalContext = agentProposalContext.current;
+      const publishedContext = agentPublishedContext.current;
+      const currentActivePathId = docRef.current && docRef.current.id;
+      const contextMatches = agentProposalMatchesPublishedContext(agentProposal, agentSessionId, publishedContext, {
+        project: projectRef.current,
+        activePathId: currentActivePathId,
+        editRevision: editStore.getRevision(),
+        javaCatalogFingerprint: javaCatalogFingerprint.current,
+        hasDraft: Boolean(editStore.getSnapshot()),
+      });
+      if (!agentProposal || agentProposal.status !== 'ready' || !contextMatches
+        || !proposalContext || proposalContext.published !== publishedContext || proposalContext.id !== agentProposal.id
+        || javaProjectState.operation || (agentProposal.blockingIssues && agentProposal.blockingIssues.length)) return;
       const before = { project: clone(project), activeIdx };
       let nextIndex = activeIdx;
       let nextProject;
@@ -1144,10 +1364,12 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         nextProject = { ...project, paths: [...project.paths, clone(agentCandidate.path)] };
       }
       projectHist.current.past.push(before); if (projectHist.current.past.length > 80) projectHist.current.past.shift(); projectHist.current.future = [];
-      setProject(nextProject); if (agentProposal.operation !== 'configureRobot') resetForPath(nextIndex); setDirty(true);
+      setProject(nextProject); if (agentProposal.operation !== 'configureRobot') resetForPath(nextIndex); updateDirty(true);
       if (window.bordeauxAPI && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(agentProposal.id, 'applied', agentRevision.current + 1);
-      setAgentProposal({ ...agentProposal, status: 'applied', appliedRevision: agentRevision.current + 1 });
-    }, [agentProposal, agentCandidate, project, activeIdx, agentSessionId]);
+      const applied = { ...agentProposal, status: 'applied', appliedRevision: agentRevision.current + 1 };
+      agentProposalRef.current = applied;
+      setAgentProposal(applied);
+    }, [agentProposal, agentCandidate, project, activeIdx, agentSessionId, editStore, javaProjectState.operation, updateDirty]);
 
     const total = derived.prof.totalTime || 0;
     useEffect(() => playbackStore.setTotal(total), [playbackStore, total]);
@@ -1198,13 +1420,16 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }, []);
 
     // ---- desktop project workflow ----
-    const canReplaceProject = useCallback(() => !dirty || confirm('Discard unsaved changes to this project?'), [dirty]);
+    const canReplaceProject = useCallback(() => !dirtyRef.current || confirm('Discard unsaved changes to this project?'), []);
     const loadProject = useCallback((incoming) => {
+      invalidateScheduledAutosave();
+      cancelEdit();
       const next = normalizeProject(incoming);
       const javaGeneration = ++javaRestoreGeneration.current;
       const requestedPathId = next.editor && next.editor.activePathId;
       const requestedPathIndex = requestedPathId ? next.paths.findIndex((path) => path.id === requestedPathId) : -1;
       skipDirty.current = true;
+      projectRef.current = next;
       setProject(next);
       setActiveIdx(requestedPathIndex >= 0 ? requestedPathIndex : 0); setSel({ kind: null, idx: -1 }); setRoutineSel(null);
       playbackStore.reset();
@@ -1213,42 +1438,67 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       hist.current = { past: [], future: [] };
       routineHist.current = { past: [], future: [] };
       projectHist.current = { past: [], future: [] };
-      setDirty(false);
+      updateDirty(false);
       setJavaProjectState((current) => ({ ...current, status: 'unlinked', operation: null, catalog: null, integration: null, bookmarkId: null, error: '', notice: '' }));
       if (next.editor && next.editor.javaProjectBookmarkId) void openRecentJavaProject(next.editor.javaProjectBookmarkId, javaGeneration);
-    }, [openRecentJavaProject, playbackStore, routinePlaybackStore]);
+    }, [cancelEdit, invalidateScheduledAutosave, openRecentJavaProject, playbackStore, routinePlaybackStore, updateDirty]);
     useEffect(() => {
       let active = true;
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.restoreLastProject !== 'function') return undefined;
-      window.bordeauxAPI.restoreLastProject().then((result) => { if (active && result) loadProject(result.project); }).catch((error) => console.warn('Could not restore the last project:', error));
+      const sourceProject = projectRef.current;
+      const editRevision = editStore.getRevision();
+      void enqueuePersistence(() => window.bordeauxAPI.restoreLastProject()).then(async (result) => {
+        if (!active || !result) return;
+        if (sourceProject !== projectRef.current || editRevision !== editStore.getRevision() || dirtyRef.current) {
+          invalidateScheduledAutosave();
+          await window.bordeauxAPI.newProject();
+          updateDirty(true);
+          return;
+        }
+        loadProject(result.project);
+      }).catch((error) => console.warn('Could not restore the last project:', error));
       return () => { active = false; };
-    }, [loadProject]);
-    const newProject = useCallback(async () => {
+    }, [editStore, enqueuePersistence, invalidateScheduledAutosave, loadProject, updateDirty]);
+    const prepareProjectReplacement = useCallback(() => {
+      invalidateScheduledAutosave();
+      cancelEdit();
+    }, [cancelEdit, invalidateScheduledAutosave]);
+    const newProject = useCallback(() => {
       if (!canReplaceProject()) return;
-      if (window.bordeauxAPI) await window.bordeauxAPI.newProject();
-      loadProject(freshProject());
-    }, [canReplaceProject, loadProject]);
-    const openProject = useCallback(async (recentIndex) => {
+      prepareProjectReplacement();
+      return enqueuePersistence(async () => {
+        if (window.bordeauxAPI) await window.bordeauxAPI.newProject();
+        loadProject(freshProject());
+      });
+    }, [canReplaceProject, enqueuePersistence, loadProject, prepareProjectReplacement]);
+    const openProject = useCallback((recentIndex) => {
       if (!window.bordeauxAPI || !canReplaceProject()) return;
-      try {
-        const result = typeof recentIndex === 'number'
-          ? await window.bordeauxAPI.openRecentProject(recentIndex)
-          : await window.bordeauxAPI.openProject();
-        if (result) loadProject(result.project);
-      } catch (error) {
-        alert('Could not open project: ' + (error && error.message ? error.message : error));
-      }
-    }, [canReplaceProject, loadProject]);
-    const saveProject = useCallback(async (saveAs) => {
+      prepareProjectReplacement();
+      return enqueuePersistence(async () => {
+        try {
+          const result = typeof recentIndex === 'number'
+            ? await window.bordeauxAPI.openRecentProject(recentIndex)
+            : await window.bordeauxAPI.openProject();
+          if (result) loadProject(result.project);
+        } catch (error) {
+          alert('Could not open project: ' + (error && error.message ? error.message : error));
+        }
+      });
+    }, [canReplaceProject, enqueuePersistence, loadProject, prepareProjectReplacement]);
+    const saveProject = useCallback((saveAs) => {
       if (!window.bordeauxAPI) return;
-      try {
-        const result = await window.bordeauxAPI.saveProject(project, saveAs === true);
-        if (result && result.canceled) return;
-        setDirty(false);
-      } catch (error) {
-        alert('Could not save project: ' + (error && error.message ? error.message : error));
-      }
-    }, [project]);
+      return enqueuePersistence(async () => {
+        try {
+          const sourceProject = projectRef.current;
+          const editRevision = editStore.getRevision();
+          const result = await window.bordeauxAPI.saveProject(materializeProject(), saveAs === true);
+          if (result && result.canceled) return;
+          if (sourceProject === projectRef.current && editRevision === editStore.getRevision()) updateDirty(false);
+        } catch (error) {
+          alert('Could not save project: ' + (error && error.message ? error.message : error));
+        }
+      });
+    }, [editStore, enqueuePersistence, materializeProject, updateDirty]);
 
     const onExportJava = useCallback(async (destination) => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.exportJava !== 'function') {
@@ -1262,7 +1512,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       setExportError('');
       setJavaProjectState((current) => ({ ...current, operation: 'export', error: '', notice: '' }));
       try {
-        const result = await window.bordeauxAPI.exportJava(project, destination === 'saveAs' ? 'saveAs' : 'linked');
+        const result = await window.bordeauxAPI.exportJava(materializeProject(), destination === 'saveAs' ? 'saveAs' : 'linked');
         setJavaProjectState((current) => ({
           ...current,
           operation: null,
@@ -1274,7 +1524,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         setJavaProjectState((current) => ({ ...current, operation: null }));
         setExportError(message);
       }
-    }, [project, javaProjectState.catalog]);
+    }, [javaProjectState.catalog, materializeProject]);
 
     useEffect(() => {
       if (!window.bordeauxAPI) return undefined;
@@ -1320,6 +1570,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         if ((e.metaKey || e.ctrlKey) && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
         if ((e.metaKey || e.ctrlKey) && k === 'y') { e.preventDefault(); redo(); return; }
         if (page !== 'plan') return;
+        if (!derivationCurrent) return;
         if (e.key.indexOf('Arrow') === 0 && sel.kind) {
           const base = e.shiftKey ? 0.25 : e.altKey ? 0.01 : 0.05;
           let dx = 0, dy = 0;
@@ -1341,7 +1592,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       };
       window.addEventListener('keydown', onKey);
       return () => window.removeEventListener('keydown', onKey);
-    }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, nudgeWp, nudgeFrac, playbackStore]);
+    }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, derivationCurrent, nudgeWp, nudgeFrac, playbackStore]);
 
     const selNode = (page === 'auto' && routineSel) ? AUTO.findNode(routine, routineSel) : null;
 
@@ -1360,9 +1611,9 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
               h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
             h('aside', { className: 'rail rail-r' + (selNode ? '' : ' collapsed'), 'aria-label': 'Routine step inspector' },
               selNode && h(StepInspector, { node: selNode, paths: project.paths, acq, run, javaProject: { ...javaProjectState, link: linkJavaProject } })))
-        : h('main', { className: 'stage stage-plan' },
+        : h('main', { className: 'stage stage-plan', inert: derivationCurrent ? undefined : '', 'aria-disabled': derivationCurrent ? undefined : true },
             h('nav', { className: 'rail rail-l' + (outlineOpen ? '' : ' collapsed'), 'aria-label': 'Path outline' },
-              h(Panels.Outline, { open: outlineOpen, setOpen: setOutlineOpen, doc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot })),
+              h(Panels.Outline, { open: outlineOpen, setOpen: setOutlineOpen, doc: derivationDoc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot })),
             h('div', { className: 'fieldcol' },
               h(Panels.ToolRail, { tool, setTool }),
               exportError && h('div', { className: 'insert-preview export-error-banner', role: 'alert' },
@@ -1371,7 +1622,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
               derivation.error && h('div', { className: 'insert-preview derivation-error', role: 'alert' },
                 h('div', { className: 'insert-preview-copy' }, h('b', null, 'Path preview unavailable'), h('span', null, derivation.error.message || String(derivation.error))),
                 h('span', null, 'Showing the last valid preview. Undo or edit the selected geometry.')),
-              h(PlaybackField, { store: playbackStore, doc, derived, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, actions: fieldActions, showHandles: true }),
+              h(EditablePlaybackField, { store: playbackStore, editStore, doc, derived, derivedPath: derivation.path, robot, plannerId, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, drive: robot.drive, accent, metric, actions: fieldActions, showHandles: true }),
               tool !== 'select' && !waypointPreview && h('div', { className: 'stage-hint', dangerouslySetInnerHTML: { __html: toolHint(tool) } }),
               waypointPreview && h('div', { className: 'insert-preview', role: 'region', 'aria-label': 'Preview waypoint insertion' },
                 h('div', { className: 'insert-preview-copy' },
@@ -1394,12 +1645,12 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
                 h('div', { className: 'insert-preview-actions' },
                   agentProposal.status === 'ready' && h('button', { type: 'button', onClick: rejectAgentProposal }, 'Reject'),
                   agentProposal.status === 'ready' && h('button', { className: 'primary', type: 'button', disabled: !agentCandidate || agentCandidate.valid === false || (agentProposal.blockingIssues && agentProposal.blockingIssues.length > 0), onClick: applyAgentProposal }, agentProposal.operation === 'replace' ? 'Apply repair' : 'Add path'))),
-              h(Panels.ConstraintBar, { c: doc.constraints, robot, onOpen: () => select(null, -1) }),
-              h(PlaybackTransport, { store: playbackStore, derived, doc, metric, setMetric, graphOpen, setGraphOpen }),
+              h(Panels.ConstraintBar, { c: derivationDoc.constraints, robot, onOpen: () => select(null, -1) }),
+              h(PlaybackTransport, { store: playbackStore, derived, doc: derivationDoc, metric, setMetric, graphOpen, setGraphOpen }),
               h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid, graphOpen })),
             h('aside', { className: 'rail rail-r' + (inspectorOpen ? '' : ' collapsed'), 'aria-label': 'Path inspector' },
               inspectorOpen
-                ? h(ContextInspector, { doc, sel, derived, actions: inspActions, drive: robot.drive, robot, javaProject: { ...javaProjectState, link: linkJavaProject, openRecent: openRecentJavaProject, refresh: refreshJavaProject, install: installJavaSupport, build: buildJavaCatalog, cancelBuild: cancelJavaCatalogBuild, export: () => onExportJava('linked') }, onClose: () => setInspectorOpen(false) })
+                ? h(ContextInspector, { doc: derivationDoc, sel, derived, actions: inspActions, drive: robot.drive, robot, javaProject: { ...javaProjectState, link: linkJavaProject, openRecent: openRecentJavaProject, refresh: refreshJavaProject, install: installJavaSupport, build: buildJavaCatalog, cancelBuild: cancelJavaCatalogBuild, export: () => onExportJava('linked') }, onClose: () => setInspectorOpen(false) })
                 : h('button', { className: 'inspector-tab', type: 'button', title: 'Show inspector', onClick: () => setInspectorOpen(true) }, h(UI.Icon, { name: 'sliders', size: 16 }), h('span', null, 'Inspector'))),
             headMenu && h(UI.ContextMenu, { x: headMenu.x, y: headMenu.y, items: headMenu.items, onClose: () => setHeadMenu(null) })));
   }
@@ -1424,4 +1675,4 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }
   }
 
-export { App, AppErrorBoundary };
+export { App, AppErrorBoundary, agentProposalMatchesPublishedContext };

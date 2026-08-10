@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AgentBridgeClient, AgentBridgeServer } from "../src/electron/agentBridge";
 import { AgentSessionService, runAgentPlanningJobDirect } from "../src/electron/agentSession";
 import { createDemoProject } from "../src/shared/project/defaults";
+import type { JavaCommandCatalog, JavaCommandDescriptor } from "../src/shared/types";
 
 function snapshot(revision = 0) {
   const project = createDemoProject();
@@ -28,6 +29,38 @@ function deferred<T = void>() {
   return { promise, resolve, reject };
 }
 
+function shootCommand(overrides: Partial<JavaCommandDescriptor> = {}): JavaCommandDescriptor {
+  return {
+    id: "robot.shoot",
+    label: "Shoot",
+    aliases: ["shoot"],
+    semanticTags: ["shoot-fuel"],
+    runtimeReady: true,
+    ownerType: "robot.Actions",
+    member: "shoot",
+    kind: "factory",
+    confidence: "confirmed",
+    parameters: [],
+    source: { file: "robot/Actions.java", line: 1 },
+    ...overrides,
+  };
+}
+
+function authoritativeCatalog(commands: JavaCommandDescriptor[] = [shootCommand()]): JavaCommandCatalog {
+  return {
+    projectName: "Robot",
+    sourceFileCount: 1,
+    scannedAt: "2026-08-10T00:00:00.000Z",
+    generatedSchemaVersion: "1.0",
+    catalogId: "robot-catalog",
+    supportVersion: "1.0",
+    catalogHash: `sha256:${"a".repeat(64)}`,
+    authoritative: true,
+    commands,
+    warnings: [],
+  };
+}
+
 describe("agent session and private bridge", () => {
   it("cancels an in-flight planning job when the editor revision changes", async () => {
     let aborted = false;
@@ -45,6 +78,27 @@ describe("agent session and private bridge", () => {
 
     await expect(pending).rejects.toThrow("planning worker aborted");
     expect(aborted).toBe(true);
+  });
+
+  it("cancels an in-flight planning job when only the active path changes", async () => {
+    const release = deferred<unknown>();
+    const service = new AgentSessionService(() => {}, () => null, async () => release.promise);
+    const initial = snapshot();
+    service.publishSnapshot(initial);
+    const pending = service.request({ method: "plan_path", params: {
+      intent: "Plan on the original path", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 3, y: 1 }], maximumCandidates: 1,
+    } });
+    const switched = structuredClone(initial);
+    const otherPath = structuredClone(switched.project.paths[0]);
+    otherPath.id = "path_other_during_planning";
+    otherPath.name = "Other path";
+    switched.project.paths.push(otherPath);
+    switched.activePathId = otherPath.id;
+
+    service.publishSnapshot(switched);
+    release.resolve([]);
+
+    await expect(pending).rejects.toThrow(/planning was canceled|session changed/i);
   });
 
   it("does not start planning for an already-canceled request", async () => {
@@ -188,6 +242,26 @@ describe("agent session and private bridge", () => {
     expect((await service.request({ method: "get_proposal", params: { proposalId: proposal.proposalId } }) as any).status).toBe("stale");
   });
 
+  it("marks a proposal stale when the active path changes without a revision change", async () => {
+    const service = new AgentSessionService(() => {}, () => null);
+    const initial = snapshot();
+    service.publishSnapshot(initial);
+    const proposal: any = await service.request({ method: "plan_path", params: {
+      intent: "Stay on the published path", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 3, y: 1 }], maximumCandidates: 1,
+    } });
+    const switched = structuredClone(initial);
+    const otherPath = structuredClone(switched.project.paths[0]);
+    otherPath.id = "path_other";
+    otherPath.name = "Other path";
+    switched.project.paths.push(otherPath);
+    switched.activePathId = otherPath.id;
+
+    service.publishSnapshot(switched);
+
+    expect(service.getActiveProposal()).toBeNull();
+    expect(await service.request({ method: "get_proposal", params: { proposalId: proposal.proposalId } })).toMatchObject({ status: "stale" });
+  });
+
   it("returns invalid route candidates as a compact blocked result without staging", async () => {
     const staged: any[] = [];
     const service = new AgentSessionService((proposal) => { staged.push(proposal); }, () => null, async (job, signal) => {
@@ -235,7 +309,7 @@ describe("agent session and private bridge", () => {
     service = new AgentSessionService((proposal, requireReceipt) => {
       notifications.push({ intent: proposal.intent, status: proposal.status });
       if (requireReceipt && proposal.intent === "Stale provisional preview") {
-        service.acknowledgeProposal(proposal.id, proposal.baseSessionId, proposal.baseRevision + 1);
+        service.acknowledgeProposal(proposal.id, proposal.baseSessionId, proposal.baseRevision + 1, proposal.baseActivePathId);
       }
     }, () => null);
     service.publishSnapshot(snapshot());
@@ -249,6 +323,32 @@ describe("agent session and private bridge", () => {
 
     expect(service.getActiveProposal()?.id).toBe(committed.proposalId);
     expect(notifications.at(-1)).toEqual({ intent: "Committed preview", status: "ready" });
+  });
+
+  it("does not return ready when the renderer rejects a matching proposal receipt", async () => {
+    let service!: AgentSessionService;
+    service = new AgentSessionService((proposal, requireReceipt) => {
+      if (requireReceipt) service.acknowledgeProposal(proposal.id, proposal.baseSessionId, proposal.baseRevision, proposal.baseActivePathId, false);
+    }, () => null);
+    service.publishSnapshot(snapshot());
+
+    await expect(service.request({ method: "plan_path", params: {
+      intent: "Rejected renderer preview", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 3, y: 1 }], maximumCandidates: 1,
+    } })).rejects.toThrow("changed before it acknowledged");
+    expect(service.getActiveProposal()).toBeNull();
+  });
+
+  it("does not return ready when the renderer receipt names a different active path", async () => {
+    let service!: AgentSessionService;
+    service = new AgentSessionService((proposal, requireReceipt) => {
+      if (requireReceipt) service.acknowledgeProposal(proposal.id, proposal.baseSessionId, proposal.baseRevision, "path_opened_after_publication");
+    }, () => null);
+    service.publishSnapshot(snapshot());
+
+    await expect(service.request({ method: "plan_path", params: {
+      intent: "Wrong active path receipt", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 3, y: 1 }], maximumCandidates: 1,
+    } })).rejects.toThrow("changed before it acknowledged");
+    expect(service.getActiveProposal()).toBeNull();
   });
 
   it("rolls back staging when cancellation arrives during renderer acknowledgment", async () => {
@@ -613,6 +713,101 @@ describe("agent session and private bridge", () => {
     } });
     const fullBoundProposal: any = await service.request({ method: "get_proposal", params: { proposalId: boundProposal.proposalId, detail: "full" } });
     expect(fullBoundProposal.candidates[0].path.markers[0].invocation.commandId).toBe("robot.shootAlternate");
+  });
+
+  it("stales an end-action proposal when the bound command is removed from the catalog", async () => {
+    let catalog = authoritativeCatalog();
+    const notifications: Array<{ id: string; status: string }> = [];
+    const service = new AgentSessionService((item) => { notifications.push({ id: item.id, status: item.status }); }, () => catalog);
+    service.publishSnapshot(snapshot());
+    const proposal: any = await service.request({ method: "plan_path", params: {
+      intent: "Drive and shoot", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 3, y: 1 }], maximumCandidates: 1,
+      endAction: { commandId: "robot.shoot", semanticTag: "shoot-fuel" },
+    } });
+
+    catalog = authoritativeCatalog([]);
+    service.refreshJavaCatalog();
+
+    expect(service.getActiveProposal()).toBeNull();
+    expect(await service.request({ method: "get_proposal", params: { proposalId: proposal.proposalId } })).toMatchObject({ status: "stale" });
+    expect(notifications.at(-1)).toEqual({ id: proposal.proposalId, status: "stale" });
+  });
+
+  it("does not trust a stale supplied fingerprint after catalog semantics change", async () => {
+    const staleFingerprint = `sha256:${"f".repeat(64)}`;
+    let catalog = { ...authoritativeCatalog(), semanticFingerprint: staleFingerprint };
+    const service = new AgentSessionService(() => {}, () => catalog);
+    service.publishSnapshot(snapshot());
+    const proposal: any = await service.request({ method: "plan_path", params: {
+      intent: "Drive and shoot", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 3, y: 1 }], maximumCandidates: 1,
+      endAction: { commandId: "robot.shoot", semanticTag: "shoot-fuel" },
+    } });
+
+    catalog = { ...authoritativeCatalog([]), semanticFingerprint: staleFingerprint };
+
+    expect(service.getActiveProposal()).toBeNull();
+    expect(await service.request({ method: "get_proposal", params: { proposalId: proposal.proposalId } })).toMatchObject({ status: "stale" });
+  });
+
+  it("stales an end-action proposal when the bound command argument schema changes", async () => {
+    const parameter = {
+      name: "speed", label: "Speed", javaType: "double", role: "argument" as const,
+      defaultValue: 1, min: 0, max: 10, schema: { kind: "number" as const, javaType: "double" },
+    };
+    let catalog = authoritativeCatalog([shootCommand({ parameters: [parameter] })]);
+    const service = new AgentSessionService(() => {}, () => catalog);
+    service.publishSnapshot(snapshot());
+    const proposal: any = await service.request({ method: "plan_path", params: {
+      intent: "Drive and shoot at speed", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 3, y: 1 }], maximumCandidates: 1,
+      endAction: { commandId: "robot.shoot", semanticTag: "shoot-fuel" },
+    } });
+
+    catalog = authoritativeCatalog([shootCommand({ parameters: [{ ...parameter, max: 5 }] })]);
+
+    expect(service.getActiveProposal()).toBeNull();
+    expect(await service.request({ method: "get_proposal", params: { proposalId: proposal.proposalId } })).toMatchObject({ status: "stale" });
+  });
+
+  it("keeps an end-action proposal ready across a semantically identical catalog refresh", async () => {
+    const alternate = shootCommand({ id: "robot.intake", label: "Intake", aliases: ["collect", "intake"], semanticTags: ["intake-fuel"] });
+    let catalog = authoritativeCatalog([shootCommand({ aliases: ["fire", "shoot"], semanticTags: ["score", "shoot-fuel"] }), alternate]);
+    const service = new AgentSessionService(() => {}, () => catalog);
+    service.publishSnapshot(snapshot());
+    const proposal: any = await service.request({ method: "plan_path", params: {
+      intent: "Drive and shoot", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 3, y: 1 }], maximumCandidates: 1,
+      endAction: { commandId: "robot.shoot", semanticTag: "shoot-fuel" },
+    } });
+
+    catalog = {
+      ...authoritativeCatalog([alternate, shootCommand({ aliases: ["shoot", "fire"], semanticTags: ["shoot-fuel", "score"] })]),
+      scannedAt: "2026-08-10T01:00:00.000Z",
+      catalogHash: `sha256:${"b".repeat(64)}`,
+    };
+
+    expect(service.getActiveProposal()?.id).toBe(proposal.proposalId);
+  });
+
+  it("rejects an end-action proposal when the catalog changes during renderer receipt", async () => {
+    let catalog = authoritativeCatalog();
+    const receipt = deferred();
+    let received = false;
+    const service = new AgentSessionService((_proposal, requireReceipt) => {
+      if (!requireReceipt) return;
+      received = true;
+      return receipt.promise;
+    }, () => catalog);
+    service.publishSnapshot(snapshot());
+    const pending = service.request({ method: "plan_path", params: {
+      intent: "Drive and shoot", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 3, y: 1 }], maximumCandidates: 1,
+      endAction: { commandId: "robot.shoot", semanticTag: "shoot-fuel" },
+    } });
+    await vi.waitFor(() => expect(received).toBe(true));
+
+    catalog = authoritativeCatalog([]);
+    receipt.resolve();
+
+    await expect(pending).rejects.toThrow(/catalog|session changed/i);
+    expect(service.getActiveProposal()).toBeNull();
   });
 
   it("preserves an unbound shooting request without blocking valid geometry", async () => {

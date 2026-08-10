@@ -179,6 +179,7 @@ export interface PathProposal {
   baseSessionId: string;
   baseRevision: number;
   baseActivePathId: string;
+  baseJavaCatalogFingerprint?: string;
   intent: string;
   operation: "add" | "replace";
   targetPathId?: string;

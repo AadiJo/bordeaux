@@ -4,6 +4,7 @@ dist-electron/
 dist-renderer/
 release/
 release-*/
+.benchmark-results/
 java/.gradle/
 java/**/build/
 java/dist/

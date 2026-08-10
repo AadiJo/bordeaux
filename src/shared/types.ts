@@ -247,6 +247,8 @@ export interface JavaCommandCatalog {
   catalogId?: string;
   supportVersion?: string;
   catalogHash?: string;
+  /** Canonical command-semantics fingerprint supplied by the desktop process. */
+  semanticFingerprint?: string;
   authoritative?: boolean;
   commands: JavaCommandDescriptor[];
   warnings: string[];
