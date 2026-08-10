@@ -4,11 +4,13 @@
     let draft = null;
     let revision = 0;
     let cancelRevision = 0;
+    let lastResolution = null;
     const emit = () => listeners.forEach((listener) => listener());
     return {
       begin(value) {
         if (draft) return false;
         draft = value;
+        lastResolution = null;
         revision += 1;
         return true;
       },
@@ -23,6 +25,7 @@
         if (!draft) return null;
         const value = draft;
         draft = null;
+        lastResolution = 'finish';
         revision += 1;
         emit();
         return value;
@@ -30,6 +33,7 @@
       cancel() {
         const hadDraft = Boolean(draft);
         draft = null;
+        if (hadDraft) lastResolution = 'cancel';
         if (hadDraft) revision += 1;
         cancelRevision += 1;
         emit();
@@ -43,6 +47,9 @@
       },
       getCancelRevision() {
         return cancelRevision;
+      },
+      getLastResolution() {
+        return lastResolution;
       },
       materialize(project) {
         if (!draft || !project || !Array.isArray(project.paths)) return project;

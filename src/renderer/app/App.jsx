@@ -145,16 +145,21 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const playback = usePlayback(store);
     const draft = useSyncExternalStore(editStore.subscribe, editStore.getSnapshot, editStore.getSnapshot);
     const previewer = useMemo(() => PathPreview.create(), []);
+    const editBase = useRef(null);
     const [preview, setPreview] = useState(() => previewer.getSnapshot());
     useEffect(() => previewer.retain(), [previewer]);
     useEffect(() => previewer.subscribe(() => setPreview(previewer.getSnapshot())), [previewer]);
     useEffect(() => {
       if (draft) previewer.request({ key: draft.id, path: draft, robot, plannerId, quality: 'interactive' });
     }, [previewer, draft, robot, plannerId]);
+    if (draft && !editBase.current) editBase.current = doc;
+    const finished = !draft && editStore.getLastResolution() === 'finish';
+    const bridgeFinishedEdit = finished && editBase.current && (editBase.current === doc || derivedPath !== doc);
+    if (!draft && (!finished || (derivedPath === doc && editBase.current !== doc))) editBase.current = null;
     const draftPreview = draft && preview.path && preview.path.id === draft.id && preview.value
       ? { path: preview.path, value: preview.value }
       : null;
-    const committedPreview = !draft && preview.path === doc && preview.value
+    const committedPreview = !draft && preview.path && preview.path.id === doc.id && preview.value && bridgeFinishedEdit
       ? { path: preview.path, value: preview.value }
       : null;
     const displayed = draftPreview || committedPreview || { path: derivedPath || doc, value: derived };
