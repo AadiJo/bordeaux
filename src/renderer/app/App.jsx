@@ -556,8 +556,13 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const derivation = usePathPreview(doc, robot, plannerId, 'final');
     if (!derivation.value) throw derivation.error || new Error('Could not derive the active path');
     const derived = derivation.value;
+    const derivationDoc = derivation.path || doc;
+    const derivationCurrent = derivationDoc === doc;
 
-    useEffect(() => { setTimes((t) => (t[doc.id] === derived.prof.totalTime ? t : { ...t, [doc.id]: derived.prof.totalTime })); }, [derived, doc.id]);
+    useEffect(() => {
+      if (!derivationCurrent) return;
+      setTimes((t) => (t[doc.id] === derived.prof.totalTime ? t : { ...t, [doc.id]: derived.prof.totalTime }));
+    }, [derived, derivationCurrent, doc.id]);
 
     // ---- doc mutation ----
     const writeDoc = useCallback((nd) => { setProject((pr) => {
@@ -1449,6 +1454,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         if ((e.metaKey || e.ctrlKey) && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
         if ((e.metaKey || e.ctrlKey) && k === 'y') { e.preventDefault(); redo(); return; }
         if (page !== 'plan') return;
+        if (!derivationCurrent) return;
         if (e.key.indexOf('Arrow') === 0 && sel.kind) {
           const base = e.shiftKey ? 0.25 : e.altKey ? 0.01 : 0.05;
           let dx = 0, dy = 0;
@@ -1470,7 +1476,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       };
       window.addEventListener('keydown', onKey);
       return () => window.removeEventListener('keydown', onKey);
-    }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, nudgeWp, nudgeFrac, playbackStore]);
+    }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, derivationCurrent, nudgeWp, nudgeFrac, playbackStore]);
 
     const selNode = (page === 'auto' && routineSel) ? AUTO.findNode(routine, routineSel) : null;
 
@@ -1489,9 +1495,9 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
               h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
             h('aside', { className: 'rail rail-r' + (selNode ? '' : ' collapsed'), 'aria-label': 'Routine step inspector' },
               selNode && h(StepInspector, { node: selNode, paths: project.paths, acq, run, javaProject: { ...javaProjectState, link: linkJavaProject } })))
-        : h('main', { className: 'stage stage-plan' },
+        : h('main', { className: 'stage stage-plan', inert: derivationCurrent ? undefined : '', 'aria-disabled': derivationCurrent ? undefined : true },
             h('nav', { className: 'rail rail-l' + (outlineOpen ? '' : ' collapsed'), 'aria-label': 'Path outline' },
-              h(Panels.Outline, { open: outlineOpen, setOpen: setOutlineOpen, doc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot })),
+              h(Panels.Outline, { open: outlineOpen, setOpen: setOutlineOpen, doc: derivationDoc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot })),
             h('div', { className: 'fieldcol' },
               h(Panels.ToolRail, { tool, setTool }),
               exportError && h('div', { className: 'insert-preview export-error-banner', role: 'alert' },
@@ -1523,12 +1529,12 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
                 h('div', { className: 'insert-preview-actions' },
                   agentProposal.status === 'ready' && h('button', { type: 'button', onClick: rejectAgentProposal }, 'Reject'),
                   agentProposal.status === 'ready' && h('button', { className: 'primary', type: 'button', disabled: !agentCandidate || agentCandidate.valid === false || (agentProposal.blockingIssues && agentProposal.blockingIssues.length > 0), onClick: applyAgentProposal }, agentProposal.operation === 'replace' ? 'Apply repair' : 'Add path'))),
-              h(Panels.ConstraintBar, { c: doc.constraints, robot, onOpen: () => select(null, -1) }),
-              h(PlaybackTransport, { store: playbackStore, derived, doc, metric, setMetric, graphOpen, setGraphOpen }),
+              h(Panels.ConstraintBar, { c: derivationDoc.constraints, robot, onOpen: () => select(null, -1) }),
+              h(PlaybackTransport, { store: playbackStore, derived, doc: derivationDoc, metric, setMetric, graphOpen, setGraphOpen }),
               h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid, graphOpen })),
             h('aside', { className: 'rail rail-r' + (inspectorOpen ? '' : ' collapsed'), 'aria-label': 'Path inspector' },
               inspectorOpen
-                ? h(ContextInspector, { doc, sel, derived, actions: inspActions, drive: robot.drive, robot, javaProject: { ...javaProjectState, link: linkJavaProject, openRecent: openRecentJavaProject, refresh: refreshJavaProject, install: installJavaSupport, build: buildJavaCatalog, cancelBuild: cancelJavaCatalogBuild, export: () => onExportJava('linked') }, onClose: () => setInspectorOpen(false) })
+                ? h(ContextInspector, { doc: derivationDoc, sel, derived, actions: inspActions, drive: robot.drive, robot, javaProject: { ...javaProjectState, link: linkJavaProject, openRecent: openRecentJavaProject, refresh: refreshJavaProject, install: installJavaSupport, build: buildJavaCatalog, cancelBuild: cancelJavaCatalogBuild, export: () => onExportJava('linked') }, onClose: () => setInspectorOpen(false) })
                 : h('button', { className: 'inspector-tab', type: 'button', title: 'Show inspector', onClick: () => setInspectorOpen(true) }, h(UI.Icon, { name: 'sliders', size: 16 }), h('span', null, 'Inspector'))),
             headMenu && h(UI.ContextMenu, { x: headMenu.x, y: headMenu.y, items: headMenu.items, onClose: () => setHeadMenu(null) })));
   }
