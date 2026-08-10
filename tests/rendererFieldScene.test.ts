@@ -1,37 +1,27 @@
-import fs from "node:fs";
-import vm from "node:vm";
 import { describe, expect, it } from "vitest";
+import { loadRendererExport } from "./helpers/loadRendererExport";
 
 interface Point { x: number; y: number; s: number }
 interface Range { start: number; end: number }
 
 function fieldScene() {
-  const window: Record<string, unknown> = {};
-  const source = fs.readFileSync(new URL("../src/renderer/assets/field-scene.js", import.meta.url), "utf8")
-    .replace("export const FieldScene =", "window.FieldScene =");
-  vm.runInNewContext(source, { window, Object, Math, Number });
-  return window.FieldScene as {
+  return loadRendererExport<{
     fractionRange(points: Point[], total: number, first: number, last: number): Range;
     segmentRange(derived: { sample: { pts: Point[]; length: number }; wpIdx: number[] }, segment: number): Range;
     pathData(points: Point[], range: Range | null, project: (point: Point) => Point, precision?: number): string;
-  };
+  }>(new URL("../src/renderer/assets/field-scene.js", import.meta.url), "FieldScene");
 }
 
 describe("renderer field scene construction", () => {
   const points = Array.from({ length: 101 }, (_, index) => ({ x: index, y: index / 2, s: index }));
 
-  it("finds fraction spans without scanning from the start", () => {
-    expect(fieldScene().fractionRange(points, 100, 0.7, 0.8)).toEqual({ start: 69, end: 80 });
-  });
-
-  it("uses waypoint indexes as exact segment boundaries", () => {
+  it("constructs bounded path spans from sampled indexes", () => {
+    const scene = fieldScene();
+    expect(scene.fractionRange(points, 100, 0.7, 0.8)).toEqual({ start: 69, end: 80 });
     const derived = { sample: { pts: points, length: 100 }, wpIdx: [0, 30, 70, 100] };
-    expect(fieldScene().segmentRange(derived, 1)).toEqual({ start: 30, end: 70 });
-  });
-
-  it("serializes only the requested point span", () => {
+    expect(scene.segmentRange(derived, 1)).toEqual({ start: 30, end: 70 });
     let projections = 0;
-    const data = fieldScene().pathData(points, { start: 30, end: 32 }, (point) => {
+    const data = scene.pathData(points, { start: 30, end: 32 }, (point) => {
       projections += 1;
       return point;
     }, 1);
@@ -42,13 +32,9 @@ describe("renderer field scene construction", () => {
 
 describe("renderer path hit testing", () => {
   it("keeps separate visits when a path crosses the same field point", () => {
-    const window: Record<string, unknown> = {};
-    const source = fs.readFileSync(new URL("../src/renderer/lib/pathMath.js", import.meta.url), "utf8")
-      .replace("export const PM =", "window.PM =");
-    vm.runInNewContext(source, { window, console, Math, Number, Set, Map, Infinity, isFinite });
-    const math = window.PM as {
+    const math = loadRendererExport<{
       nearestVisits(x: number, y: number, points: Array<Point & { seg: number; t: number; heading: number }>, options: { tolerance: number }): Array<{ f: number }>;
-    };
+    }>(new URL("../src/renderer/lib/pathMath.js", import.meta.url), "PM", { context: { console } });
     const crossing = [
       { x: -1, y: 0, s: 0, seg: 0, t: 0, heading: 0 },
       { x: 1, y: 0, s: 2, seg: 0, t: 1, heading: 0 },

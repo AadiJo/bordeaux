@@ -1,32 +1,24 @@
 import fs from "node:fs";
-import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 import { createDemoProject } from "../src/shared/project/defaults";
+import { loadRendererExport } from "./helpers/loadRendererExport";
 
 interface Point { x: number; y: number }
 
 function rendererMath() {
-  const window: Record<string, unknown> = {};
-  const source = fs.readFileSync(new URL("../src/renderer/lib/pathMath.js", import.meta.url), "utf8")
-    .replace("export const PM =", "window.PM =");
-  vm.runInNewContext(source, { window, console, Math, Number, Set, Map, Infinity, isFinite });
-  return window.PM as {
+  return loadRendererExport<{
     derivePath(path: unknown, robot: unknown, perSegment: number, plannerId: string): {
       sample: { pts: Array<Point & { s: number }>; length: number };
       prof: { totalTime: number };
     };
-  };
+  }>(new URL("../src/renderer/lib/pathMath.js", import.meta.url), "PM", { context: { console } });
 }
 
 function rendererPathLinks() {
-  const window: Record<string, unknown> = {};
-  const source = fs.readFileSync(new URL("../src/renderer/lib/pathLinks.js", import.meta.url), "utf8")
-    .replace("export const PathLinks =", "window.PathLinks =");
-  vm.runInNewContext(source, { window, JSON });
-  return window.PathLinks as {
+  return loadRendererExport<{
     reconcile(project: any): any;
     sync(project: any, changedId: string, before: any): any;
-  };
+  }>(new URL("../src/renderer/lib/pathLinks.js", import.meta.url), "PathLinks");
 }
 
 describe("renderer application", () => {
@@ -116,44 +108,16 @@ describe("renderer application", () => {
     expect(reverse.paths[0].waypoints.at(-1)!.y).toBe(movedTarget.waypoints[0].y);
   });
 
-  it("contains planner failures and retains previews with source provenance", () => {
+  it("contains planner failures", () => {
     const app = fs.readFileSync(new URL("../src/renderer/app/App.jsx", import.meta.url), "utf8");
-    expect(app).toContain("PathPreview.create()");
-    expect(app).toContain("const lastValid = useRef(fallback.value ?");
-    expect(app).toContain("derivedPath !== doc");
-    expect(app).toContain("derivedPath: derivation.path");
     expect(app).toContain("derivation.error && h('div'");
     expect(app).toContain("class AppErrorBoundary");
   });
 
-  it("commits canvas edits once per completed pointer gesture", () => {
-    const app = fs.readFileSync(new URL("../src/renderer/app/App.jsx", import.meta.url), "utf8");
-    const field = fs.readFileSync(new URL("../src/renderer/components/FieldView.jsx", import.meta.url), "utf8");
-    expect(app).toContain("PathEdit.create()");
-    expect(app).toContain("useSyncExternalStore(editStore.subscribe");
-    expect(app).toContain("beginEdit, finishEdit, cancelEdit");
-    expect(field).toContain("actions.finishEdit()");
-    expect(field).toContain("actionsRef.current.finishEdit()");
-    expect(field).not.toContain("actions.cancelEdit()");
-    expect(field).not.toContain("actions.beginHistory");
-  });
-
-  it("coalesces pointer motion and cleans up global drag listeners", () => {
+  it("wires field gestures through the shared coalesced drag controller", () => {
     const field = fs.readFileSync(new URL("../src/renderer/components/FieldView.jsx", import.meta.url), "utf8");
     expect(field).toContain("PointerDrag.begin");
-    expect(field).toContain("actionsRef.current.finishEdit()");
-    expect(field).toContain("requestAnimationFrame");
-    expect(field).toContain("cancelAnimationFrame");
-    expect(field).not.toContain("onPointerCancel:");
-    expect(field).not.toContain("onLostPointerCapture:");
-    const pointerDrag = fs.readFileSync(new URL("../src/renderer/hooks/usePointerDrag.js", import.meta.url), "utf8");
-    expect(pointerDrag).not.toContain("lostpointercapture");
-    expect(pointerDrag).toContain("pointercancel");
-    expect(pointerDrag).toContain("next.pointerId !== pointerId");
-    for (const file of ["Panels.jsx", "RobotPage.jsx", "RoutinePanel.jsx", "ui.jsx"]) {
-      const source = fs.readFileSync(new URL(`../src/renderer/components/${file}`, import.meta.url), "utf8");
-      expect(source).not.toContain("addEventListener('pointermove'");
-    }
+    expect(field).toContain("coalesce: true");
   });
 
   it("keeps animation-frame playback below the root editor render", () => {

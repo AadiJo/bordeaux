@@ -38,8 +38,6 @@ import { UI } from "./ui";
     const actionsRef = useRef(actions);
     actionsRef.current = actions;
     const drag = useRef(null);
-    const pendingMove = useRef(null);
-    const moveFrame = useRef(0);
     const pointerCleanup = useRef(null);
     const lastInspectPress = useRef({ key: null, at: 0 });
     const flip = alliance === 'red';
@@ -235,7 +233,8 @@ import { UI } from "./ui";
       const role = t.getAttribute && t.getAttribute('data-role');
       if (pointerCleanup.current) pointerCleanup.current();
       pointerCleanup.current = PointerDrag.begin(e, {
-        move: onMove,
+        move: applyMove,
+        coalesce: true,
         end: (event) => { pointerCleanup.current = null; onUp(event); },
         cancel: (event) => { pointerCleanup.current = null; onInterrupted(event); },
       });
@@ -366,20 +365,7 @@ import { UI } from "./ui";
       else if (d.role === 're') { const visit = projectVisit(world, d.lastF); const f = visit ? visit.f : PM.nearestFraction(world.x, world.y, pts); d.lastF = f; actions.moveRangeHandle(d.idx, 1, f); }
     };
 
-    const flushMove = () => {
-      if (moveFrame.current) cancelAnimationFrame(moveFrame.current);
-      moveFrame.current = 0;
-      const event = pendingMove.current;
-      pendingMove.current = null;
-      if (event) applyMove(event);
-    };
-    const onMove = (event) => {
-      pendingMove.current = { clientX: event.clientX, clientY: event.clientY, shiftKey: event.shiftKey };
-      if (!moveFrame.current) moveFrame.current = requestAnimationFrame(flushMove);
-    };
-
     const onUp = (e) => {
-      flushMove();
       const d = drag.current; drag.current = null;
       setSnap(null);
       if (!d) return;
@@ -434,9 +420,8 @@ import { UI } from "./ui";
 
     // Preserve the last visible edit if the browser interrupts pointer capture.
     const onInterrupted = () => {
-      flushMove();
       const d = drag.current;
-      moveFrame.current = 0; pendingMove.current = null; drag.current = null; setSnap(null);
+      drag.current = null; setSnap(null);
       if (d && d.role === 'newrange') setPreview(null);
       if (d && d.historyStarted && actionsRef.current.finishEdit) actionsRef.current.finishEdit();
     };
@@ -444,7 +429,6 @@ import { UI } from "./ui";
       return () => {
         if (pointerCleanup.current) pointerCleanup.current();
         pointerCleanup.current = null;
-        if (moveFrame.current) cancelAnimationFrame(moveFrame.current);
       };
     }, []);
 

@@ -5,11 +5,23 @@ import * as React from "react";
     const target = event.currentTarget;
     const pointerId = event.pointerId;
     let active = true;
+    let pendingMove = null;
+    let moveFrame = 0;
     const previousCursor = document.body.style.cursor;
 
+    const flushMove = () => {
+      if (moveFrame) cancelAnimationFrame(moveFrame);
+      moveFrame = 0;
+      const next = pendingMove;
+      pendingMove = null;
+      if (next) handlers.move(next);
+    };
     const cleanup = () => {
       if (!active) return;
       active = false;
+      if (moveFrame) cancelAnimationFrame(moveFrame);
+      moveFrame = 0;
+      pendingMove = null;
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', end);
       window.removeEventListener('pointercancel', cancel);
@@ -19,14 +31,21 @@ import * as React from "react";
         if (target && target.hasPointerCapture && target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId);
       } catch (_) {}
     };
-    const move = (next) => { if (active && next.pointerId === pointerId) handlers.move(next); };
+    const move = (next) => {
+      if (!active || next.pointerId !== pointerId) return;
+      if (!handlers.coalesce) { handlers.move(next); return; }
+      pendingMove = next;
+      if (!moveFrame) moveFrame = requestAnimationFrame(flushMove);
+    };
     const end = (next) => {
       if (!active || next.pointerId !== pointerId) return;
+      flushMove();
       cleanup();
       if (handlers.end) handlers.end(next);
     };
     const cancel = (next) => {
       if (!active || (next && next.pointerId != null && next.pointerId !== pointerId)) return;
+      flushMove();
       cleanup();
       if (handlers.cancel) handlers.cancel(next);
     };

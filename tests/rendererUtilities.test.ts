@@ -1,8 +1,10 @@
-import fs from "node:fs";
-import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 import { createUnitPreferences } from "../src/renderer/lib/unitPreferences";
 import { wheelZoomFactor } from "../src/renderer/lib/zoom";
+import { loadRendererExport } from "./helpers/loadRendererExport";
+
+interface PointerEventLike { pointerId: number; clientX?: number }
+type PointerListener = (event: PointerEventLike) => void;
 
 function unitPreferences(stored?: string) {
   const values = new Map<string, string>();
@@ -16,44 +18,40 @@ function unitPreferences(stored?: string) {
 }
 
 function pointerDragHarness() {
-  interface PointerEventLike { pointerId: number; clientX?: number }
-  type Listener = (event: PointerEventLike) => void;
-  const windowListeners = new Map<string, Set<Listener>>();
-  const targetListeners = new Map<string, Set<Listener>>();
-  const add = (listeners: Map<string, Set<Listener>>, type: string, listener: Listener) => {
-    const current = listeners.get(type) ?? new Set();
-    current.add(listener);
-    listeners.set(type, current);
-  };
-  const remove = (listeners: Map<string, Set<Listener>>, type: string, listener: Listener) => listeners.get(type)?.delete(listener);
+  const listeners = new Map<string, PointerListener>();
+  const captureListeners: string[] = [];
+  let frame: FrameRequestCallback | null = null;
   const window = {
-    addEventListener: (type: string, listener: Listener) => add(windowListeners, type, listener),
-    removeEventListener: (type: string, listener: Listener) => remove(windowListeners, type, listener),
+    addEventListener: (type: string, listener: PointerListener) => listeners.set(type, listener),
+    removeEventListener: (type: string) => listeners.delete(type),
   } as Record<string, unknown>;
   const target = {
     setPointerCapture: () => undefined,
     hasPointerCapture: () => false,
-    addEventListener: (type: string, listener: Listener) => add(targetListeners, type, listener),
-    removeEventListener: (type: string, listener: Listener) => remove(targetListeners, type, listener),
+    addEventListener: (type: string) => captureListeners.push(type),
+    removeEventListener: () => undefined,
   };
   const document = { body: { style: { cursor: "" } } };
-  const source = fs.readFileSync(new URL("../src/renderer/hooks/usePointerDrag.js", import.meta.url), "utf8")
-    .replace('import * as React from "react";\n', "")
-    .replace("export const PointerDrag =", "window.PointerDrag =");
-  vm.runInNewContext(source, { window, document, React: {} });
-  const dispatch = (listeners: Map<string, Set<Listener>>, type: string, event: PointerEventLike) => {
-    listeners.get(type)?.forEach((listener) => listener(event));
-  };
-  return {
-    pointerDrag: window.PointerDrag as {
-      begin(
-        event: PointerEventLike & { currentTarget: typeof target },
-        handlers: { move: Listener; end?: Listener; cancel?: Listener },
-      ): () => void;
+  const pointerDrag = loadRendererExport<{
+    begin(
+      event: PointerEventLike & { currentTarget: typeof target },
+      handlers: { move: PointerListener; end?: PointerListener; cancel?: PointerListener; coalesce?: boolean },
+    ): () => void;
+  }>(new URL("../src/renderer/hooks/usePointerDrag.js", import.meta.url), "PointerDrag", {
+    context: {
+      document,
+      React: {},
+      requestAnimationFrame: (callback: FrameRequestCallback) => { frame = callback; return 1; },
+      cancelAnimationFrame: () => { frame = null; },
     },
+    window,
+  });
+  return {
+    pointerDrag,
     target,
-    dispatchWindow: (type: string, event: any) => dispatch(windowListeners, type, event),
-    dispatchTarget: (type: string, event: any) => dispatch(targetListeners, type, event),
+    captureListeners,
+    dispatch: (type: string, event: PointerEventLike) => listeners.get(type)?.(event),
+    flushFrame: () => { const pending = frame; frame = null; pending?.(0); },
   };
 }
 
@@ -86,45 +84,40 @@ describe("renderer utilities", () => {
     expect(wheelZoomFactor(3, 1, 800)).toBeGreaterThan(wheelZoomFactor(3, 0, 800));
   });
 
-  it("finishes fast drags globally and ignores stale capture-loss events", () => {
+  it("flushes the final coalesced move before a fast drag commits", () => {
     const harness = pointerDragHarness();
-    const moved: number[] = [];
-    const ended: number[] = [];
+    const edit = loadRendererExport<{
+      create<T>(): {
+        begin(value: T): boolean;
+        update(value: T): boolean;
+        finish(): T | null;
+        getSnapshot(): T | null;
+        subscribe(listener: () => void): () => void;
+      };
+    }>(new URL("../src/renderer/assets/path-edit.js", import.meta.url), "PathEdit").create<{ x: number }>();
+    const committed: Array<{ x: number }> = [];
+    const snapshots: Array<{ x: number } | null> = [];
     const canceled: number[] = [];
+    edit.subscribe(() => snapshots.push(edit.getSnapshot()));
     harness.pointerDrag.begin({ currentTarget: harness.target, pointerId: 7 }, {
-      move: (event) => moved.push(event.pointerId),
-      end: (event) => ended.push(event.pointerId),
+      coalesce: true,
+      move: (event) => {
+        if (event.clientX === undefined) return;
+        if (!edit.getSnapshot()) edit.begin({ x: 0 });
+        edit.update({ x: event.clientX });
+      },
+      end: () => { const value = edit.finish(); if (value) committed.push(value); },
       cancel: (event) => canceled.push(event.pointerId),
     });
 
-    harness.dispatchWindow("pointermove", { pointerId: 7 });
-    harness.dispatchTarget("lostpointercapture", { pointerId: 99 });
-    harness.dispatchWindow("pointerup", { pointerId: 7 });
+    harness.dispatch("pointermove", { pointerId: 7, clientX: 20 });
+    harness.dispatch("pointermove", { pointerId: 7, clientX: 80 });
+    harness.dispatch("pointerup", { pointerId: 7, clientX: 80 });
+    harness.flushFrame();
 
-    expect(moved).toEqual([7]);
-    expect(ended).toEqual([7]);
+    expect(committed).toEqual([{ x: 80 }]);
+    expect(snapshots).toEqual([{ x: 80 }, null]);
     expect(canceled).toEqual([]);
-  });
-
-  it("continues an active drag after pointer capture is lost", () => {
-    const harness = pointerDragHarness();
-    const moved: number[] = [];
-    const ended: number[] = [];
-    const canceled: number[] = [];
-    harness.pointerDrag.begin({ currentTarget: harness.target, pointerId: 7 }, {
-      move: (event) => { if (event.clientX !== undefined) moved.push(event.clientX); },
-      end: (event) => { if (event.clientX !== undefined) ended.push(event.clientX); },
-      cancel: (event) => canceled.push(event.pointerId),
-    });
-
-    harness.dispatchTarget("lostpointercapture", { pointerId: 7 });
-    harness.dispatchWindow("pointermove", { pointerId: 7, clientX: 20 });
-    harness.dispatchTarget("lostpointercapture", { pointerId: 7 });
-    harness.dispatchWindow("pointermove", { pointerId: 7, clientX: 80 });
-    harness.dispatchWindow("pointerup", { pointerId: 7, clientX: 80 });
-
-    expect(moved).toEqual([20, 80]);
-    expect(ended).toEqual([80]);
-    expect(canceled).toEqual([]);
+    expect(harness.captureListeners).not.toContain("lostpointercapture");
   });
 });
