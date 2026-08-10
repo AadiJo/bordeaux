@@ -129,13 +129,13 @@ jobs:
         run: npm run package:linux
       - run: npm run verify:package -- release
       - name: Verify public beta update manifest
+        if: matrix.platform != 'linux'
+        run: node scripts/verify-update-manifest.mjs ${{ matrix.platform }} release
+      - name: Verify public beta Linux update manifests
+        if: matrix.platform == 'linux'
         run: |
-          if [ "${{ matrix.platform }}" = linux ]; then
-            node scripts/verify-update-manifest.mjs linux release
-            node scripts/verify-update-manifest.mjs linux-arm64 release
-          else
-            node scripts/verify-update-manifest.mjs ${{ matrix.platform }} release
-          fi
+          node scripts/verify-update-manifest.mjs linux release
+          node scripts/verify-update-manifest.mjs linux-arm64 release
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
