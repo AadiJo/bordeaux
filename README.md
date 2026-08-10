@@ -6,14 +6,14 @@ LabVIEW 4.4 compatibility is preserved separately on the `archive/labview-4.4` b
 
 ## Develop
 
-Requirements: Node.js 20+, npm, and Java 17.
+Requirements: Node.js 22.12+, npm, and Java 17.
 
 ```text
 npm install
 npm run dev
 ```
 
-The canonical renderer is the dependency-free static application in `public/renderer`. Electron and shared planner code live in `src`; robot-side support lives in `java`.
+The renderer source lives in `src/renderer` and builds with Vite to `dist-renderer`. Electron and shared planner code also live in `src`; robot-side support lives in `java`.
 
 ## Verify
 
