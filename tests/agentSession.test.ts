@@ -252,6 +252,40 @@ describe("agent session and private bridge", () => {
     ]);
   });
 
+  it("does not let an older staging failure restore a preview superseded by a newer proposal", async () => {
+    let rejectOlder: ((error: Error) => void) | undefined;
+    let olderReceived: (() => void) | undefined;
+    const notifications: Array<{ intent: string; status: string }> = [];
+    const service = new AgentSessionService((proposal, requireReceipt) => {
+      notifications.push({ intent: proposal.intent, status: proposal.status });
+      if (requireReceipt && proposal.intent === "Older pending preview") {
+        olderReceived?.();
+        return new Promise<void>((_resolve, reject) => { rejectOlder = reject; });
+      }
+    }, () => null);
+    service.publishSnapshot(snapshot());
+    const original: any = await service.request({ method: "plan_path", params: {
+      intent: "Original preview", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 2, y: 1 }], maximumCandidates: 1,
+    } });
+
+    const received = new Promise<void>((resolve) => { olderReceived = resolve; });
+    const older = service.request({ method: "plan_path", params: {
+      intent: "Older pending preview", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 3, y: 1 }], maximumCandidates: 1,
+    } });
+    const olderRejected = expect(older).rejects.toThrow("renderer rejected older preview");
+    await received;
+    const newest: any = await service.request({ method: "plan_path", params: {
+      intent: "Newest preview", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 2.5, y: 1 }], maximumCandidates: 1,
+    } });
+    rejectOlder?.(new Error("renderer rejected older preview"));
+    await olderRejected;
+
+    expect(service.getActiveProposal()?.id).toBe(newest.proposalId);
+    expect((await service.request({ method: "get_proposal", params: { proposalId: original.proposalId } }) as any).status).toBe("stale");
+    expect((await service.request({ method: "get_proposal", params: { proposalId: newest.proposalId } }) as any).status).toBe("ready");
+    expect(notifications.at(-1)).toEqual({ intent: "Newest preview", status: "ready" });
+  });
+
   it("keeps only the newest proposal ready for the single preview surface", async () => {
     const service = new AgentSessionService(() => {}, () => null);
     service.publishSnapshot(snapshot());

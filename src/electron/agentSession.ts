@@ -267,6 +267,7 @@ export class AgentSessionService {
   private readonly proposals = new Map<string, AgentProposal>();
   private readonly planningAborts = new Set<AbortController>();
   private previewPlanningAbort: AbortController | null = null;
+  private previewGeneration = 0;
 
   constructor(
     private readonly sendProposal: (proposal: AgentProposal, requireReceipt: boolean) => void | Promise<void>,
@@ -335,8 +336,16 @@ export class AgentSessionService {
     while (this.proposals.size > MAX_PROPOSALS) this.proposals.delete(this.proposals.keys().next().value!);
   }
 
-  private async stage<T extends AgentProposal>(proposal: T, signal?: AbortSignal): Promise<{ proposal: T; supersededProposalId?: string }> {
+  private claimPreviewOwnership(): number {
+    this.previewGeneration += 1;
+    return this.previewGeneration;
+  }
+
+  private async stage<T extends AgentProposal>(proposal: T, signal?: AbortSignal, previewGeneration?: number): Promise<{ proposal: T; supersededProposalId?: string }> {
     if (signal?.aborted) throw canceledRequestError();
+    if (previewGeneration !== undefined && previewGeneration !== this.previewGeneration) {
+      throw new Error("Agent preview request was superseded by a newer request.");
+    }
     if (!this.snapshot || this.snapshot.sessionId !== proposal.baseSessionId || this.snapshot.revision !== proposal.baseRevision) {
       throw new Error("The Bordeaux editor session changed while the proposal was being generated. Retry against the current session.");
     }
@@ -354,13 +363,17 @@ export class AgentSessionService {
     try {
       await waitForAbort(Promise.resolve(this.sendProposal(proposal, true)), signal);
       if (signal?.aborted) throw canceledRequestError();
+      if (previewGeneration !== undefined && previewGeneration !== this.previewGeneration) {
+        throw new Error("Agent preview request was superseded by a newer request.");
+      }
       if (!this.snapshot || this.snapshot.sessionId !== proposal.baseSessionId || this.snapshot.revision !== proposal.baseRevision || proposal.status !== "ready") {
         throw new Error("The Bordeaux editor session changed before it acknowledged the proposal. Retry against the current session.");
       }
     } catch (error) {
       this.proposals.delete(proposal.id);
       const contextStillCurrent = this.snapshot?.sessionId === proposal.baseSessionId && this.snapshot.revision === proposal.baseRevision;
-      if (contextStillCurrent) {
+      const stillOwnsPreview = previewGeneration === undefined || previewGeneration === this.previewGeneration;
+      if (contextStillCurrent && stillOwnsPreview) {
         proposal.status = "stale";
         void Promise.resolve(this.sendProposal(proposal, false)).catch(() => undefined);
         for (const existing of superseded) {
@@ -542,7 +555,7 @@ export class AgentSessionService {
         status: "ready",
         createdAt: new Date().toISOString(),
       };
-      const staged = await this.stage(proposal, signal);
+      const staged = await this.stage(proposal, signal, this.claimPreviewOwnership());
       return proposalSummary(staged.proposal, staged.supersededProposalId);
     }
     if (request.method !== "plan_path") throw new Error("Unsupported Bordeaux agent request.");
@@ -624,7 +637,7 @@ export class AgentSessionService {
       status: "ready",
       createdAt: new Date().toISOString(),
     };
-    const staged = await this.stage(proposal, signal);
+    const staged = await this.stage(proposal, signal, this.claimPreviewOwnership());
     return proposalSummary(staged.proposal, staged.supersededProposalId);
   }
 }
