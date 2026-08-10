@@ -116,10 +116,12 @@ describe("renderer application", () => {
     expect(reverse.paths[0].waypoints.at(-1)!.y).toBe(movedTarget.waypoints[0].y);
   });
 
-  it("contains planner failures and retains the last valid preview", () => {
+  it("contains planner failures and retains previews with source provenance", () => {
     const app = fs.readFileSync(new URL("../src/renderer/app/App.jsx", import.meta.url), "utf8");
     expect(app).toContain("PathPreview.create()");
-    expect(app).toContain("const lastValid = useRef(fallback.value)");
+    expect(app).toContain("const lastValid = useRef(fallback.value ?");
+    expect(app).toContain("derivedPath !== doc");
+    expect(app).toContain("derivedPath: derivation.path");
     expect(app).toContain("derivation.error && h('div'");
     expect(app).toContain("class AppErrorBoundary");
   });

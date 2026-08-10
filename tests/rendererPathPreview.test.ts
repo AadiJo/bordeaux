@@ -4,6 +4,7 @@ import { processPathPreviewJob } from "../src/renderer/assets/path-preview-worke
 
 interface WorkerJob {
   id: number;
+  path?: unknown;
   quality: "interactive" | "final";
   perSegment: number;
 }
@@ -31,7 +32,7 @@ function previewModule(worker: FakeWorker) {
   return (PathPreview as {
     create(options: { workerFactory: () => FakeWorker }): {
       request(input: { path: unknown; robot: unknown; plannerId: string; quality: "interactive" | "final"; key?: string }): number;
-      getSnapshot(): { status: string; revision: number; quality: string; value: unknown };
+      getSnapshot(): { status: string; revision: number; quality: string; path: unknown; value: unknown };
       subscribe(listener: () => void): () => void;
       destroy(): void;
     };
@@ -85,6 +86,20 @@ describe("renderer path preview scheduler", () => {
     preview.request({ path: {}, robot: {}, plannerId: "profiledSpline", quality: "final", key: "second" });
 
     expect(preview.getSnapshot()).toMatchObject({ status: "pending", key: "first", value: { path: "first" } });
+  });
+
+  it("retains the exact source path for every completed preview", () => {
+    const worker = new FakeWorker();
+    const preview = previewModule(worker).create({ workerFactory: () => worker });
+    const firstPath = { id: "same-id", waypointX: 0 };
+    const secondPath = { id: "same-id", waypointX: 10 };
+    const first = preview.request({ path: firstPath, robot: {}, plannerId: "profiledSpline", quality: "interactive", key: firstPath.id });
+    worker.resolve({ id: first, value: { waypointX: 0 }, durationMs: 1 });
+
+    preview.request({ path: secondPath, robot: {}, plannerId: "profiledSpline", quality: "final", key: secondPath.id });
+
+    expect(preview.getSnapshot().path).toBe(firstPath);
+    expect(preview.getSnapshot().path).not.toBe(secondPath);
   });
 });
 

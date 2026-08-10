@@ -26,9 +26,11 @@ import { PM } from "../lib/pathMath";
       revision: 0,
       quality: 'final',
       key: null,
+      path: null,
       value: null,
       error: null,
       errorKey: null,
+      errorPath: null,
       durationMs: 0,
     };
 
@@ -45,15 +47,17 @@ import { PM } from "../lib/pathMath";
     const publish = (job, result) => {
       if (destroyed || job.revision !== latestRevision) return;
       snapshot = result.error
-        ? { ...snapshot, status: 'error', revision: job.revision, quality: job.quality, error: result.error, errorKey: job.key }
+        ? { ...snapshot, status: 'error', revision: job.revision, quality: job.quality, error: result.error, errorKey: job.key, errorPath: job.path }
         : {
             status: 'ready',
             revision: job.revision,
             quality: job.quality,
             key: job.key,
+            path: job.path,
             value: result.value,
             error: null,
             errorKey: null,
+            errorPath: null,
             durationMs: result.durationMs || 0,
           };
       notify();
@@ -122,7 +126,7 @@ import { PM } from "../lib/pathMath";
           perSegment: samplesForQuality(quality),
           revision: ++latestRevision,
         };
-        snapshot = { ...snapshot, status: 'pending', revision: job.revision, quality, error: null, errorKey: null };
+        snapshot = { ...snapshot, status: 'pending', revision: job.revision, quality, error: null, errorKey: null, errorPath: null };
         notify();
         if (!worker) {
           queued = job;

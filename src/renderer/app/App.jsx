@@ -141,7 +141,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
   }
 
   const usePlayback = (store) => useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
-  function EditablePlaybackField({ store, editStore, doc, derived, robot, plannerId, ...props }) {
+  function EditablePlaybackField({ store, editStore, doc, derived, derivedPath, robot, plannerId, ...props }) {
     const playback = usePlayback(store);
     const draft = useSyncExternalStore(editStore.subscribe, editStore.getSnapshot, editStore.getSnapshot);
     const previewer = useMemo(() => PathPreview.create(), []);
@@ -151,7 +151,8 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       if (draft) previewer.request({ key: draft.id, path: draft, robot, plannerId, quality: 'interactive' });
     }, [previewer, draft, robot, plannerId]);
     useEffect(() => () => previewer.destroy(), [previewer]);
-    const draftDerived = draft && preview.key === draft.id && preview.value ? preview.value : derived;
+    const committedPreview = !draft && derivedPath !== doc && preview.key === doc.id && preview.value;
+    const draftDerived = draft && preview.key === draft.id && preview.value ? preview.value : committedPreview || derived;
     return h(FieldView, { ...props, doc: draft || doc, derived: draftDerived, robot, playTime: playback.time });
   }
   function PlaybackTransport({ store, ...props }) {
@@ -178,15 +179,17 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
   function usePathPreview(doc, robot, plannerId, quality) {
     const previewer = useMemo(() => PathPreview.create(), []);
     const fallback = useMemo(() => {
-      try { return { value: PM.derivePath(doc, robot, 14, plannerId), error: null }; }
-      catch (error) { return { value: null, error }; }
+      try { return { path: doc, value: PM.derivePath(doc, robot, 14, plannerId), error: null }; }
+      catch (error) { return { path: doc, value: null, error }; }
     }, [doc.id, robot, plannerId]);
-    const lastValid = useRef(fallback.value);
+    const lastValid = useRef(fallback.value ? { path: fallback.path, value: fallback.value } : null);
     const [snapshot, setSnapshot] = useState(() => ({
       status: fallback.value ? 'ready' : 'error',
       key: doc.id,
+      path: fallback.path,
       value: fallback.value,
       error: fallback.error,
+      errorPath: fallback.error ? fallback.path : null,
       durationMs: 0,
     }));
 
@@ -196,11 +199,17 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }, [previewer, doc, robot, plannerId, quality]);
     useEffect(() => () => previewer.destroy(), [previewer]);
 
-    const current = snapshot.key === doc.id ? snapshot.value : fallback.value;
+    const current = snapshot.path === doc && snapshot.value
+      ? { path: doc, value: snapshot.value }
+      : fallback.path === doc && fallback.value
+        ? { path: doc, value: fallback.value }
+        : null;
     if (current) lastValid.current = current;
+    const displayed = current || lastValid.current;
     return {
-      value: current || lastValid.current,
-      error: snapshot.errorKey === doc.id ? snapshot.error : fallback.error,
+      value: displayed && displayed.value,
+      path: displayed && displayed.path,
+      error: snapshot.errorPath === doc ? snapshot.error : fallback.path === doc ? fallback.error : null,
       pending: snapshot.status === 'pending',
       durationMs: snapshot.durationMs || 0,
     };
@@ -1433,7 +1442,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
               derivation.error && h('div', { className: 'insert-preview derivation-error', role: 'alert' },
                 h('div', { className: 'insert-preview-copy' }, h('b', null, 'Path preview unavailable'), h('span', null, derivation.error.message || String(derivation.error))),
                 h('span', null, 'Showing the last valid preview. Undo or edit the selected geometry.')),
-              h(EditablePlaybackField, { store: playbackStore, editStore, doc, derived, robot, plannerId, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, drive: robot.drive, accent, metric, actions: fieldActions, onSelPos, showHandles: true }),
+              h(EditablePlaybackField, { store: playbackStore, editStore, doc, derived, derivedPath: derivation.path, robot, plannerId, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, drive: robot.drive, accent, metric, actions: fieldActions, onSelPos, showHandles: true }),
               tool !== 'select' && !waypointPreview && h('div', { className: 'stage-hint', dangerouslySetInnerHTML: { __html: toolHint(tool) } }),
               waypointPreview && h('div', { className: 'insert-preview', role: 'region', 'aria-label': 'Preview waypoint insertion' },
                 h('div', { className: 'insert-preview-copy' },
