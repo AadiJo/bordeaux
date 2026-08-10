@@ -1,10 +1,3 @@
-plugins {
-    `java-library`
-    `maven-publish`
-}
-
-base.archivesName.set("bordeaux-runtime")
-
 dependencies {
     api("com.fasterxml.jackson.core:jackson-databind:2.18.3")
     api(project(":annotations"))
@@ -17,11 +10,4 @@ dependencies {
 
 tasks.jar {
     from(project(":annotations").extensions.getByType<SourceSetContainer>().named("main").map { it.output })
-}
-
-publishing {
-    publications.create<MavenPublication>("mavenJava") {
-        from(components["java"])
-        artifactId = "bordeaux-runtime"
-    }
 }

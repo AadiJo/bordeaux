@@ -3,15 +3,15 @@ import path from "node:path";
 import process from "node:process";
 
 const task = process.argv[2];
-if (task !== "build" && task !== "test") {
-  console.error("Usage: node scripts/build-java.mjs <build|test>");
+if (task !== "dist" && task !== "test") {
+  console.error("Usage: node scripts/build-java.mjs <dist|test>");
   process.exit(2);
 }
 
 const projectRoot = process.cwd();
 const javaRoot = path.join(projectRoot, "java");
 const wrapper = path.join(javaRoot, process.platform === "win32" ? "gradlew.bat" : "gradlew");
-const gradleArguments = [task, "--no-daemon", "--console=plain"];
+const gradleArguments = [task === "dist" ? "javaSupportDist" : "test", "--no-daemon", "--console=plain"];
 const command = process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : wrapper;
 if (process.platform === "win32" && /[&|<>^%!]/.test(wrapper)) {
   console.error("Repository path contains characters that cannot be launched safely by cmd.exe.");

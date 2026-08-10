@@ -9,6 +9,7 @@ import type {
   RoutineNode,
   ValidationIssue,
 } from "./types";
+import { activeRoutine } from "./project/routines";
 
 const MAX_SCHEMA_DEPTH = 24;
 const MAX_ARRAY_ITEMS = 1_024;
@@ -265,6 +266,7 @@ export function validateProjectJavaInvocations(project: BordeauxProject, catalog
       }
     });
   };
-  if (project.routine) validateRoutineNodes(project.routine.nodes, "$.routine.nodes");
+  const routine = activeRoutine(project);
+  if (routine) validateRoutineNodes(routine.nodes, `$.routines[${project.routines.indexOf(routine)}].nodes`);
   return issues;
 }

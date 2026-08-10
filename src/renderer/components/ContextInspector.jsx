@@ -11,7 +11,6 @@ import { UI } from "./ui";
   const h = React.createElement;
   const { Num, Toggle, Seg, Icon, Dropdown, constraintRangeSummary } = UI;
   const { FIELD_W, FIELD_H } = FIELD_DIMS;
-  const R2D = 180 / Math.PI;
 
   const HEAD_MODES = [{ v: 'manual', label: 'Manual' }, { v: 'tangent', label: 'Tangent' }, { v: 'targets', label: 'Targets' }];
 
@@ -447,7 +446,7 @@ import { UI } from "./ui";
   const JIGGLE_DEFAULTS = { distanceM: 0.03, strokes: 8, startDeg: 45, stepDeg: -45, strokeTimeS: 0.08 };
 
   function ContextInspector(props) {
-    const { doc, sel, derived, actions, drive, robot, plannerId, javaProject, onClose } = props;
+    const { doc, sel, derived, actions, drive, robot, javaProject, onClose } = props;
     const [moreLimits, setMoreLimits] = React.useState(false);
     const [moreRangeLimits, setMoreRangeLimits] = React.useState(false);
     const [jiggleDistance, setJiggleDistance] = React.useState(JIGGLE_DEFAULTS.distanceM);

@@ -10,7 +10,7 @@
     "dev": "npm run build && electron dist-electron/electron/main.js",
     "build": "npm run verify:renderer && npm run build:java && npm run build:electron",
     "build:renderer": "vite build --config vite.renderer.config.mts",
-    "build:java": "node scripts/build-java.mjs build",
+    "build:java": "node scripts/build-java.mjs dist",
     "build:electron": "tsc -p tsconfig.electron.build.json",
     "test": "vitest run",
     "test:java": "node scripts/build-java.mjs test",

@@ -2,9 +2,9 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildBdxExport, previewBdxExport } from "../src/shared/export/bdx";
+import { buildBdxExport } from "../src/shared/export/bdx";
 import { blankPath, buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
-import { decodeProjectValue } from "../src/shared/project/fileFormat";
+import { decodeProjectValue, encodeProjectFile } from "../src/shared/project/fileFormat";
 import { readProject, writeProject } from "../src/electron/projectFiles";
 import { validateProject } from "../src/shared/validation";
 
@@ -20,7 +20,37 @@ describe("project files", () => {
     project.plannerId = "removedPlanner";
     const decoded = decodeProjectValue(project);
     expect(decoded.project.plannerId).toBe("profiledSpline");
-    expect(decoded.migrated).toBe(false);
+    expect(decoded.migrated).toBe(true);
+  });
+
+  it("imports singular routines but keeps canonical project files singular-free", () => {
+    const source = createDemoProject() as unknown as Record<string, unknown>;
+    delete source.routines;
+    delete source.activeRoutineId;
+    source.routine = { name: "Legacy routine", nodes: [{ id: "drive", type: "path", ref: 0 }] };
+    (source.paths as Array<Record<string, unknown>>)[0].labview = { stale: true };
+
+    const decoded = decodeProjectValue(source);
+    const encoded = encodeProjectFile(decoded.project);
+
+    expect(decoded.migrated).toBe(true);
+    expect(decoded.project.routines[0]).toMatchObject({ name: "Legacy routine", nodes: [{ ref: decoded.project.paths[0].id }] });
+    expect(decoded.project.activeRoutineId).toBe(decoded.project.routines[0].id);
+    expect(decoded.project.paths[0]).not.toHaveProperty("labview");
+    expect(decoded.project).not.toHaveProperty("routine");
+    expect(JSON.parse(encoded.contents)).not.toHaveProperty("routine");
+  });
+
+  it("rejects incomplete canonical state before it reaches a planner", () => {
+    const project = createDemoProject() as unknown as Record<string, unknown>;
+    delete project.plannerId;
+    delete project.pathLinks;
+
+    expect(validateProject(project).issues.map((item) => item.path)).toEqual(expect.arrayContaining([
+      "$.plannerId",
+      "$.pathLinks",
+    ]));
+    expect(() => buildBdxExport(project as unknown as ReturnType<typeof createDemoProject>)).toThrow(/Planner/);
   });
 
   it("atomically round-trips the selected path and Java bookmark", async () => {
@@ -49,10 +79,16 @@ describe("native trajectory export", () => {
   it("exports stable path references, routine data, and finite samples", () => {
     const project = createDemoProject();
     const pathId = project.paths[0].id;
-    project.routine!.nodes = [{ id: "drive", type: "path", ref: pathId }];
+    const selectedRoutine = {
+      id: "routine_selected",
+      name: "Selected routine",
+      nodes: [{ id: "drive", type: "path" as const, ref: pathId }],
+    };
+    project.routines.push(selectedRoutine);
+    project.activeRoutineId = selectedRoutine.id;
     const exported = buildBdxExport(project);
     expect(exported.schemaVersion).toBe("1.1");
-    expect(exported.routine).toEqual(project.routine);
+    expect(exported.routine).toEqual(selectedRoutine);
     expect(exported.paths[0].id).toBe(pathId);
     expect(exported.paths[0].samples.length).toBeGreaterThan(1);
     expect(exported.paths[0].samples.every((sample) => Object.values(sample).every(Number.isFinite))).toBe(true);
@@ -70,7 +106,6 @@ describe("native trajectory export", () => {
   it("blocks measured planner errors", () => {
     const project = createDemoProject();
     project.paths[0].waypoints = project.paths[0].waypoints.slice(0, 1);
-    expect(previewBdxExport(project).ok).toBe(false);
     expect(() => buildBdxExport(project)).toThrow();
   });
 });

@@ -259,14 +259,6 @@ export interface JavaProjectBookmarkSummary {
   lastLinkedAt: string;
 }
 
-export interface JavaProjectConnectionResult {
-  catalog: JavaCommandCatalog;
-  bookmarkId: string;
-  recentProjects: JavaProjectBookmarkSummary[];
-  integration: JavaIntegrationStatus;
-  warning?: string;
-}
-
 export interface JavaIntegrationStatus {
   installed: boolean;
   supportVersion?: string;
@@ -367,8 +359,8 @@ export interface RoutineDecisionNode {
 export type RoutineNode = RoutineFunctionNode | RoutinePathNode | RoutineDecisionNode;
 
 export interface AutonomousRoutine {
-  /** Stable project-local identity. Legacy singular routines may omit it until normalization. */
-  id?: string;
+  /** Stable project-local identity. */
+  id: string;
   name: string;
   nodes: RoutineNode[];
 }
@@ -413,29 +405,12 @@ export interface BordeauxProject {
   paths: PathDoc[];
   pathFolders?: PathFolder[];
   /** Keeps one path's end pose synchronized with another path's start pose. */
-  pathLinks?: PathEndpointLink[];
-  routines?: AutonomousRoutine[];
-  activeRoutineId?: string;
-  /** Active-routine compatibility view for older projects and exporters. */
-  routine?: AutonomousRoutine;
-  plannerId?: TrajectoryPlannerId;
+  pathLinks: PathEndpointLink[];
+  routines: AutonomousRoutine[];
+  activeRoutineId: string;
+  plannerId: TrajectoryPlannerId;
   strategy?: ProjectStrategyOverlay;
   editor?: ProjectEditorState;
-}
-
-export interface ProjectFile {
-  path: string | null;
-  project: BordeauxProject;
-}
-
-export interface SaveResult {
-  saved?: boolean;
-  canceled?: boolean;
-}
-
-export interface ExportResult {
-  exported?: boolean;
-  canceled?: boolean;
 }
 
 export interface ValidationIssue {
@@ -454,7 +429,6 @@ export type TrajectoryPlannerId = "profiledSpline" | "optimizedTrajectory";
 export interface PlannerInput {
   path: PathDoc;
   robot: RobotConfig;
-  plannerId?: TrajectoryPlannerId;
   samplesPerSegment?: number;
   smoothingPasses?: number;
 }
@@ -541,12 +515,4 @@ export interface BdxExport {
   };
   paths: BdxPath[];
   routine: AutonomousRoutine | null;
-}
-
-export interface ExportPreview {
-  ok: boolean;
-  pathCount: number;
-  sampleCount: number;
-  totalTimeS: number;
-  issues: ValidationIssue[];
 }

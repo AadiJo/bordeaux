@@ -753,10 +753,6 @@ public final class BordeauxProcessor extends AbstractProcessor {
         return "{\"javaType\":" + quote(javaType) + ",\"kind\":" + quote(kind) + "}";
     }
 
-    private static String optionalJson(String name, String value) {
-        return value == null || value.isBlank() ? "" : "," + quote(name) + ":" + quote(value);
-    }
-
     private static String humanize(String value) {
         return value.replaceAll("([a-z0-9])([A-Z])", "$1 $2").replace('_', ' ')
                 .replaceFirst("^.", value.substring(0, 1).toUpperCase(Locale.ROOT));

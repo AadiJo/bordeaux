@@ -38,7 +38,9 @@ function encode(value: unknown): Buffer {
 
 function readOne(socket: net.Socket, timeoutMs: number): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    let buffer = Buffer.alloc(0);
+    let chunks: Buffer[] = [];
+    let received = 0;
+    let frameSize: number | null = null;
     const timer = setTimeout(() => finish(new Error("Agent bridge request timed out")), timeoutMs);
     const finish = (error?: Error, value?: unknown) => {
       clearTimeout(timer);
@@ -48,12 +50,17 @@ function readOne(socket: net.Socket, timeoutMs: number): Promise<unknown> {
     };
     const onError = (error: Error) => finish(error);
     const onData = (chunk: Buffer) => {
-      buffer = Buffer.concat([buffer, chunk]);
-      if (buffer.length < 4) return;
-      const size = buffer.readUInt32BE(0);
-      if (size < 2 || size > MAX_MESSAGE_BYTES) return finish(new Error("Agent bridge frame size is invalid"));
-      if (buffer.length < size + 4) return;
-      try { finish(undefined, JSON.parse(buffer.subarray(4, size + 4).toString("utf8"))); }
+      chunks.push(chunk);
+      received += chunk.length;
+      if (frameSize === null && received >= 4) {
+        const header = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, received);
+        frameSize = header.readUInt32BE(0);
+        if (frameSize < 2 || frameSize > MAX_MESSAGE_BYTES) return finish(new Error("Agent bridge frame size is invalid"));
+        if (chunks.length > 1) chunks = [header];
+      }
+      if (frameSize === null || received < frameSize + 4) return;
+      const buffer = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, received);
+      try { finish(undefined, JSON.parse(buffer.subarray(4, frameSize + 4).toString("utf8"))); }
       catch { finish(new Error("Agent bridge returned invalid JSON")); }
     };
     socket.on("data", onData);

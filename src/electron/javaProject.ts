@@ -35,7 +35,6 @@ export function readableJavaProjectError(error: unknown, projectName = "Java pro
 }
 
 interface JavaSourceUnit {
-  absolutePath: string;
   relativePath: string;
   text: string;
   sanitized: string;
@@ -65,7 +64,6 @@ interface ParsedJavaType {
   qualifiedName: string;
   packageName: string;
   kind: "class" | "record" | "enum";
-  header: string;
   abstract: boolean;
   commandClass: boolean;
   recordFields: RawParameter[];
@@ -342,7 +340,6 @@ function parseTypes(unit: JavaSourceUnit): ParsedJavaType[] {
       qualifiedName,
       packageName: unit.packageName,
       kind,
-      header,
       abstract: /\babstract\b/.test(match[1] ?? ""),
       commandClass: kind === "class" && /\b(?:extends|implements)\b[^\{]*\bCommand(?:Base)?\b/.test(header),
       recordFields: recordOpen >= 0 && recordClose > recordOpen ? parseParameters(header.slice(recordOpen + 1, recordClose)) : [],
@@ -391,8 +388,15 @@ function resolveKnownType(javaType: string, packageName: string, types: ParsedJa
   const normalized = normalizeJavaType(javaType).replace(/^\?extends/, "").replace(/^\?super/, "");
   const raw = normalized.split("<")[0].replace(/\[\]$/g, "");
   if (raw.includes(".")) return types.find((type) => type.qualifiedName === raw);
-  return types.find((type) => type.packageName === packageName && type.name === raw)
-    ?? types.find((type) => type.name === raw && types.filter((candidate) => candidate.name === raw).length === 1);
+  const samePackage = types.find((type) => type.packageName === packageName && type.name === raw);
+  if (samePackage) return samePackage;
+  let simpleNameMatch: ParsedJavaType | undefined;
+  for (const type of types) {
+    if (type.name !== raw) continue;
+    if (simpleNameMatch) return undefined;
+    simpleNameMatch = type;
+  }
+  return simpleNameMatch;
 }
 
 function schemaFor(javaType: string, packageName: string, types: ParsedJavaType[], resolving = new Set<string>(), depth = 0): JavaValueSchema {
@@ -524,10 +528,12 @@ async function existsFile(filePath: string): Promise<boolean> {
 async function collectSourceRoots(rootPath: string): Promise<string[]> {
   const roots: string[] = [];
   const queue: Array<{ directory: string; depth: number; lineage: string[] }> = [{ directory: rootPath, depth: 0, lineage: [] }];
+  let cursor = 0;
   let visited = 0;
   let discoveredEntries = 0;
-  while (queue.length > 0) {
-    const current = queue.shift()!;
+  while (cursor < queue.length) {
+    const current = queue[cursor];
+    cursor += 1;
     visited += 1;
     if (visited > MAX_DIRECTORY_COUNT) throw new Error(`Java project scan exceeded ${MAX_DIRECTORY_COUNT} directories`);
     let entries;
@@ -547,7 +553,7 @@ async function collectSourceRoots(rootPath: string): Promise<string[]> {
         continue;
       }
       if (current.depth < MAX_SCAN_DEPTH) {
-        if (visited + queue.length >= MAX_DIRECTORY_COUNT) throw new Error(`Java project scan exceeded ${MAX_DIRECTORY_COUNT} directories`);
+        if (visited + queue.length - cursor >= MAX_DIRECTORY_COUNT) throw new Error(`Java project scan exceeded ${MAX_DIRECTORY_COUNT} directories`);
         queue.push({ directory: child, depth: current.depth + 1, lineage });
       }
     }
@@ -561,8 +567,10 @@ async function collectJavaSources(projectRoot: string, sourceRoots: string[], wa
   let discoveredEntries = 0;
   for (const sourceRoot of sourceRoots) {
     const queue: Array<{ directory: string; depth: number }> = [{ directory: sourceRoot, depth: 0 }];
-    while (queue.length > 0) {
-      const current = queue.shift()!;
+    let cursor = 0;
+    while (cursor < queue.length) {
+      const current = queue[cursor];
+      cursor += 1;
       visitedDirectories += 1;
       if (visitedDirectories > MAX_DIRECTORY_COUNT) throw new Error(`Java source scan exceeded ${MAX_DIRECTORY_COUNT} directories`);
       const entries = await fs.opendir(current.directory);
@@ -573,7 +581,7 @@ async function collectJavaSources(projectRoot: string, sourceRoots: string[], wa
         const child = path.join(current.directory, entry.name);
         if (entry.isDirectory()) {
           if (current.depth >= MAX_SCAN_DEPTH) throw new Error(`Java source scan exceeded the maximum depth of ${MAX_SCAN_DEPTH}`);
-          if (visitedDirectories + queue.length >= MAX_DIRECTORY_COUNT) throw new Error(`Java source scan exceeded ${MAX_DIRECTORY_COUNT} directories`);
+          if (visitedDirectories + queue.length - cursor >= MAX_DIRECTORY_COUNT) throw new Error(`Java source scan exceeded ${MAX_DIRECTORY_COUNT} directories`);
           queue.push({ directory: child, depth: current.depth + 1 });
         }
         else if (entry.isFile() && entry.name.endsWith(".java")) files.push(child);
@@ -596,7 +604,7 @@ async function collectJavaSources(projectRoot: string, sourceRoots: string[], wa
     const text = await fs.readFile(absolutePath, "utf8");
     const sanitized = sanitizeJava(text);
     const packageName = sanitized.match(/\bpackage\s+([$\w.]+)\s*;/)?.[1] ?? "";
-    sources.push({ absolutePath, relativePath: path.relative(projectRoot, absolutePath), text, sanitized, packageName });
+    sources.push({ relativePath: path.relative(projectRoot, absolutePath), text, sanitized, packageName });
   }
   return sources;
 }

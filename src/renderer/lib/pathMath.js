@@ -675,7 +675,7 @@
   // ---- path checks ----------------------------------------------------------
   // Only measured constraint violations are issues. Expected slowdowns are
   // neutral notes so the UI never calls normal planner behavior a failure.
-  function analyze(pts, prof, m, robot, context) {
+  function analyze(pts, prof, m, context) {
     const n = pts.length, checks = [], cfg = context || {}, constraints = cfg.constraints || {};
     if (n < 2) return [{ f: 0, kind: 'geometry', level: 'error', text: 'Path needs at least two distinct samples' }];
     const totalS = pts[n - 1].s || 1;
@@ -1104,7 +1104,7 @@
     appendTerminalHeadingCatchup(doc, prof, trackedHead, head, effRanges);
     const anchors = mode === 'tank' ? [] : buildAnchors(pts.map((p, i) => ({ f: total > 1e-6 ? p.s / total : 0, rad: trackedHead[i] })));
     const mtr = metrics(pts, prof, anchors, mode);
-    const checks = analyze(pts, prof, mtr, robot || {}, {
+    const checks = analyze(pts, prof, mtr, {
       constraints: doc.constraints,
       plannerId,
     });
@@ -1155,4 +1155,4 @@
     return positions;
   }
 
-export const PM = { bez, bezD, splitBezier, nearestPointOnSegment, sample, profile, poseAtTime, headingAt, metrics, analyze, metricColor, metricGradient, METRICS, SEGTYPES, buildAnchors, pointAtFraction, nearestFraction, nearestVisits, autoHandles, angWrap, angLerp, D2R, R2D, lerp, derivePath, jigglePositions, effectiveRanges, featureFraction, remapWaypointRange, waypointFracs, robotHardLimits, effectiveConstraints };
+export const PM = { splitBezier, nearestPointOnSegment, poseAtTime, headingAt, metricColor, metricGradient, METRICS, SEGTYPES, pointAtFraction, nearestFraction, nearestVisits, autoHandles, angWrap, derivePath, jigglePositions, featureFraction, remapWaypointRange, waypointFracs, robotHardLimits, effectiveConstraints };

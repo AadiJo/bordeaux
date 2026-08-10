@@ -60,7 +60,16 @@ describe("renderer application", () => {
     expect(panels).toContain("{ v: 'optimizedTrajectory', label: 'Optimized' }");
     expect(app).toContain("exportJava");
     expect(panels).not.toMatch(/LabVIEW|labview|\.bdx/);
-    expect(app.match(/delete p\.labview/g)).toHaveLength(1);
+    expect(app).toContain("normalizeProjectData(raw)");
+  });
+
+  it("uses canonical shared project state without local compatibility mirrors", () => {
+    const app = fs.readFileSync(new URL("../src/renderer/app/App.jsx", import.meta.url), "utf8");
+    expect(app).toContain('normalizeProject as normalizeProjectData');
+    expect(app).not.toMatch(/project\.routine(?!s)/);
+    expect(app).not.toMatch(/\.\.\.project,\s*routine[,}]/);
+    expect(app).toContain("const plannerId = project.plannerId");
+    expect(app).not.toContain("setPlannerId");
   });
 
   it("persists and restores the selected path and Java project bookmark", () => {

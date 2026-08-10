@@ -21,15 +21,12 @@ jobs:
         include:
           - platform: mac
             os: macos-15
-            command: package:mac:ci
             artifact: bordeaux-macos
           - platform: windows
             os: windows-latest
-            command: package:win
             artifact: bordeaux-windows
           - platform: linux
             os: ubuntu-latest
-            command: package:linux
             artifact: bordeaux-linux
     runs-on: ${{ matrix.os }}
     steps:
@@ -48,6 +45,8 @@ jobs:
       - run: npm run verify:release-tag
       - run: npm test
       - run: npm run typecheck
+      - run: npm run test:java
+        if: matrix.platform == 'linux'
       - name: Require macOS signing and notarization credentials
         if: matrix.platform == 'mac'
         env:

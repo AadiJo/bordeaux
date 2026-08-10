@@ -11,16 +11,7 @@ const MAX_SCHEMA_DEPTH = 24;
 const MAX_OBJECT_FIELDS = 256;
 const MAX_ENUM_VALUES = 1_024;
 
-interface GeneratedCatalogResult {
-  commands: JavaCommandDescriptor[];
-  relativePath: string;
-  schemaVersion: "1.0";
-  catalogId: string;
-  supportVersion: string;
-  catalogHash: string;
-}
-
-export interface GeneratedJavaCatalog {
+interface GeneratedJavaCatalog {
   schemaVersion: "1.0";
   catalogId: string;
   supportVersion: string;
@@ -196,27 +187,23 @@ export function parseGeneratedJavaCatalog(raw: unknown): GeneratedJavaCatalog {
   return { schemaVersion: "1.0", catalogId, supportVersion, catalogHash, commands };
 }
 
-export async function readGeneratedJavaCatalog(projectRoot: string): Promise<GeneratedCatalogResult | null> {
-  const candidates = ["build/bordeaux/catalog-v1.json"];
-  for (const relativePath of candidates) {
-    const filePath = path.join(projectRoot, relativePath);
-    let stat;
-    try {
-      stat = await fs.lstat(filePath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-      throw error;
-    }
-    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Generated Java catalog ${relativePath} must be a regular file`);
-    if (stat.size > MAX_CATALOG_BYTES) throw new Error(`Generated Java catalog exceeds ${MAX_CATALOG_BYTES} bytes`);
-    let raw: unknown;
-    try {
-      raw = JSON.parse(await fs.readFile(filePath, "utf8"));
-    } catch (error) {
-      throw new Error(`Generated Java catalog ${relativePath} is not valid JSON`, { cause: error });
-    }
-    const catalog = parseGeneratedJavaCatalog(raw);
-    return { ...catalog, relativePath };
+export async function readGeneratedJavaCatalog(projectRoot: string): Promise<GeneratedJavaCatalog | null> {
+  const relativePath = "build/bordeaux/catalog-v1.json";
+  const filePath = path.join(projectRoot, relativePath);
+  let stat;
+  try {
+    stat = await fs.lstat(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
   }
-  return null;
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Generated Java catalog ${relativePath} must be a regular file`);
+  if (stat.size > MAX_CATALOG_BYTES) throw new Error(`Generated Java catalog exceeds ${MAX_CATALOG_BYTES} bytes`);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await fs.readFile(filePath, "utf8"));
+  } catch (error) {
+    throw new Error(`Generated Java catalog ${relativePath} is not valid JSON`, { cause: error });
+  }
+  return parseGeneratedJavaCatalog(raw);
 }

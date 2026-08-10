@@ -238,7 +238,7 @@ function validateProjectInner(project: unknown): ValidationResult {
 
   if (project.schemaVersion !== "1.0") issues.push(issue("$.schemaVersion", "Schema version must be 1.0"));
   if (typeof project.name !== "string" || !project.name.trim()) issues.push(issue("$.name", "Project name is required"));
-  if (project.plannerId !== undefined && !["profiledSpline", "optimizedTrajectory"].includes(String(project.plannerId))) {
+  if (!["profiledSpline", "optimizedTrajectory"].includes(String(project.plannerId))) {
     issues.push(issue("$.plannerId", "Planner must be profiledSpline or optimizedTrajectory"));
   }
 
@@ -547,10 +547,11 @@ function validateProjectInner(project: unknown): ValidationResult {
     }
   }
 
-  if (project.pathLinks !== undefined) {
+  if (!Array.isArray(project.pathLinks)) {
+    issues.push(issue("$.pathLinks", "Path links must be an array"));
+  } else {
     const linkIds = new Set<string>(), sources = new Set<string>(), targets = new Set<string>();
-    if (!Array.isArray(project.pathLinks)) issues.push(issue("$.pathLinks", "Path links must be an array"));
-    else project.pathLinks.forEach((link, index) => {
+    project.pathLinks.forEach((link, index) => {
       const base = `$.pathLinks[${index}]`;
       if (!isRecord(link)) { issues.push(issue(base, "Path link must be an object")); return; }
       if (typeof link.id !== "string" || !link.id.trim()) issues.push(issue(`${base}.id`, "Path link ID is required"));
@@ -571,20 +572,18 @@ function validateProjectInner(project: unknown): ValidationResult {
     if (typeof routine.name !== "string" || !routine.name.trim()) issues.push(issue(`${base}.name`, "Routine name is required"));
     validateRoutineNodes(issues, routine.nodes, `${base}.nodes`, pathIds, new Set());
   };
-  if (project.routines !== undefined) {
-    if (!Array.isArray(project.routines) || project.routines.length === 0) issues.push(issue("$.routines", "Project routines must be a non-empty array"));
-    else if (project.routines.length > MAX_PROJECT_ROUTINES) issues.push(issue("$.routines", `Project cannot contain more than ${MAX_PROJECT_ROUTINES} routines`));
-    else {
-      const routineIds = new Set<string>();
-      project.routines.forEach((routine, index) => {
-        const base = `$.routines[${index}]`; validateRoutine(routine, base);
-        if (!isRecord(routine) || typeof routine.id !== "string" || !routine.id.trim()) issues.push(issue(`${base}.id`, "Routine ID is required"));
-        else if (routineIds.has(routine.id)) issues.push(issue(`${base}.id`, "Routine IDs must be unique"));
-        else routineIds.add(routine.id);
-      });
-      if (typeof project.activeRoutineId !== "string" || !routineIds.has(project.activeRoutineId)) issues.push(issue("$.activeRoutineId", "Active routine must reference a project routine"));
-    }
-  } else if (project.routine !== undefined) validateRoutine(project.routine, "$.routine");
+  if (!Array.isArray(project.routines) || project.routines.length === 0) issues.push(issue("$.routines", "Project routines must be a non-empty array"));
+  else if (project.routines.length > MAX_PROJECT_ROUTINES) issues.push(issue("$.routines", `Project cannot contain more than ${MAX_PROJECT_ROUTINES} routines`));
+  else {
+    const routineIds = new Set<string>();
+    project.routines.forEach((routine, index) => {
+      const base = `$.routines[${index}]`; validateRoutine(routine, base);
+      if (!isRecord(routine) || typeof routine.id !== "string" || !routine.id.trim()) issues.push(issue(`${base}.id`, "Routine ID is required"));
+      else if (routineIds.has(routine.id)) issues.push(issue(`${base}.id`, "Routine IDs must be unique"));
+      else routineIds.add(routine.id);
+    });
+    if (typeof project.activeRoutineId !== "string" || !routineIds.has(project.activeRoutineId)) issues.push(issue("$.activeRoutineId", "Active routine must reference a project routine"));
+  }
 
   if (project.strategy !== undefined) {
     if (!isRecord(project.strategy)) issues.push(issue("$.strategy", "Project strategy must be an object"));

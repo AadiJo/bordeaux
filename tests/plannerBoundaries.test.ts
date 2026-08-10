@@ -126,7 +126,6 @@ describe("project validation boundaries", () => {
     for (let depth = 0; depth < 2_000; depth += 1) {
       nodes = [{ id: `decision_${depth}`, type: "decision", cond: "ready", thenLabel: "yes", elseLabel: "no", then: nodes, else: [] }];
     }
-    project.routine.nodes = nodes;
     project.routines = [{ id: "routine_deep", name: "Deep", nodes }];
     project.activeRoutineId = "routine_deep";
 

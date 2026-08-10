@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { analyzePath } from "../src/shared/agent/pathAnalysis";
+import { analyzePath, minimumPathClearance } from "../src/shared/agent/pathAnalysis";
+import { getPlanner } from "../src/shared/planners";
 import { createDemoProject, buildWaypoints } from "../src/shared/project/defaults";
 import { REBUILT_2026_CROSSINGS } from "../src/shared/field/rebuilt2026";
 
@@ -20,10 +21,17 @@ describe("agent path analysis", () => {
     const path = project.paths[0];
     path.waypoints = buildWaypoints([{ x: 3.5, y: 4 }, { x: 4.6, y: 4 }, { x: 6, y: 4 }]);
     const before = JSON.stringify(path);
+    const plannerId = project.plannerId;
+    const samples = getPlanner(plannerId).generate({ path: structuredClone(path), robot: structuredClone(project.robot) }).samples;
+    const sampleClearances = samples.map((sample) => minimumPathClearance(project, [sample]));
+    const closestSampleIndex = sampleClearances.reduce((bestIndex, clearance, index) => (
+      clearance < sampleClearances[bestIndex] ? index : bestIndex
+    ), 0);
     const analysis = analyzePath(project, path.id, { minimumClearanceM: 0.1 });
     const finding = analysis.findings.find((item) => item.id === "geometry:field-obstacle-clearance");
     expect(finding?.severity).toBe("error");
-    expect(finding?.sample?.timeS).toBeTypeOf("number");
+    expect(finding?.measured).toBe(minimumPathClearance(project, samples));
+    expect(finding?.sample?.index).toBe(closestSampleIndex);
     expect(JSON.stringify(path)).toBe(before);
   });
 

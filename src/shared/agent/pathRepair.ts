@@ -1,6 +1,6 @@
 import { FIELD_H, clampWorldPoint } from "../math/fieldBounds";
 import { clone } from "../project/defaults";
-import type { BordeauxProject, PathDoc, TrajectoryPlannerId } from "../types";
+import type { BordeauxProject, PathDoc } from "../types";
 import { analyzePath } from "./pathAnalysis";
 import type { PathAnalysis, PathAnalysisFinding, RepairCandidate } from "./types";
 
@@ -74,13 +74,12 @@ export function generateRepairCandidates(
   project: BordeauxProject,
   pathId: string,
   findingIds: readonly string[],
-  plannerId?: TrajectoryPlannerId,
   minimumClearanceM = 0,
 ): RepairCandidate[] {
   if (findingIds.length === 0 || findingIds.length > 8) throw new Error("Choose between 1 and 8 analysis findings to repair.");
   const path = project.paths.find((item) => item.id === pathId);
   if (!path) throw new Error(`Path ${pathId} does not exist in the current project.`);
-  const before = analyzePath(project, pathId, { plannerId, minimumClearanceM });
+  const before = analyzePath(project, pathId, { minimumClearanceM });
   const findings = findingIds.map((id) => before.findings.find((item) => item.id === id));
   if (findings.some((finding) => !finding)) throw new Error("A requested finding is stale or does not belong to this path analysis.");
   const primary = findings[0]!;
@@ -92,8 +91,8 @@ export function generateRepairCandidates(
   ].filter((item): item is { path: PathDoc; fields: string[] } => item !== null);
   const targets = new Set(findingIds);
   return mutations.map((mutation, index) => {
-    const candidateProject = { ...clone(project), paths: project.paths.map((item) => item.id === pathId ? mutation.path : clone(item)) };
-    const after = analyzePath(candidateProject, pathId, { plannerId, minimumClearanceM });
+    const candidateProject = { ...project, paths: project.paths.map((item) => item.id === pathId ? mutation.path : item) };
+    const after = analyzePath(candidateProject, pathId, { minimumClearanceM });
     const improved = targetImproved(before, after, findingIds);
     const noWorse = !hasNewOrWorseError(before, after, targets);
     const valid = improved && noWorse;

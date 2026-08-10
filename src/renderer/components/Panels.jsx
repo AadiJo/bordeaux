@@ -9,7 +9,7 @@ import { UI } from "./ui";
 // metric overlay, telemetry/transport, view controls.
   const { useRef, useState, useEffect, useMemo } = React;
   const h = React.createElement;
-  const { Icon, IconBtn, Dropdown, Section, Num, Seg, constraintRangeSummary } = UI;
+  const { Icon, IconBtn, Dropdown, Section, Seg, constraintRangeSummary } = UI;
   const R2D = 180 / Math.PI;
 
   // ---------------- path manager ----------------
@@ -398,7 +398,7 @@ import { UI } from "./ui";
   }
 
   // ---------------- compact metric control for the timeline toolbar ----------------
-  function MetricControl({ metric, setMetric, derived, plannerId }) {
+  function MetricControl({ metric, setMetric, derived }) {
     const M = derived.metrics || {};
     const grad = PM.metricGradient(metric);
     const def = (PM.METRICS || []).find((m) => m.id === metric) || {};
@@ -418,7 +418,7 @@ import { UI } from "./ui";
   }
 
   // ---------------- telemetry graph + transport ----------------
-  function Transport({ derived, doc, metric, setMetric, playTime, playing, togglePlayback, seek, restart, graphOpen, setGraphOpen, plannerId }) {
+  function Transport({ derived, doc, metric, setMetric, playTime, playing, togglePlayback, seek, restart, graphOpen, setGraphOpen }) {
     const total = derived.prof.totalTime || 0.001;
     const pct = Math.max(0, Math.min(1, playTime / total));
     const scrubStep = Math.min(0.02, total);
@@ -473,47 +473,53 @@ import { UI } from "./ui";
       label: (total * fraction).toFixed(total < 10 ? 2 : 1) + 's',
     }));
 
-    let arr = graphOpen ? M.v.map((value) => UnitPrefs.fromCanonical(value, 'm/s')) : null, vmin = 0, vmax = UnitPrefs.fromCanonical(M.vMax || 1, 'm/s'), signed = false, unit = UnitPrefs.label('m/s'), title = 'Velocity';
-    if (graphOpen && metric === 'accel') { arr = M.accel.map((value) => UnitPrefs.fromCanonical(value, 'm/s²')); vmax = UnitPrefs.fromCanonical(M.aMax || 1, 'm/s²'); vmin = -vmax; signed = true; unit = UnitPrefs.label('m/s²'); title = 'Acceleration'; }
-    else if (graphOpen && metric === 'angvel') { arr = (M.omega || []).map((o) => o * R2D); vmax = (M.wMax || 0.01) * R2D; vmin = -vmax; signed = true; unit = '\u00b0/s'; title = 'Angular velocity'; }
-    else if (graphOpen && metric === 'curvature') { arr = M.curv.map((value) => UnitPrefs.fromCanonical(value, '1/m')); vmin = 0; vmax = UnitPrefs.fromCanonical(M.kMax || 0.01, '1/m'); unit = UnitPrefs.label('1/m'); title = 'Curvature'; }
-
-    const jigglePeak = graphOpen && metric === 'velocity' && prof.jiggles
-      ? UnitPrefs.fromCanonical(prof.jiggles.reduce((value, action) => Math.max(value, 4 * action.config.distanceM / action.strokeDuration), 0), 'm/s')
-      : 0;
-    const peak = Math.max(vmax, jigglePeak);
-    vmax = Math.max(0.01, peak * 1.1);
-    if (signed) vmin = -vmax;
     const GW = 1000, GH = 132, padL = 0, padR = 0, padT = 10, padB = 20;
-    const span = Math.max(1e-6, vmax - vmin);
-    const yOf = (val) => padT + (1 - (val - vmin) / span) * (GH - padT - padB);
-    const zeroY = yOf(0);
-    const valueAtTime = (tt) => {
-      if (!arr || !arr.length || !prof.t.length) return 0;
-      if (tt <= 0) return arr[0] || 0;
-      if (tt >= total) return arr[arr.length - 1] || 0;
-      const geometryEnd = prof.t[prof.t.length - 1];
-      if (tt > geometryEnd + 1e-9) {
-        if (metric !== 'velocity') return 0;
-        const pose = PM.poseAtTime(tt, pts, prof, derived.anchors, derived.mode, derived.rev);
-        return pose ? UnitPrefs.fromCanonical(pose.speed, 'm/s') : 0;
+    const unitSystem = UnitPrefs.current();
+    const graphModel = useMemo(() => {
+      let arr = graphOpen ? M.v.map((value) => UnitPrefs.fromCanonical(value, 'm/s')) : null;
+      let vmin = 0, vmax = UnitPrefs.fromCanonical(M.vMax || 1, 'm/s'), signed = false;
+      let unit = UnitPrefs.label('m/s'), title = 'Velocity';
+      if (graphOpen && metric === 'accel') { arr = M.accel.map((value) => UnitPrefs.fromCanonical(value, 'm/s²')); vmax = UnitPrefs.fromCanonical(M.aMax || 1, 'm/s²'); vmin = -vmax; signed = true; unit = UnitPrefs.label('m/s²'); title = 'Acceleration'; }
+      else if (graphOpen && metric === 'angvel') { arr = (M.omega || []).map((o) => o * R2D); vmax = (M.wMax || 0.01) * R2D; vmin = -vmax; signed = true; unit = '\u00b0/s'; title = 'Angular velocity'; }
+      else if (graphOpen && metric === 'curvature') { arr = M.curv.map((value) => UnitPrefs.fromCanonical(value, '1/m')); vmin = 0; vmax = UnitPrefs.fromCanonical(M.kMax || 0.01, '1/m'); unit = UnitPrefs.label('1/m'); title = 'Curvature'; }
+
+      const jigglePeak = graphOpen && metric === 'velocity' && prof.jiggles
+        ? UnitPrefs.fromCanonical(prof.jiggles.reduce((value, action) => Math.max(value, 4 * action.config.distanceM / action.strokeDuration), 0), 'm/s')
+        : 0;
+      const peak = Math.max(vmax, jigglePeak);
+      vmax = Math.max(0.01, peak * 1.1);
+      if (signed) vmin = -vmax;
+      const span = Math.max(1e-6, vmax - vmin);
+      const yOf = (value) => padT + (1 - (value - vmin) / span) * (GH - padT - padB);
+      const zeroY = yOf(0);
+      const valueAtTime = (time) => {
+        if (!arr || !arr.length || !prof.t.length) return 0;
+        if (time <= 0) return arr[0] || 0;
+        if (time >= total) return arr[arr.length - 1] || 0;
+        const geometryEnd = prof.t[prof.t.length - 1];
+        if (time > geometryEnd + 1e-9) {
+          if (metric !== 'velocity') return 0;
+          const pose = PM.poseAtTime(time, pts, prof, derived.anchors, derived.mode, derived.rev);
+          return pose ? UnitPrefs.fromCanonical(pose.speed, 'm/s') : 0;
+        }
+        let lo = 1, hi = prof.t.length - 1;
+        while (lo < hi) { const mid = (lo + hi) >> 1; if (prof.t[mid] < time) lo = mid + 1; else hi = mid; }
+        const t0 = prof.t[lo - 1], t1 = prof.t[lo], u = t1 - t0 > 1e-6 ? (time - t0) / (t1 - t0) : 0;
+        return arr[lo - 1] + (arr[lo] - arr[lo - 1]) * u;
+      };
+      let poly = '';
+      if (pts.length > 1 && arr && arr.length) {
+        const N = 170;
+        for (let k = 0; k <= N; k++) {
+          const time = (k / N) * total;
+          const value = valueAtTime(time);
+          const x = padL + (k / N) * (GW - padL - padR);
+          poly += (k === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + yOf(value).toFixed(1) + ' ';
+        }
       }
-      let lo = 1, hi = prof.t.length - 1;
-      while (lo < hi) { const mid = (lo + hi) >> 1; if (prof.t[mid] < tt) lo = mid + 1; else hi = mid; }
-      const t0 = prof.t[lo - 1], t1 = prof.t[lo], u = t1 - t0 > 1e-6 ? (tt - t0) / (t1 - t0) : 0;
-      return arr[lo - 1] + (arr[lo] - arr[lo - 1]) * u;
-    };
-    let poly = '';
-    if (pts.length > 1 && arr && arr.length) {
-      const N = 170;
-      for (let k = 0; k <= N; k++) {
-        const tt = (k / N) * total;
-        const val = valueAtTime(tt);
-        const x = padL + (k / N) * (GW - padL - padR);
-        poly += (k === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + yOf(val).toFixed(1) + ' ';
-      }
-    }
-    const baseY = signed ? zeroY : (GH - padB);
+      return { baseY: signed ? zeroY : GH - padB, peak, poly, signed, title, unit, valueAtTime, yOf, zeroY };
+    }, [derived, graphOpen, metric, total, unitSystem]);
+    const { baseY, peak, poly, signed, title, unit, valueAtTime, yOf, zeroY } = graphModel;
     const playX = padL + pct * (GW - padL - padR);
     const currentValue = valueAtTime(playTime), playY = yOf(currentValue);
     const pointerDrag = PointerDrag.useController();
@@ -558,7 +564,7 @@ import { UI } from "./ui";
             h('span', { className: 'timecode-unit' }, 's')),
           featureCount > 0 && h('span', { className: 'timeline-summary', 'aria-hidden': true }, featureSummary),
           h('div', { className: 'transport-meta' },
-            h(MetricControl, { metric, setMetric, derived, plannerId }),
+            h(MetricControl, { metric, setMetric, derived }),
             h('div', { className: 'roi', title: 'Path length' }, h('span', { className: 'roi-v' }, UnitPrefs.fromCanonical(derived.totalDistance || derived.sample.length, 'm').toFixed(2)), h('span', { className: 'roi-u' }, UnitPrefs.label('m'))),
             h(IconBtn, { icon: 'gauge', active: graphOpen, onClick: () => setGraphOpen(!graphOpen), title: 'Telemetry graph' }))),
         h('div', { className: 'timeline-editor' },
@@ -601,29 +607,4 @@ import { UI } from "./ui";
       h('button', { className: 'vc-btn', type: 'button', title: 'Fit field  (F)', 'aria-label': 'Fit field to view', onClick: onFit }, h(Icon, { name: 'fit', size: 16 })));
   }
 
-  function fmt(t) { return (t || 0).toFixed(2) + 's'; }
-
-  // ---------------- routine overlay legend (auto mode, bottom-left) ----------------
-  function RoutineLegend({ run, time, running }) {
-    const items = [
-      { c: 'var(--accent)', t: 'Selected / active' },
-      { c: '#f6a93a', t: 'Generated \u00b7 runtime', dash: true },
-      { c: '#5b636e', t: 'Completed' },
-      { c: '#474e59', t: 'Pending', dash: true },
-    ];
-    let idx = -1;
-    for (let i = 0; i < run.steps.length; i++) { const s = run.steps[i]; if (time >= s.t0 && time < s.t1 + 1e-6) { idx = i; break; } idx = i; }
-    const cur = idx >= 0 ? run.steps[idx] : null;
-    return h('div', { className: 'rlegend' },
-      h('div', { className: 'rlegend-h' }, 'Routine \u00b7 field overlay'),
-      h('div', { className: 'rlegend-grid' }, items.map((it, i) =>
-        h('div', { key: i, className: 'rlegend-row' },
-          h('span', { className: 'rlegend-bar' + (it.dash ? ' dash' : ''), style: { background: it.dash ? 'none' : it.c, borderColor: it.c } }),
-          h('span', { className: 'rlegend-t' }, it.t)))),
-      cur && h('div', { className: 'rlegend-now' },
-        h('span', { className: 'rlegend-dot', style: { background: running ? 'var(--good)' : 'var(--txt-3)' } }),
-        running ? 'Executing' : 'Staged', h('span', { className: 'rlegend-nowt' }, fmt(time) + ' / ' + fmt(run.total))));
-  }
-
-export const Panels = { Toolbar, ToolRail, ConstraintBar, Outline, Transport, ViewControls, RoutineLegend };
-export { Toolbar, ToolRail, ConstraintBar, Outline, Transport, ViewControls, RoutineLegend };
+export const Panels = { Toolbar, ToolRail, ConstraintBar, Outline, Transport, ViewControls };

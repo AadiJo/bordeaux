@@ -2,7 +2,7 @@ import { REBUILT_2026_FIELD, REBUILT_2026_FIELD_WIDTH_M, officialToAppPoint } fr
 import { FIELD_H, FIELD_W } from "../math/fieldBounds";
 import { getPlanner } from "../planners";
 import { clone } from "../project/defaults";
-import type { BordeauxProject, PathDoc, TrajectoryPlannerId, TrajectorySample, ValidationIssue } from "../types";
+import type { BordeauxProject, PathDoc, TrajectorySample, ValidationIssue } from "../types";
 import { validateProject } from "../validation";
 import {
   boundsPolygon,
@@ -11,6 +11,8 @@ import {
   interpolateHeading,
   polygonBounds,
   robotFootprintAt,
+  robotFootprintVertices,
+  transformFootprint,
   verticalLineSection,
 } from "./robotFootprint";
 import type {
@@ -24,6 +26,28 @@ import type {
 const EPSILON = 1e-6;
 const BARRIER_EPSILON = 1e-4;
 const DEFAULT_SAMPLE_LIMIT = 500;
+
+const APP_OBSTACLE_POLYGONS = REBUILT_2026_FIELD.solidObstacles.flatMap((item) => {
+  if (!item.bounds) return [];
+  const first = officialToAppPoint({ x: item.bounds.xMin, y: item.bounds.yMin });
+  const second = officialToAppPoint({ x: item.bounds.xMax, y: item.bounds.yMax });
+  return [boundsPolygon({
+    min: { x: Math.min(first.x, second.x), y: Math.min(first.y, second.y) },
+    max: { x: Math.max(first.x, second.x), y: Math.max(first.y, second.y) },
+  })];
+});
+
+const APP_BARRIER_X = new Map(REBUILT_2026_FIELD.crossingBarriers.map((barrier) => (
+  [barrier, officialToAppPoint({ x: barrier.x, y: 0 }).x] as const
+)));
+
+const APP_PORTAL_BOUNDS = new Map(REBUILT_2026_FIELD.crossingBarriers.flatMap((barrier) => (
+  barrier.portals.map((portal) => {
+    const point = officialToAppPoint(portal.point);
+    const halfWidth = portal.widthM * FIELD_H / REBUILT_2026_FIELD_WIDTH_M / 2;
+    return [portal, { minY: point.y - halfWidth, maxY: point.y + halfWidth }] as const;
+  })
+)));
 
 interface MeasuredValue {
   metric: PathAnalysisMetric;
@@ -75,11 +99,6 @@ function metricLimit(path: PathDoc, sample: TrajectorySample, totalDistance: num
   return { limit, source };
 }
 
-function retainWaypointArrivals(path: PathDoc, samples: readonly TrajectorySample[], retained: Set<number>): void {
-  if (samples.length === 0) return;
-  waypointArrivalIndices(path, samples).forEach((index) => retained.add(index));
-}
-
 function waypointArrivalIndices(path: PathDoc, samples: readonly TrajectorySample[]): number[] {
   if (samples.length === 0) return [];
   let cursor = 0;
@@ -97,7 +116,6 @@ function waypointArrivalIndices(path: PathDoc, samples: readonly TrajectorySampl
 }
 
 export interface AnalyzePathOptions {
-  plannerId?: TrajectoryPlannerId;
   sampleLimit?: number;
   minimumClearanceM?: number;
   robotHeightM?: number;
@@ -106,9 +124,8 @@ export interface AnalyzePathOptions {
   requiredPortalIds?: string[];
 }
 
-function sampleReference(path: PathDoc, samples: readonly TrajectorySample[], index: number): PathSampleReference {
+function sampleReference(path: PathDoc, samples: readonly TrajectorySample[], index: number, arrivals: readonly number[]): PathSampleReference {
   const sample = samples[index];
-  const arrivals = waypointArrivalIndices(path, samples);
   let segmentIndex = 0;
   for (let waypointIndex = 1; waypointIndex < arrivals.length - 1; waypointIndex += 1) {
     if (arrivals[waypointIndex] <= index) segmentIndex = waypointIndex;
@@ -173,24 +190,12 @@ function downsample(samples: readonly TrajectorySample[], limit: number, retaine
   return [...indices].sort((a, b) => a - b).slice(0, limit).map((index) => ({ ...samples[index], i: index }));
 }
 
-function appObstacleBounds() {
-  return REBUILT_2026_FIELD.solidObstacles.flatMap((item) => {
-    if (!item.bounds) return [];
-    const first = officialToAppPoint({ x: item.bounds.xMin, y: item.bounds.yMin });
-    const second = officialToAppPoint({ x: item.bounds.xMax, y: item.bounds.yMax });
-    return [{
-      id: item.id,
-      name: item.name,
-      min: { x: Math.min(first.x, second.x), y: Math.min(first.y, second.y) },
-      max: { x: Math.max(first.x, second.x), y: Math.max(first.y, second.y) },
-    }];
-  });
+function portalBounds(portal: typeof REBUILT_2026_FIELD.crossingBarriers[number]["portals"][number]) {
+  return APP_PORTAL_BOUNDS.get(portal)!;
 }
 
-function portalBounds(portal: typeof REBUILT_2026_FIELD.crossingBarriers[number]["portals"][number]) {
-  const point = officialToAppPoint(portal.point);
-  const halfWidth = portal.widthM * FIELD_H / REBUILT_2026_FIELD_WIDTH_M / 2;
-  return { minY: point.y - halfWidth, maxY: point.y + halfWidth };
+function appBarrierX(barrier: typeof REBUILT_2026_FIELD.crossingBarriers[number]): number {
+  return APP_BARRIER_X.get(barrier)!;
 }
 
 function portalsForSection(
@@ -219,8 +224,8 @@ function footprintSectionAt(project: BordeauxProject, pose: { x: number; y: numb
 
 function barrierCrossingFindings(
   project: BordeauxProject,
-  path: PathDoc,
   samples: readonly TrajectorySample[],
+  sampleReferenceAt: (index: number) => PathSampleReference,
   robotHeightM?: number,
   requiredTraversal: AnalyzePathOptions["requiredTraversal"] = "direct",
 ): PathAnalysisFinding[] {
@@ -228,20 +233,20 @@ function barrierCrossingFindings(
   const findings: PathAnalysisFinding[] = [];
   let traversalUseCount = 0;
   REBUILT_2026_FIELD.crossingBarriers.forEach((barrier) => {
-    const barrierX = officialToAppPoint({ x: barrier.x, y: 0 }).x;
+    const barrierX = appBarrierX(barrier);
     const validatePortal = (portals: typeof barrier.portals, index: number, suffix: string, verb: "crosses" | "touches") => {
       if (portals.length !== 1) {
-        findings.push({ id: `geometry:illegal-barrier-${verb}:${suffix}`, severity: "error", kind: "geometry", message: `The robot footprint ${verb} the ${barrier.allianceOwner} alliance barrier outside a typed TRENCH or BUMP corridor.`, sample: sampleReference(path, samples, index), sourcePath: `field.2026-rebuilt.crossingBarriers.${barrier.id}` });
+        findings.push({ id: `geometry:illegal-barrier-${verb}:${suffix}`, severity: "error", kind: "geometry", message: `The robot footprint ${verb} the ${barrier.allianceOwner} alliance barrier outside a typed TRENCH or BUMP corridor.`, sample: sampleReferenceAt(index), sourcePath: `field.2026-rebuilt.crossingBarriers.${barrier.id}` });
         return;
       }
       const portal = portals[0];
       if (requiredTraversal !== "direct") {
         const [requiredType, requiredSide] = requiredTraversal.split("-") as ["trench" | "bump", "table" | "away"];
-        if (portal.traversal !== requiredType || portal.side !== requiredSide) findings.push({ id: `geometry:wrong-traversal:${suffix}`, severity: "error", kind: "geometry", message: `This candidate uses ${portal.name} instead of the required ${requiredSide} ${requiredType.toUpperCase()} corridor.`, sample: sampleReference(path, samples, index), sourcePath: `field.2026-rebuilt.crossingBarriers.${barrier.id}` });
+        if (portal.traversal !== requiredType || portal.side !== requiredSide) findings.push({ id: `geometry:wrong-traversal:${suffix}`, severity: "error", kind: "geometry", message: `This candidate uses ${portal.name} instead of the required ${requiredSide} ${requiredType.toUpperCase()} corridor.`, sample: sampleReferenceAt(index), sourcePath: `field.2026-rebuilt.crossingBarriers.${barrier.id}` });
       }
       if (portal.traversal === "trench") {
-        if (effectiveHeightM === undefined) findings.push({ id: `geometry:trench-height-unverified:${suffix}`, severity: "warning", kind: "geometry", message: `Robot height is required to certify passage under ${portal.name}.`, sample: sampleReference(path, samples, index), sourcePath: `field.2026-rebuilt.crossingBarriers.${barrier.id}` });
-        else if (portal.clearanceHeightM !== undefined && effectiveHeightM > portal.clearanceHeightM + EPSILON) findings.push({ id: `geometry:trench-height:${suffix}`, severity: "error", kind: "geometry", measured: effectiveHeightM, limit: portal.clearanceHeightM, unit: "m", message: `Robot height ${effectiveHeightM.toFixed(3)} m exceeds the ${portal.clearanceHeightM.toFixed(3)} m clearance under ${portal.name}.`, sample: sampleReference(path, samples, index), sourcePath: `field.2026-rebuilt.crossingBarriers.${barrier.id}` });
+        if (effectiveHeightM === undefined) findings.push({ id: `geometry:trench-height-unverified:${suffix}`, severity: "warning", kind: "geometry", message: `Robot height is required to certify passage under ${portal.name}.`, sample: sampleReferenceAt(index), sourcePath: `field.2026-rebuilt.crossingBarriers.${barrier.id}` });
+        else if (portal.clearanceHeightM !== undefined && effectiveHeightM > portal.clearanceHeightM + EPSILON) findings.push({ id: `geometry:trench-height:${suffix}`, severity: "error", kind: "geometry", measured: effectiveHeightM, limit: portal.clearanceHeightM, unit: "m", message: `Robot height ${effectiveHeightM.toFixed(3)} m exceeds the ${portal.clearanceHeightM.toFixed(3)} m clearance under ${portal.name}.`, sample: sampleReferenceAt(index), sourcePath: `field.2026-rebuilt.crossingBarriers.${barrier.id}` });
       }
     };
     [0, samples.length - 1].forEach((index) => {
@@ -278,7 +283,7 @@ function barrierCrossingFindings(
       previousSide = side;
     });
   });
-  if (requiredTraversal !== "direct" && traversalUseCount === 0 && samples.length > 0) findings.push({ id: "geometry:required-traversal-missing", severity: "error", kind: "geometry", message: `The route requires ${requiredTraversal.replace("-", " ")} but does not cross or start/end inside that typed alliance-barrier portal.`, sample: sampleReference(path, samples, 0), sourcePath: "field.2026-rebuilt.crossingBarriers" });
+  if (requiredTraversal !== "direct" && traversalUseCount === 0 && samples.length > 0) findings.push({ id: "geometry:required-traversal-missing", severity: "error", kind: "geometry", message: `The route requires ${requiredTraversal.replace("-", " ")} but does not cross or start/end inside that typed alliance-barrier portal.`, sample: sampleReferenceAt(0), sourcePath: "field.2026-rebuilt.crossingBarriers" });
   return findings;
 }
 
@@ -298,7 +303,7 @@ function observedPortalIds(project: BordeauxProject, samples: readonly Trajector
   };
 
   for (const barrier of REBUILT_2026_FIELD.crossingBarriers) {
-    const barrierX = officialToAppPoint({ x: barrier.x, y: 0 }).x;
+    const barrierX = appBarrierX(barrier);
     if (footprintSectionAt(project, samples[0], barrierX)) add(portalAt(barrier, samples[0], barrierX)?.id, 0);
   }
   for (let index = 1; index < samples.length; index += 1) {
@@ -306,7 +311,7 @@ function observedPortalIds(project: BordeauxProject, samples: readonly Trajector
     const sample = samples[index];
     const visits: Array<{ id: string; ratio: number }> = [];
     for (const barrier of REBUILT_2026_FIELD.crossingBarriers) {
-      const barrierX = officialToAppPoint({ x: barrier.x, y: 0 }).x;
+      const barrierX = appBarrierX(barrier);
       const left = previous.x - barrierX;
       const right = sample.x - barrierX;
       if (left * right >= 0 || Math.abs(sample.x - previous.x) <= EPSILON) continue;
@@ -317,14 +322,19 @@ function observedPortalIds(project: BordeauxProject, samples: readonly Trajector
     visits.sort((left, right) => left.ratio - right.ratio).forEach((visit) => add(visit.id, index));
   }
   for (const barrier of REBUILT_2026_FIELD.crossingBarriers) {
-    const barrierX = officialToAppPoint({ x: barrier.x, y: 0 }).x;
+    const barrierX = appBarrierX(barrier);
     const lastIndex = samples.length - 1;
     if (footprintSectionAt(project, samples[lastIndex], barrierX)) add(portalAt(barrier, samples[lastIndex], barrierX)?.id, lastIndex);
   }
   return observed;
 }
 
-function requiredPortalSequenceFindings(project: BordeauxProject, path: PathDoc, samples: readonly TrajectorySample[], requiredPortalIds: readonly string[]): PathAnalysisFinding[] {
+function requiredPortalSequenceFindings(
+  project: BordeauxProject,
+  samples: readonly TrajectorySample[],
+  requiredPortalIds: readonly string[],
+  sampleReferenceAt: (index: number) => PathSampleReference,
+): PathAnalysisFinding[] {
   if (requiredPortalIds.length === 0 || samples.length === 0) return [];
   const observed = observedPortalIds(project, samples);
   if (observed.length === requiredPortalIds.length && observed.every((visit, index) => visit.id === requiredPortalIds[index])) return [];
@@ -335,39 +345,55 @@ function requiredPortalSequenceFindings(project: BordeauxProject, path: PathDoc,
     severity: "error",
     kind: "geometry",
     message: `The route must visit ${requiredPortalIds.join(" → ")} in that exact order; the generated path visits ${observed.map((visit) => visit.id).join(" → ") || "no typed portal"}.`,
-    sample: sampleReference(path, samples, sampleIndex),
+    sample: sampleReferenceAt(sampleIndex),
     sourcePath: "request.steps[].traversal",
   }];
 }
 
-export function minimumPathClearance(project: BordeauxProject, samples: readonly TrajectorySample[]): number {
+interface PathClearanceMeasurement {
+  minimum: number;
+  closestSampleIndex: number;
+}
+
+function measurePathClearance(project: BordeauxProject, samples: readonly TrajectorySample[]): PathClearanceMeasurement {
+  const localFootprint = robotFootprintVertices(project.robot);
   let minimum = Number.POSITIVE_INFINITY;
-  for (const sample of samples) {
-    const footprint = robotFootprintAt(project.robot, sample);
-    minimum = Math.min(minimum, footprintBoundsClearance(footprint, FIELD_W, FIELD_H));
-    for (const obstacle of appObstacleBounds()) {
-      minimum = Math.min(minimum, convexPolygonClearance(footprint, boundsPolygon(obstacle)));
+  let closestSampleClearance = Number.POSITIVE_INFINITY;
+  let closestSampleIndex = 0;
+
+  samples.forEach((sample, sampleIndex) => {
+    const footprint = transformFootprint(localFootprint, sample);
+    const footprintBounds = polygonBounds(footprint);
+    let sampleMinimum = footprintBoundsClearance(footprint, FIELD_W, FIELD_H);
+    for (const obstacle of APP_OBSTACLE_POLYGONS) {
+      sampleMinimum = Math.min(sampleMinimum, convexPolygonClearance(footprint, obstacle));
     }
-  }
-  REBUILT_2026_FIELD.crossingBarriers.forEach((barrier) => {
-    const barrierX = officialToAppPoint({ x: barrier.x, y: 0 }).x;
-    for (const sample of samples) {
-      const footprint = robotFootprintAt(project.robot, sample);
-      const footprintBounds = polygonBounds(footprint);
+    REBUILT_2026_FIELD.crossingBarriers.forEach((barrier) => {
+      const barrierX = appBarrierX(barrier);
       const section = verticalLineSection(footprint, barrierX);
       const occupied = section ?? { minY: footprintBounds.min.y, maxY: footprintBounds.max.y };
       const lateral = barrier.portals.reduce((best, portal) => {
         const bounds = portalBounds(portal);
         return Math.max(best, Math.min(occupied.minY - bounds.minY, bounds.maxY - occupied.maxY));
       }, Number.NEGATIVE_INFINITY);
-      if (section) minimum = Math.min(minimum, lateral);
+      if (section) sampleMinimum = Math.min(sampleMinimum, lateral);
       else if (lateral < 0) {
         const longitudinal = barrierX < footprintBounds.min.x
           ? footprintBounds.min.x - barrierX
           : barrierX > footprintBounds.max.x ? barrierX - footprintBounds.max.x : 0;
-        minimum = Math.min(minimum, longitudinal);
+        sampleMinimum = Math.min(sampleMinimum, longitudinal);
       }
+    });
+    minimum = Math.min(minimum, sampleMinimum);
+    const normalizedSampleMinimum = Number.isFinite(sampleMinimum) ? sampleMinimum : 0;
+    if (normalizedSampleMinimum < closestSampleClearance) {
+      closestSampleClearance = normalizedSampleMinimum;
+      closestSampleIndex = sampleIndex;
     }
+  });
+
+  REBUILT_2026_FIELD.crossingBarriers.forEach((barrier) => {
+    const barrierX = appBarrierX(barrier);
     let previousIndex = -1;
     let previousSide = 0;
     samples.forEach((sample, index) => {
@@ -377,7 +403,7 @@ export function minimumPathClearance(project: BordeauxProject, samples: readonly
       if (previousIndex >= 0 && previousSide !== side) {
         const previous = samples[previousIndex];
         const pose = crossingPose(previous, sample, barrierX);
-        const section = footprintSectionAt(project, pose, barrierX);
+        const section = verticalLineSection(transformFootprint(localFootprint, pose), barrierX);
         const portalClearance = barrier.portals.reduce((best, portal) => {
           if (!section) return best;
           const bounds = portalBounds(portal);
@@ -389,13 +415,19 @@ export function minimumPathClearance(project: BordeauxProject, samples: readonly
       previousSide = side;
     });
   });
-  return Number.isFinite(minimum) ? minimum : 0;
+  return {
+    minimum: Number.isFinite(minimum) ? minimum : 0,
+    closestSampleIndex,
+  };
+}
+
+export function minimumPathClearance(project: BordeauxProject, samples: readonly TrajectorySample[]): number {
+  return measurePathClearance(project, samples).minimum;
 }
 
 function analyzeGeneratedPath(
   project: BordeauxProject,
   path: PathDoc,
-  plannerId: TrajectoryPlannerId,
   samples: readonly TrajectorySample[],
   plannerDiagnostics: ValidationIssue[],
   sampleLimit: number,
@@ -405,21 +437,22 @@ function analyzeGeneratedPath(
   requiredPortalIds: readonly string[] = [],
 ): Pick<PathAnalysis, "rawSamples" | "samplesTruncated" | "extrema" | "findings"> {
   const values = measuredValues(samples);
-  const waypointDistances = waypointArrivalIndices(path, samples).map((index) => samples[index].s);
+  const waypointArrivals = waypointArrivalIndices(path, samples);
+  const waypointDistances = waypointArrivals.map((index) => samples[index].s);
+  const sampleReferenceAt = (index: number) => sampleReference(path, samples, index, waypointArrivals);
   const extrema: PathAnalysisExtremum[] = [];
-  const retainedIndices = new Set<number>();
-  retainWaypointArrivals(path, samples, retainedIndices);
+  const retainedIndices = new Set<number>(waypointArrivals);
   const metrics: PathAnalysisMetric[] = ["velocity", "acceleration", "deceleration", "angularVelocity", "angularAcceleration", "angularDeceleration", "jerk", "angularJerk", "curvature"];
   metrics.forEach((metric) => {
     const measured = maxBy(values, metric);
     if (!measured) return;
     retainedIndices.add(measured.sampleIndex);
-    extrema.push({ metric, value: measured.value, unit: measured.unit, sample: sampleReference(path, samples, measured.sampleIndex) });
+    extrema.push({ metric, value: measured.value, unit: measured.unit, sample: sampleReferenceAt(measured.sampleIndex) });
   });
 
   const findings: PathAnalysisFinding[] = [];
-  findings.push(...barrierCrossingFindings(project, path, samples, robotHeightM, requiredTraversal));
-  findings.push(...requiredPortalSequenceFindings(project, path, samples, requiredPortalIds));
+  findings.push(...barrierCrossingFindings(project, samples, sampleReferenceAt, robotHeightM, requiredTraversal));
+  findings.push(...requiredPortalSequenceFindings(project, samples, requiredPortalIds, sampleReferenceAt));
   const checkedMetrics: PathAnalysisMetric[] = ["velocity", "acceleration", "deceleration", "angularVelocity", "angularAcceleration", "angularDeceleration", "jerk", "angularJerk"];
   checkedMetrics.forEach((metric) => {
     const violation = values.filter((item) => item.metric === metric).reduce<{ measured: MeasuredValue; limit: number; source: string; ratio: number } | undefined>((worst, measured) => {
@@ -439,18 +472,16 @@ function analyzeGeneratedPath(
       measured: measured.value,
       limit,
       unit: measured.unit,
-      sample: sampleReference(path, samples, measured.sampleIndex),
+      sample: sampleReferenceAt(measured.sampleIndex),
       sourcePath: source,
       message: `${metric} reaches ${measured.value.toFixed(3)} ${measured.unit}, above the authored ${limit.toFixed(3)} ${measured.unit} limit.`,
     });
   });
 
-  const clearance = minimumPathClearance(project, samples);
+  const clearanceMeasurement = measurePathClearance(project, samples);
+  const clearance = clearanceMeasurement.minimum;
   if (clearance < minimumClearanceM) {
-    const closestIndex = samples.reduce((bestIndex, sample, index) => {
-      const singleton = minimumPathClearance(project, [sample]);
-      return singleton < minimumPathClearance(project, [samples[bestIndex]]) ? index : bestIndex;
-    }, 0);
+    const closestIndex = clearanceMeasurement.closestSampleIndex;
     retainedIndices.add(closestIndex);
     findings.push({
       id: "geometry:field-obstacle-clearance",
@@ -459,7 +490,7 @@ function analyzeGeneratedPath(
       measured: clearance,
       limit: minimumClearanceM,
       unit: "m",
-      sample: sampleReference(path, samples, closestIndex),
+      sample: sampleReferenceAt(closestIndex),
       sourcePath: "field.2026-rebuilt.solidObstacles",
       message: clearance < 0
         ? `The robot footprint intersects a solid field element by ${Math.abs(clearance).toFixed(3)} m.`
@@ -484,15 +515,14 @@ function analyzeGeneratedPath(
 }
 
 export function analyzePath(project: BordeauxProject, pathId: string, options: AnalyzePathOptions = {}): PathAnalysis {
-  const projectClone = clone(project);
-  const pathIndex = projectClone.paths.findIndex((candidate) => candidate.id === pathId);
+  const pathIndex = project.paths.findIndex((candidate) => candidate.id === pathId);
   if (pathIndex < 0) throw new Error(`Path ${pathId} does not exist in the current project.`);
-  const path = projectClone.paths[pathIndex];
-  const plannerId = options.plannerId ?? projectClone.plannerId ?? "profiledSpline";
-  const structural = validateProject(projectClone).issues.filter((item) => item.path.startsWith(`$.paths[${pathIndex}]`));
+  const path = clone(project.paths[pathIndex]);
+  const plannerId = project.plannerId;
+  const structural = validateProject(project).issues.filter((item) => item.path.startsWith(`$.paths[${pathIndex}]`));
   let generated;
   try {
-    generated = getPlanner(plannerId).generate({ path, robot: projectClone.robot, plannerId });
+    generated = getPlanner(plannerId).generate({ path, robot: project.robot });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const structureFindings: PathAnalysisFinding[] = structural.map((item, index) => ({
@@ -505,7 +535,7 @@ export function analyzePath(project: BordeauxProject, pathId: string, options: A
     return {
       pathId: path.id,
       pathName: path.name,
-      authoredPath: clone(path),
+      authoredPath: path,
       planner: plannerId,
       totalTimeS: null,
       totalDistanceM: null,
@@ -524,9 +554,8 @@ export function analyzePath(project: BordeauxProject, pathId: string, options: A
     };
   }
   const measured = analyzeGeneratedPath(
-    projectClone,
+    project,
     path,
-    plannerId,
     generated.samples,
     generated.diagnostics,
     Math.max(50, Math.min(2_000, options.sampleLimit ?? DEFAULT_SAMPLE_LIMIT)),
@@ -545,7 +574,7 @@ export function analyzePath(project: BordeauxProject, pathId: string, options: A
   return {
     pathId: path.id,
     pathName: path.name,
-    authoredPath: clone(path),
+    authoredPath: path,
     planner: generated.planner,
     totalTimeS: generated.totalTimeS,
     totalDistanceM: generated.totalDistanceM,

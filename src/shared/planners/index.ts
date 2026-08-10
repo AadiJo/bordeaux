@@ -1,5 +1,4 @@
 import type { TrajectoryPlanner, TrajectoryPlannerId } from "../types";
-import type { PlannerInput, PlannerResult } from "../types";
 import { optimizedTrajectoryPlanner } from "./optimizedTrajectory";
 import { profiledSplinePlanner } from "./profiledSpline";
 import { applyStationaryActions } from "./stationaryActions";
@@ -35,9 +34,4 @@ export function getPlanner(id: TrajectoryPlannerId): TrajectoryPlanner {
       return applyStationaryActions(path, applyRotationPriority(path, generated, robot), robot);
     },
   };
-}
-
-export async function generateTrajectory(input: PlannerInput): Promise<PlannerResult> {
-  const planner = getPlanner(input.plannerId ?? "profiledSpline");
-  return planner.generate(input);
 }
