@@ -15,7 +15,7 @@
 <!-- Optional: issue numbers this plan closes on ship, e.g. content="3,7". They
      auto-close when the plan is marked done (`lab done … --commit`). -->
 <meta name="thelab:addresses" content="">
-<meta name="thelab:version" content="3">
+<meta name="thelab:version" content="4">
 <meta name="thelab:hosted-url" content="https://thelab.wilsonzach.com/project/bordeaux/plan/renderer-architecture-migration">
 <!-- Optional owner questions. Add 1–8 entries; each needs 2–8 options. -->
 <script type="application/json" id="thelab-questions">[]</script>
@@ -91,20 +91,20 @@
   <p class="lede">Move the existing React renderer from hand-ordered global scripts to Vite-built React + TypeScript modules, keep SVG for the field, and consolidate renderer math into the typed shared domain before considering Canvas or WebGL.</p>
 
   <h2>Implementation progress</h2>
-  <p><strong>Stage 1 is complete.</strong> The production app now loads a Vite-built renderer from <code>dist-renderer</code>. React and ReactDOM are build-time npm dependencies, the CSP-protected HTML has one module entry, renderer globals are isolated in a typed compatibility bootstrap, and the existing UI/SVG implementation has moved under <code>src/renderer/legacy</code> for incremental conversion.</p>
+  <p><strong>Stage 2 is complete.</strong> The production app loads a Vite-built React renderer from <code>dist-renderer</code>. The compatibility bootstrap and <code>src/renderer/legacy</code> tree are gone: components, hooks, domain helpers, styles, and assets now have explicit module ownership and imports. The CSP-protected HTML is only the required Vite mount shell.</p>
   <div class="tbl-scroll"><table class="data">
-    <thead><tr><th>Measured result</th><th>Before</th><th>After stage 1</th></tr></thead>
+    <thead><tr><th>Measured result</th><th>Before</th><th>After stage 2</th></tr></thead>
     <tbody>
-      <tr><td>Production JavaScript</td><td>619,890 bytes across 16 scripts</td><td>409,688 bytes in one bundle (33.9% smaller)</td></tr>
+      <tr><td>Production JavaScript</td><td>619,890 bytes across 16 scripts</td><td>407,881 bytes in one bundle (34.2% smaller)</td></tr>
       <tr><td>Renderer build</td><td>Hand-copied static files</td><td>Vite build with hashed local assets and explicit JS/CSS budgets</td></tr>
       <tr><td>Packaged renderer source</td><td>Raw application and vendored library files</td><td>Only <code>dist-renderer</code>; source and development payloads are rejected</td></tr>
-      <tr><td>Packaged ASAR</td><td>8 MB budget</td><td>7,226,652 bytes after preventing duplicate React packaging</td></tr>
+      <tr><td>Last packaged ASAR (stage 1)</td><td>8 MB budget</td><td>7,226,652 bytes after preventing duplicate React packaging</td></tr>
     </tbody>
   </table></div>
-  <p>Verification completed for stage 1: 197 Vitest tests, renderer and Electron type checks, the full Java/Electron build, source Electron smoke, unpacked-package validation, and packaged-executable smoke. An independent read-only Codex review found no blocking correctness, packaging, CSP/<code>file://</code>, dependency, performance, test, or maintainability issues.</p>
+  <p>Verification for stage 2 covers 197 Vitest tests, renderer and Electron type checks, renderer output budgets, the full Java/Electron build, and Electron smoke behavior.</p>
 
   <h2>Context</h2>
-  <p>The renderer is not pure HTML/CSS today. It ships React 18.3.1, but uses production UMD files, <code>window.*</code> globals, IIFEs, and thousands of manual <code>React.createElement</code> calls. The HTML is only a root element plus sixteen ordered script tags.</p>
+  <p>Before the migration, the renderer shipped React 18.3.1 through production UMD files, <code>window.*</code> globals, IIFEs, and thousands of manual <code>React.createElement</code> calls. The HTML was only a root element plus sixteen ordered script tags.</p>
   <div class="tbl-scroll"><table class="data">
     <thead><tr><th>Current fact</th><th>Consequence</th></tr></thead>
     <tbody>

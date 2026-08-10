@@ -1,11 +1,15 @@
+import * as React from "react";
+import { PointerDrag } from "../hooks/usePointerDrag";
+import { AUTO } from "../lib/routineModel";
+import { UnitPrefs } from "../lib/unitPreferences";
+import { UI } from "./ui";
+
 // Autonomous Routine — routine hierarchy (LEFT rail). Step list + inline Add Step chooser.
 // Stable layout: selecting a step only changes the right inspector. Drag the grip to reorder.
-// Needs React + window.UI + window.AUTO. Exports window.RoutinePanel
-(function () {
   const { useState, useRef } = React;
   const h = React.createElement;
-  const { Icon } = window.UI;
-  const A = window.AUTO;
+  const { Icon } = UI;
+  const A = AUTO;
   const fmt = (t) => (t || 0).toFixed(2) + 's';
 
   // ---- drag-reorder controller (siblings only) ----
@@ -13,7 +17,7 @@
     const [drag, setDrag] = useState(null);   // { id }
     const [over, setOver] = useState(null);    // { id, before }
     const overRef = useRef(null);
-    const pointerDrag = window.PointerDrag.useController();
+    const pointerDrag = PointerDrag.useController();
     const start = (id, e) => {
       e.preventDefault(); e.stopPropagation();
       setDrag({ id }); overRef.current = null; setOver(null);
@@ -92,7 +96,7 @@
     let icon, color, meta, tag, kindCls;
     if (node.type === 'path') {
       const doc = paths.find((path) => path.id === node.ref); icon = 'route'; color = 'var(--accent)'; kindCls = 'path';
-      meta = seg ? (fmt(seg.t1 - seg.t0) + '  ·  ' + window.UnitPrefs.format(seg.deriv.sample.length, 'm', 2)) : (doc ? 'not in run path' : 'unbound');
+      meta = seg ? (fmt(seg.t1 - seg.t0) + '  ·  ' + UnitPrefs.format(seg.deriv.sample.length, 'm', 2)) : (doc ? 'not in run path' : 'unbound');
     } else if (node.type === 'decision') {
       icon = 'branch'; color = '#9aa3b0'; kindCls = 'decision'; meta = 'routes the run';
     } else {
@@ -174,5 +178,4 @@
               h(AddStep, { variant: 'end', onPick: (t, c) => acq.addEnd(t, c) }))));
   }
 
-  window.RoutinePanel = RoutinePanel;
-})();
+export { RoutinePanel };

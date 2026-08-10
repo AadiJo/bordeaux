@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { BordeauxProject } from "../shared/types";
 import type { AgentProposal, AgentSessionSnapshot } from "../shared/agent/types";
 
-contextBridge.exposeInMainWorld("bordeauxAPI", {
+const bordeauxAPI = {
   platform: process.platform,
   openProject: () => ipcRenderer.invoke("project:open"),
   openRecentProject: (index: number) => ipcRenderer.invoke("project:openRecent", index),
@@ -40,4 +40,8 @@ contextBridge.exposeInMainWorld("bordeauxAPI", {
     ipcRenderer.on("menu-command", listener);
     return () => ipcRenderer.removeListener("menu-command", listener);
   },
-});
+};
+
+export type BordeauxAPI = typeof bordeauxAPI;
+
+contextBridge.exposeInMainWorld("bordeauxAPI", bordeauxAPI);

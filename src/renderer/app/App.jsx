@@ -1,11 +1,21 @@
-// Bordeaux — app root. Needs React, ReactDOM, PM, UI, FieldView, ContextInspector, Panels, RobotPage.
-(function () {
+import * as React from "react";
+import { ContextInspector } from "../components/ContextInspector";
+import { FIELD_DIMS, FieldView } from "../components/FieldView";
+import { Panels } from "../components/Panels";
+import { RobotPage } from "../components/RobotPage";
+import { RoutineTransport, StepInspector } from "../components/RoutineInspector";
+import { RoutinePanel } from "../components/RoutinePanel";
+import { UI } from "../components/ui";
+import { PM } from "../lib/pathMath";
+import { PathLinks } from "../lib/pathLinks";
+import { AUTO } from "../lib/routineModel";
+import { UnitPrefs } from "../lib/unitPreferences";
+
+// Bordeaux application root.
   const { useState, useRef, useEffect, useMemo, useCallback, useSyncExternalStore } = React;
   const h = React.createElement;
-  const { FIELD_W, FIELD_H, IMG_W, IMG_H } = window.FIELD_DIMS;
+  const { FIELD_W, FIELD_H, IMG_W, IMG_H } = FIELD_DIMS;
   const PERSEG = 56;
-  document.documentElement.dataset.platform = window.bordeauxAPI?.platform || 'web';
-
   const clone = (o) => JSON.parse(JSON.stringify(o));
   const clampWorld = (p) => ({ x: Math.max(0, Math.min(FIELD_W, p.x)), y: Math.max(0, Math.min(FIELD_H, p.y)) });
   const pathId = () => 'path_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
@@ -39,7 +49,7 @@
     project.routine = project.routines.find((routine) => routine.id === project.activeRoutineId) || project.routines[0];
     project.pathLinks = Array.isArray(project.pathLinks) ? project.pathLinks.filter((link) => link && link.fromPathId && link.toPathId).map((link) => ({ ...link, id: link.id || pathLinkId() })) : [];
     project.plannerId = project.plannerId === 'optimizedTrajectory' ? 'optimizedTrajectory' : 'profiledSpline';
-    return window.PathLinks.reconcile(project);
+    return PathLinks.reconcile(project);
   }
 
   const ACCENT = '#3f6fd0';
@@ -68,14 +78,14 @@
 
   function buildWps(raw) {
     const out = raw.map((w) => ({ linked: true, thetaOn: false, theta: 0, stop: false, ...w }));
-    out.forEach((w, i) => { const hd = window.PM.autoHandles(out, i); if (!w.prevC) w.prevC = hd.prevC; if (!w.nextC) w.nextC = hd.nextC; });
+    out.forEach((w, i) => { const hd = PM.autoHandles(out, i); if (!w.prevC) w.prevC = hd.prevC; if (!w.nextC) w.nextC = hd.nextC; });
     out.forEach((w, i) => { if (!w.stop && i > 0 && i < out.length - 1) alignWaypointHandles(w); });
     if (out.length) { out[0].thetaOn = true; out[out.length - 1].thetaOn = true; }
     return out;
   }
 
   function remapWaypointRanges(doc, oldToNew, removedIndex) {
-    doc.ranges = (doc.ranges || []).map((range) => window.PM.remapWaypointRange(range, oldToNew, removedIndex, doc.waypoints.length));
+    doc.ranges = (doc.ranges || []).map((range) => PM.remapWaypointRange(range, oldToNew, removedIndex, doc.waypoints.length));
   }
 
   // ---- blank startup path ----
@@ -157,34 +167,34 @@
   const usePlayback = (store) => useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   function PlaybackField({ store, ...props }) {
     const playback = usePlayback(store);
-    return h(window.FieldView, { ...props, playTime: playback.time });
+    return h(FieldView, { ...props, playTime: playback.time });
   }
   function PlaybackTransport({ store, ...props }) {
     const playback = usePlayback(store);
-    return h(window.Panels.Transport, { ...props, playTime: playback.time, playing: playback.playing,
+    return h(Panels.Transport, { ...props, playTime: playback.time, playing: playback.playing,
       togglePlayback: store.toggle, seek: store.seek, restart: store.restart });
   }
   function RoutinePanelPlayback({ store, ...props }) {
     const playback = usePlayback(store);
-    return h(window.RoutinePanel, { ...props, time: playback.time, running: playback.playing || playback.time > 0.001 });
+    return h(RoutinePanel, { ...props, time: playback.time, running: playback.playing || playback.time > 0.001 });
   }
   function RoutineFieldPlayback({ store, run, selectedId, robot, ...props }) {
     const playback = usePlayback(store), running = playback.playing || playback.time > 0.001;
-    const overlay = useMemo(() => window.AUTO.fieldOverlay(run, { time: playback.time, running, selectedId }), [run, playback.time, running, selectedId]);
-    const pose = window.AUTO.poseAt(run, playback.time, robot);
-    return h(window.FieldView, { ...props, robot, playTime: 0, routine: overlay, routinePose: pose });
+    const overlay = useMemo(() => AUTO.fieldOverlay(run, { time: playback.time, running, selectedId }), [run, playback.time, running, selectedId]);
+    const pose = AUTO.poseAt(run, playback.time, robot);
+    return h(FieldView, { ...props, robot, playTime: 0, routine: overlay, routinePose: pose });
   }
   function RoutineTransportPlayback({ store, run, outcomes }) {
     const playback = usePlayback(store), running = playback.playing || playback.time > 0.001;
     const controls = useMemo(() => ({
       toggle: store.toggle, play: store.play, reset: store.reset, seek: store.seek,
       step: (direction) => {
-        const time = store.getSnapshot().time, index = window.AUTO.stepAt(run, time);
+        const time = store.getSnapshot().time, index = AUTO.stepAt(run, time);
         const next = run.steps[Math.max(0, Math.min(run.steps.length - 1, index + direction))];
         store.seek(next ? next.t0 + (next.dur > 0 ? Math.min(0.05, next.dur / 2) : 0) : time);
       },
     }), [store, run]);
-    return h(window.RoutineTransport, { run, time: playback.time, playing: playback.playing, controls, running, outcomes });
+    return h(RoutineTransport, { run, time: playback.time, playing: playback.playing, controls, running, outcomes });
   }
 
   function App() {
@@ -214,8 +224,8 @@
     const agentRevision = useRef(-1);
     const [javaProjectState, setJavaProjectState] = useState({ status: 'unlinked', operation: null, catalog: null, integration: null, error: '', notice: '', bookmarkId: null, recentProjects: [] });
     const [exportError, setExportError] = useState('');
-    const [unitSystem, setUnitSystemState] = useState(() => window.UnitPrefs.current());
-    const setUnitSystem = useCallback((next) => setUnitSystemState(window.UnitPrefs.set(next)), []);
+    const [unitSystem, setUnitSystemState] = useState(() => UnitPrefs.current());
+    const setUnitSystem = useCallback((next) => setUnitSystemState(UnitPrefs.set(next)), []);
     const javaRestoreGeneration = useRef(0);
     const skipDirty = useRef(true);
     const keyboardNavigation = useRef(false);
@@ -474,7 +484,7 @@
 
     // ---- derived path data ----
     const derivation = useMemo(() => {
-      try { return { value: window.PM.derivePath(doc, robot, PERSEG, selectedPlannerId), error: null }; }
+      try { return { value: PM.derivePath(doc, robot, PERSEG, selectedPlannerId), error: null }; }
       catch (error) { return { value: null, error }; }
     }, [doc, robot, selectedPlannerId]);
     if (derivation.value) lastDerived.current = derivation.value;
@@ -486,7 +496,7 @@
     // ---- doc mutation ----
     const writeDoc = useCallback((nd) => { setProject((pr) => {
       const paths = pr.paths.slice(), before = paths[activeIdx]; paths[activeIdx] = nd;
-      return window.PathLinks.sync({ ...pr, paths }, nd.id, before);
+      return PathLinks.sync({ ...pr, paths }, nd.id, before);
     }); }, [activeIdx]);
     const beginHistory = useCallback(() => { hist.current.past.push(clone(docRef.current)); if (hist.current.past.length > 80) hist.current.past.shift(); hist.current.future = []; projectHist.current.future = []; force((x) => x + 1); }, []);
     const commit = useCallback((fn) => { beginHistory(); writeDoc(fn(clone(docRef.current))); }, [beginHistory, writeDoc]);
@@ -548,7 +558,7 @@
       const pts = derived.sample.pts || [];
       const f = selectedVisit && Number.isFinite(selectedVisit.f)
         ? selectedVisit.f
-        : (pts.length > 1 ? window.PM.nearestFraction(p.x, p.y, pts) : 0.5);
+        : (pts.length > 1 ? PM.nearestFraction(p.x, p.y, pts) : 0.5);
       let segment = Number.isInteger(segmentHint) ? segmentHint : (selectedVisit && Number.isInteger(selectedVisit.seg) ? selectedVisit.seg : 0);
       if (!Number.isInteger(segmentHint) && derived.wpFrac && derived.wpFrac.length > 1) {
         for (let i = 0; i < derived.wpFrac.length - 1; i++) {
@@ -564,7 +574,7 @@
           : null);
       const nearest = onPath && selectedVisit && selectedVisit.seg === segment && Number.isFinite(selectedVisit.x) && Number.isFinite(selectedVisit.y)
         ? { x: selectedVisit.x, y: selectedVisit.y, t: selectedT, heading: selectedVisit.heading || 0 }
-        : (onPath && pts.length > 1 ? window.PM.nearestPointOnSegment(p, pts, segment) : null);
+        : (onPath && pts.length > 1 ? PM.nearestPointOnSegment(p, pts, segment) : null);
       const projected = nearest || p;
       const originalType = (wps[segment] && wps[segment].segType) || 'bezier';
       const nw = { x: projected.x, y: projected.y, linked: true, thetaOn: false, theta: 0, stop: false, segType: originalType };
@@ -578,7 +588,7 @@
       if (onPath && originalType === 'bezier' && (selectedPlannerId === 'profiledSpline' || selectedPlannerId === 'optimizedTrajectory')) {
         const a = wps[segment], b = wps[segment + 1], t = nearest && Number.isFinite(nearest.t) ? Math.max(0.001, Math.min(0.999, nearest.t)) : 0.5;
         if (a && b && a.nextC && b.prevC) {
-          const split = window.PM.splitBezier(a, a.nextC, b.prevC, b, t);
+          const split = PM.splitBezier(a, a.nextC, b.prevC, b, t);
           nw.x = split.point.x; nw.y = split.point.y; nw.prevC = split.left[2]; nw.nextC = split.right[1];
           a.nextC = split.left[1]; b.prevC = split.right[2];
         }
@@ -596,7 +606,7 @@
       wps.splice(insertAt, 0, nw);
       remapWaypointRanges(candidate, Array.from({ length: oldCount }, (_, index) => index < insertAt ? index : index + 1));
       if (!nw.prevC || !nw.nextC) {
-        const hd = window.PM.autoHandles(wps, insertAt);
+        const hd = PM.autoHandles(wps, insertAt);
         nw.prevC = hd.prevC; nw.nextC = hd.nextC;
       }
       candidate._selAfter = insertAt;
@@ -607,7 +617,7 @@
       const prepared = prepareWaypointInsertion(p, segmentHint, onPath, selectedVisit);
       if (prepared.previewRequired) {
         try {
-          const previewDerived = window.PM.derivePath(prepared.doc, robot, PERSEG, selectedPlannerId);
+          const previewDerived = PM.derivePath(prepared.doc, robot, PERSEG, selectedPlannerId);
           const message = 'Splitting this ' + prepared.segmentType + ' may rebuild its geometry. Review the dashed path first.';
           setWaypointPreview({ ...prepared, derived: previewDerived, plannerId: selectedPlannerId, message });
         } catch (error) {
@@ -658,7 +668,7 @@
 
       if (segmentType === 'clothoid') {
         try {
-          const previewDerived = window.PM.derivePath(candidate, robot, PERSEG, selectedPlannerId);
+          const previewDerived = PM.derivePath(candidate, robot, PERSEG, selectedPlannerId);
           const message = 'The new clothoid join may rebuild the previous turn. Review the dashed path first.';
           setWaypointPreview({ doc: candidate, index: oldCount, derived: previewDerived, plannerId: selectedPlannerId, message, actionLabel: 'Place endpoint' });
         } catch (error) {
@@ -687,7 +697,7 @@
         ? anchor.turnInPlace.headingDeg * Math.PI / 180
         : derived.metrics && derived.metrics.head ? derived.metrics.head[lastIndex] : (anchor.theta || 0) * Math.PI / 180;
       const physicalBaseRad = baseRad + (derived.rev ? Math.PI : 0);
-      if (!window.PM.jigglePositions(anchor, physicalBaseRad, config, { w: FIELD_W, h: FIELD_H })) return false;
+      if (!PM.jigglePositions(anchor, physicalBaseRad, config, { w: FIELD_W, h: FIELD_H })) return false;
       commit((d) => {
         d.waypoints[d.waypoints.length - 1].jiggle = config;
         d.goalVel = 0;
@@ -732,7 +742,7 @@
     }); select(null, -1); }, [commit, select]);
 
     const enableTargetsAtFraction = (d, f) => {
-      const fractions = derived.wpFrac || window.PM.waypointFracs(d, derived.sample);
+      const fractions = derived.wpFrac || PM.waypointFracs(d, derived.sample);
       let segment = 0;
       for (let i = 0; i < d.waypoints.length - 1; i++) {
         if (f >= (fractions[i] || 0) - 1e-6) segment = i;
@@ -742,29 +752,29 @@
     };
     const addTargetAt = useCallback((p, visitFraction) => commit((d) => {
       const pts = derived.sample.pts;
-      const f = Number.isFinite(visitFraction) ? visitFraction : (pts.length > 1 ? window.PM.nearestFraction(p.x, p.y, pts) : 0.5);
-      const deg = pts.length > 1 ? window.PM.pointAtFraction(f, pts).heading * 180 / Math.PI : 0;
+      const f = Number.isFinite(visitFraction) ? visitFraction : (pts.length > 1 ? PM.nearestFraction(p.x, p.y, pts) : 0.5);
+      const deg = pts.length > 1 ? PM.pointAtFraction(f, pts).heading * 180 / Math.PI : 0;
       d.targets.push({ f, deg });
       enableTargetsAtFraction(d, f);
       d._selT = d.targets.length - 1;
       return d;
     }), [commit, derived]);
-    const addMarkerAt = useCallback((p, visitFraction) => commit((d) => { const f = Number.isFinite(visitFraction) ? visitFraction : (derived.sample.pts.length > 1 ? window.PM.nearestFraction(p.x, p.y, derived.sample.pts) : 0.5); d.markers.push({ id: markerId(), f, name: 'event' + (d.markers.length + 1), cmd: 'none', group: 'sequential' }); d._selM = d.markers.length - 1; return d; }), [commit, derived]);
+    const addMarkerAt = useCallback((p, visitFraction) => commit((d) => { const f = Number.isFinite(visitFraction) ? visitFraction : (derived.sample.pts.length > 1 ? PM.nearestFraction(p.x, p.y, derived.sample.pts) : 0.5); d.markers.push({ id: markerId(), f, name: 'event' + (d.markers.length + 1), cmd: 'none', group: 'sequential' }); d._selM = d.markers.length - 1; return d; }), [commit, derived]);
     useEffect(() => { if (doc._selT != null) { select('rt', doc._selT); mutate((d) => { delete d._selT; return d; }); } }, [doc._selT]);
     useEffect(() => { if (doc._selM != null) { select('em', doc._selM); mutate((d) => { delete d._selM; return d; }); } }, [doc._selM]);
 
-    const moveTargetTo = useCallback((i, p, visitFraction) => mutate((d) => { const t = d.targets[i]; if (!t) return d; const f = Number.isFinite(visitFraction) ? visitFraction : window.PM.nearestFraction(p.x, p.y, derived.sample.pts); t.f = f; if (t.anchor === 'dist') t.d = +(f * (derived.sample.length || 0)).toFixed(3); return d; }), [mutate, derived]);
+    const moveTargetTo = useCallback((i, p, visitFraction) => mutate((d) => { const t = d.targets[i]; if (!t) return d; const f = Number.isFinite(visitFraction) ? visitFraction : PM.nearestFraction(p.x, p.y, derived.sample.pts); t.f = f; if (t.anchor === 'dist') t.d = +(f * (derived.sample.length || 0)).toFixed(3); return d; }), [mutate, derived]);
     const rotateTargetTo = useCallback((i, p, snap) => mutate((d) => {
       const target = d.targets[i]; if (!target) return d;
-      const f = window.PM.featureFraction(target, derived.sample);
-      const center = window.PM.pointAtFraction(f, derived.sample.pts);
+      const f = PM.featureFraction(target, derived.sample);
+      const center = PM.pointAtFraction(f, derived.sample.pts);
       let deg = Math.atan2(p.y - center.y, p.x - center.x) * 180 / Math.PI;
       if (snap) deg = Math.round(deg / 15) * 15;
       target.deg = Math.round(deg * 10) / 10;
       return d;
     }), [mutate, derived]);
-    const moveMarkerTo = useCallback((i, p, visitFraction) => mutate((d) => { const m = d.markers[i]; if (!m) return d; const f = Number.isFinite(visitFraction) ? visitFraction : window.PM.nearestFraction(p.x, p.y, derived.sample.pts); m.f = f; if (m.anchor === 'dist') m.d = +(f * (derived.sample.length || 0)).toFixed(3); return d; }), [mutate, derived]);
-    const setFeature = (items, i, patch) => { const item = items[i]; if (!item) return; if (patch.anchor) { const f = window.PM.featureFraction(item, derived.sample); item.f = f; if (patch.anchor === 'dist') item.d = +(f * (derived.sample.length || 0)).toFixed(3); else delete item.d; } Object.assign(item, patch); };
+    const moveMarkerTo = useCallback((i, p, visitFraction) => mutate((d) => { const m = d.markers[i]; if (!m) return d; const f = Number.isFinite(visitFraction) ? visitFraction : PM.nearestFraction(p.x, p.y, derived.sample.pts); m.f = f; if (m.anchor === 'dist') m.d = +(f * (derived.sample.length || 0)).toFixed(3); return d; }), [mutate, derived]);
+    const setFeature = (items, i, patch) => { const item = items[i]; if (!item) return; if (patch.anchor) { const f = PM.featureFraction(item, derived.sample); item.f = f; if (patch.anchor === 'dist') item.d = +(f * (derived.sample.length || 0)).toFixed(3); else delete item.d; } Object.assign(item, patch); };
     const setTarget = useCallback((i, patch) => commit((d) => { setFeature(d.targets, i, patch); return d; }), [commit, derived]);
     const delTarget = useCallback((i) => { commit((d) => { d.targets.splice(i, 1); return d; }); select(null, -1); }, [commit, select]);
     const setMarker = useCallback((i, patch) => commit((d) => { setFeature(d.markers, i, patch); return d; }), [commit, derived]);
@@ -773,7 +783,7 @@
     const addRange = useCallback((f0, f1) => commit((d) => {
       if (!d.ranges) d.ranges = [];
       const a = Math.max(0, Math.min(f0, f1)), b = Math.min(1, Math.max(f0, f1));
-      const c = window.PM.effectiveConstraints(d.constraints, robot);
+      const c = PM.effectiveConstraints(d.constraints, robot);
       // purely where it was drawn (percent of path), inheriting the robot limits
       d.ranges.push({ f0: a, f1: b, anchor: 'param', maxVel: c.maxVel, maxAccel: c.maxAccel, maxDecel: (c.maxDecel != null ? c.maxDecel : c.maxAccel), maxAngVel: c.maxAngVel, maxAngAccel: c.maxAngAccel });
       d._selR = d.ranges.length - 1; return d;
@@ -798,7 +808,7 @@
         range.d0 = +(f0 * length).toFixed(3); range.d1 = +(f1 * length).toFixed(3);
         delete range.w0; delete range.w1; delete range.t0; delete range.t1;
       } else if (anchor === 'wp') {
-        const fractions = window.PM.waypointFracs(d, derived.sample);
+        const fractions = PM.waypointFracs(d, derived.sample);
         const start = localRangeEndpoint(f0, fractions), end = localRangeEndpoint(f1, fractions);
         range.w0 = start.waypoint; range.t0 = start.local; range.w1 = end.waypoint; range.t1 = end.local;
         delete range.d0; delete range.d1;
@@ -813,7 +823,7 @@
       const len = derived.sample.length || 1;
       if (rg.anchor === 'dist') { rg[which ? 'd1' : 'd0'] = +(cf * len).toFixed(2); }
       else if (rg.anchor === 'wp') {
-        const wf = window.PM.waypointFracs(d, derived.sample);
+        const wf = PM.waypointFracs(d, derived.sample);
         const local = localRangeEndpoint(cf, wf);
         rg[which ? 'w1' : 'w0'] = local.waypoint; rg[which ? 't1' : 't0'] = local.local;
       }
@@ -830,7 +840,7 @@
     // ---- modeless “add” actions: create + select, then edit on canvas / inspector ----
     const addTargetMid = useCallback(() => commit((d) => {
       const pts = derived.sample.pts;
-      const deg = pts.length > 1 ? window.PM.pointAtFraction(0.5, pts).heading * 180 / Math.PI : 0;
+      const deg = pts.length > 1 ? PM.pointAtFraction(0.5, pts).heading * 180 / Math.PI : 0;
       d.targets.push({ f: 0.5, deg });
       enableTargetsAtFraction(d, 0.5);
       d._selT = d.targets.length - 1;
@@ -899,7 +909,7 @@
     const nudgeWp = useCallback((i, dx, dy) => commit((d) => { const w = d.waypoints[i]; if (!w) return d; const nx = Math.max(0, Math.min(FIELD_W, w.x + dx)), ny = Math.max(0, Math.min(FIELD_H, w.y + dy)); const ddx = nx - w.x, ddy = ny - w.y; w.x = nx; w.y = ny; if (w.prevC) { w.prevC.x += ddx; w.prevC.y += ddy; } if (w.nextC) { w.nextC.x += ddx; w.nextC.y += ddy; } return d; }), [commit]);
     const nudgeFrac = useCallback((kind, i, df) => commit((d) => {
       const arr = kind === 'rt' ? d.targets : d.markers; const item = arr[i]; if (!item) return d;
-      const f = Math.max(0, Math.min(1, window.PM.featureFraction(item, derived.sample) + df));
+      const f = Math.max(0, Math.min(1, PM.featureFraction(item, derived.sample) + df));
       item.f = f; if (item.anchor === 'dist') item.d = +(f * (derived.sample.length || 0)).toFixed(3);
       return d;
     }), [commit, derived]);
@@ -929,7 +939,7 @@
       const next = clampWorld({ x: src.x + 0.4, y: src.y + 0.4 }); src.x = next.x; src.y = next.y;
       d.waypoints.splice(i + 1, 0, src);
       remapWaypointRanges(d, Array.from({ length: oldCount }, (_, index) => index <= i ? index : index + 1));
-      const hd = window.PM.autoHandles(d.waypoints, i + 1); src.prevC = hd.prevC; src.nextC = hd.nextC;
+      const hd = PM.autoHandles(d.waypoints, i + 1); src.prevC = hd.prevC; src.nextC = hd.nextC;
       d.waypoints[0].thetaOn = true; d.waypoints[d.waypoints.length - 1].thetaOn = true;
       d._selAfter = i + 1; return d;
     }), [commit]);
@@ -1005,7 +1015,7 @@
       if (!pts || pts.length < 2) return;
       const lo = derived.wpFrac && Number.isFinite(derived.wpFrac[i]) ? derived.wpFrac[i] : i / Math.max(1, doc.waypoints.length - 1);
       const hi = derived.wpFrac && Number.isFinite(derived.wpFrac[i + 1]) ? derived.wpFrac[i + 1] : (i + 1) / Math.max(1, doc.waypoints.length - 1);
-      addWaypoint(window.PM.pointAtFraction((lo + hi) / 2, pts), i, true);
+      addWaypoint(PM.pointAtFraction((lo + hi) / 2, pts), i, true);
     }, [addWaypoint, derived, doc.waypoints.length]);
     const inspActions = { setWp, toggleStop, toggleTheta, setHandleLen, delWp, setTarget, delTarget, setMarker, delMarker, setRange, setRangeAnchor, delRange, setConstraint, setDoc, rename, select, setTool,
       addTargetMid, addMarkerMid, addRangeMid,
@@ -1057,7 +1067,7 @@
       const paths = pr.paths.slice(), source = paths.find((path) => path.id === fromPathId), targetIndex = paths.findIndex((path) => path.id === toPathId);
       if (!source || targetIndex < 0) return pr;
       const target = clone(paths[targetIndex]), end = source.waypoints[source.waypoints.length - 1];
-      target.waypoints[0] = window.PathLinks.copyPose(target.waypoints[0], end); paths[targetIndex] = target;
+      target.waypoints[0] = PathLinks.copyPose(target.waypoints[0], end); paths[targetIndex] = target;
       return { ...pr, paths, pathLinks: [...pathLinks, { id: pathLinkId(), fromPathId, toPathId }] };
     });
     const dupPath = (i) => {
@@ -1069,7 +1079,7 @@
     const delPath = (i) => {
       if (project.paths.length <= 1) return false;
       const target = project.paths[i]; let referenced = false;
-      routines.forEach((candidate) => window.AUTO.walk(candidate.nodes, (node) => { if (node.type === 'path' && node.ref === target.id) referenced = true; }));
+      routines.forEach((candidate) => AUTO.walk(candidate.nodes, (node) => { if (node.type === 'path' && node.ref === target.id) referenced = true; }));
       if (referenced) { alert('“' + target.name + '” is used by an autonomous routine. Remove those routine steps before deleting the path.'); return false; }
       if (!confirm('Delete path “' + target.name + '”? This cannot be undone.')) return false;
       setProject((pr) => { const paths = pr.paths.filter((_, k) => k !== i); return { ...pr, paths, pathLinks: (pr.pathLinks || []).filter((link) => link.fromPathId !== target.id && link.toPathId !== target.id) }; });
@@ -1141,7 +1151,7 @@
     const agentProposalPreviews = useMemo(() => agentCandidates.flatMap((candidate) => {
       if (!candidate.path) return [];
       try {
-        return [{ id: candidate.id, label: candidate.label, selected: candidate.id === (agentCandidate && agentCandidate.id), valid: candidate.valid !== false, derived: window.PM.derivePath(candidate.path, robot, PERSEG, plannerId) }];
+        return [{ id: candidate.id, label: candidate.label, selected: candidate.id === (agentCandidate && agentCandidate.id), valid: candidate.valid !== false, derived: PM.derivePath(candidate.path, robot, PERSEG, plannerId) }];
       }
       catch (_) { return []; }
     }), [agentProposal, agentCandidateId, robot, plannerId]);
@@ -1164,7 +1174,7 @@
         if (nextIndex < 0) return;
         const replacement = clone(agentCandidate.path); replacement.id = project.paths[nextIndex].id;
         const paths = project.paths.slice(), beforePath = paths[nextIndex]; paths[nextIndex] = replacement;
-        nextProject = window.PathLinks.sync({ ...project, paths }, replacement.id, beforePath);
+        nextProject = PathLinks.sync({ ...project, paths }, replacement.id, beforePath);
       } else {
         nextIndex = project.paths.length;
         nextProject = { ...project, paths: [...project.paths, clone(agentCandidate.path)] };
@@ -1182,7 +1192,7 @@
     const lastRun = useRef({ steps: [], total: 0 });
     const run = useMemo(() => {
       if (page !== 'auto') return lastRun.current;
-      const nextRun = window.AUTO.buildRun(routine, project.paths, robot, routineOutcomes, plannerId);
+      const nextRun = AUTO.buildRun(routine, project.paths, robot, routineOutcomes, plannerId);
       lastRun.current = nextRun;
       return nextRun;
     }, [page, routine, project.paths, robot, routineOutcomes, plannerId]);
@@ -1191,20 +1201,20 @@
 
     const acq = useMemo(() => ({
       outcomes: routineOutcomes,
-      set: (id, patch) => setRoutine((r) => window.AUTO.update(r, id, patch)),
+      set: (id, patch) => setRoutine((r) => AUTO.update(r, id, patch)),
       del: (id) => {
-        const node = window.AUTO.findNode(routine, id);
-        const label = node ? window.AUTO.nodeTitle(node, project.paths) : 'this routine step';
+        const node = AUTO.findNode(routine, id);
+        const label = node ? AUTO.nodeTitle(node, project.paths) : 'this routine step';
         if (!confirm('Delete “' + label + '” from the routine? Decision branches beneath it will also be removed.')) return;
-        setRoutine((r) => window.AUTO.remove(r, id)); setRoutineSel(null);
+        setRoutine((r) => AUTO.remove(r, id)); setRoutineSel(null);
       },
-      move: (id, dir) => setRoutine((r) => window.AUTO.move(r, id, dir)),
-      reorder: (id, targetId, before) => setRoutine((r) => window.AUTO.reorderRelative(r, id, targetId, before)),
+      move: (id, dir) => setRoutine((r) => AUTO.move(r, id, dir)),
+      reorder: (id, targetId, before) => setRoutine((r) => AUTO.reorderRelative(r, id, targetId, before)),
       select: (id) => setRoutineSel(id),
-      addAfter: (id, type, cat) => setRoutine((r) => { const nn = window.AUTO.newNode(type, cat, project.paths[0].id); setRoutineSel(nn.id); return window.AUTO.insertAfter(r, id, nn); }),
-      addBranch: (decId, br, type, cat) => setRoutine((r) => { const nn = window.AUTO.newNode(type, cat, project.paths[0].id); setRoutineSel(nn.id); return window.AUTO.appendBranch(r, decId, br, nn); }),
-      addEnd: (type, cat) => setRoutine((r) => { const nn = window.AUTO.newNode(type, cat, project.paths[0].id); setRoutineSel(nn.id); return window.AUTO.append(r, nn); }),
-      prepend: (type, cat) => setRoutine((r) => { const nn = window.AUTO.newNode(type, cat, project.paths[0].id); setRoutineSel(nn.id); return window.AUTO.prepend(r, nn); }),
+      addAfter: (id, type, cat) => setRoutine((r) => { const nn = AUTO.newNode(type, cat, project.paths[0].id); setRoutineSel(nn.id); return AUTO.insertAfter(r, id, nn); }),
+      addBranch: (decId, br, type, cat) => setRoutine((r) => { const nn = AUTO.newNode(type, cat, project.paths[0].id); setRoutineSel(nn.id); return AUTO.appendBranch(r, decId, br, nn); }),
+      addEnd: (type, cat) => setRoutine((r) => { const nn = AUTO.newNode(type, cat, project.paths[0].id); setRoutineSel(nn.id); return AUTO.append(r, nn); }),
+      prepend: (type, cat) => setRoutine((r) => { const nn = AUTO.newNode(type, cat, project.paths[0].id); setRoutineSel(nn.id); return AUTO.prepend(r, nn); }),
       setOutcome: (id, br) => setRoutineOutcomes((o) => ({ ...o, [id]: br })),
       openInEditor: (id) => { const idx = project.paths.findIndex((path) => path.id === id); if (idx >= 0) { setActive(idx); setPage('plan'); } },
     }), [routineOutcomes, routine, project.paths]);
@@ -1370,13 +1380,13 @@
       return () => window.removeEventListener('keydown', onKey);
     }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, nudgeWp, nudgeFrac, playbackStore]);
 
-    const selNode = (page === 'auto' && routineSel) ? window.AUTO.findNode(routine, routineSel) : null;
+    const selNode = (page === 'auto' && routineSel) ? AUTO.findNode(routine, routineSel) : null;
 
     return h('div', { className: 'app' },
-      h(window.Panels.Toolbar, { project, page, setPage, alliance, setAlliance, exportError, unitSystem, setUnitSystem, onNew: newProject, onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo, onExportJava: () => onExportJava('linked'), javaProject: javaProjectState, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
+      h(Panels.Toolbar, { project, page, setPage, alliance, setAlliance, exportError, unitSystem, setUnitSystem, onNew: newProject, onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo, onExportJava: () => onExportJava('linked'), javaProject: javaProjectState, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
         routines, activeRoutineId: routine.id, setActiveRoutine, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine }),
       page === 'robot'
-        ? h('main', { className: 'page-main' }, h(window.RobotPage, { robot, setRobot, accent, mcpEnabled, agentProposal: agentProposal && agentProposal.operation === 'configureRobot' ? agentProposal : null, onApplyProposal: applyAgentProposal, onRejectProposal: rejectAgentProposal }))
+        ? h('main', { className: 'page-main' }, h(RobotPage, { robot, setRobot, accent, mcpEnabled, agentProposal: agentProposal && agentProposal.operation === 'configureRobot' ? agentProposal : null, onApplyProposal: applyAgentProposal, onRejectProposal: rejectAgentProposal }))
         : page === 'auto'
         ? h('main', { className: 'stage stage-auto' },
             h('nav', { className: 'rail rail-l', 'aria-label': 'Autonomous routine steps' },
@@ -1384,14 +1394,14 @@
             h('div', { className: 'fieldcol' },
               h(RoutineFieldPlayback, { store: routinePlaybackStore, run, selectedId: routineSel, doc, derived, sel: { kind: null, idx: -1 }, tool: 'select', view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, actions: autoFieldActions, onSelPos: () => {} }),
               h(RoutineTransportPlayback, { store: routinePlaybackStore, run, outcomes: routineOutcomes }),
-              h(window.Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
+              h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
             h('aside', { className: 'rail rail-r' + (selNode ? '' : ' collapsed'), 'aria-label': 'Routine step inspector' },
-              selNode && h(window.StepInspector, { node: selNode, paths: project.paths, acq, run, javaProject: { ...javaProjectState, link: linkJavaProject } })))
+              selNode && h(StepInspector, { node: selNode, paths: project.paths, acq, run, javaProject: { ...javaProjectState, link: linkJavaProject } })))
         : h('main', { className: 'stage stage-plan' },
             h('nav', { className: 'rail rail-l' + (outlineOpen ? '' : ' collapsed'), 'aria-label': 'Path outline' },
-              h(window.Panels.Outline, { open: outlineOpen, setOpen: setOutlineOpen, doc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot })),
+              h(Panels.Outline, { open: outlineOpen, setOpen: setOutlineOpen, doc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot })),
             h('div', { className: 'fieldcol' },
-              h(window.Panels.ToolRail, { tool, setTool }),
+              h(Panels.ToolRail, { tool, setTool }),
               exportError && h('div', { className: 'insert-preview export-error-banner', role: 'alert' },
                 h('div', { className: 'insert-preview-copy' }, h('b', null, 'Export failed'), h('span', null, exportError)),
                 h('button', { type: 'button', 'aria-label': 'Dismiss export error', onClick: () => setExportError('') }, '\u00d7')),
@@ -1413,7 +1423,7 @@
                   h('span', null, agentProposal.intent),
                   h('span', { className: 'agent-proposal-status' }, agentProposal.status === 'ready' ? 'Preview only — the project has not changed.' : agentProposal.status === 'stale' ? 'Stale — the project changed. Ask the agent to regenerate.' : agentProposal.status === 'applied' ? 'Applied as one undoable project change.' : 'Rejected.'),
                   agentProposal.status === 'ready' && h('div', { className: 'agent-candidates', role: 'radiogroup', 'aria-label': 'Agent proposal candidates' }, agentCandidates.map((candidate) => h('button', { key: candidate.id, type: 'button', role: 'radio', 'aria-checked': agentCandidate && candidate.id === agentCandidate.id, className: agentCandidate && candidate.id === agentCandidate.id ? 'selected' : '', onClick: () => setAgentCandidateId(candidate.id) }, candidate.label + (candidate.valid === false ? ' · invalid' : candidate.metrics ? ' · ' + candidate.metrics.totalTimeS.toFixed(2) + ' s' : '')))),
-                  agentCandidate && agentCandidate.metrics && h('span', null, window.UnitPrefs.format(agentCandidate.metrics.totalDistanceM, 'm', 2) + ' · ' + window.UnitPrefs.format(agentCandidate.metrics.minimumClearanceM, 'm', 2) + ' modeled clearance'),
+                  agentCandidate && agentCandidate.metrics && h('span', null, UnitPrefs.format(agentCandidate.metrics.totalDistanceM, 'm', 2) + ' · ' + UnitPrefs.format(agentCandidate.metrics.minimumClearanceM, 'm', 2) + ' modeled clearance'),
                   agentCandidate && agentCandidate.valid === false && agentCandidate.rejectionReason && h('span', { className: 'agent-proposal-status' }, 'Blocked: ' + agentCandidate.rejectionReason),
                   agentProposal.recommendationReason && h('span', null, agentProposal.recommendationReason),
                   agentProposal.advisories && agentProposal.advisories.map((notice, index) => h('span', { key: 'advisory-' + index, className: 'agent-proposal-status' }, notice)),
@@ -1421,14 +1431,14 @@
                 h('div', { className: 'insert-preview-actions' },
                   agentProposal.status === 'ready' && h('button', { type: 'button', onClick: rejectAgentProposal }, 'Reject'),
                   agentProposal.status === 'ready' && h('button', { className: 'primary', type: 'button', disabled: !agentCandidate || agentCandidate.valid === false || (agentProposal.blockingIssues && agentProposal.blockingIssues.length > 0), onClick: applyAgentProposal }, agentProposal.operation === 'replace' ? 'Apply repair' : 'Add path'))),
-              h(window.Panels.ConstraintBar, { c: doc.constraints, robot, onOpen: () => select(null, -1) }),
+              h(Panels.ConstraintBar, { c: doc.constraints, robot, onOpen: () => select(null, -1) }),
               h(PlaybackTransport, { store: playbackStore, derived, doc, metric, setMetric, graphOpen, setGraphOpen, plannerId: selectedPlannerId }),
-              h(window.Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid, graphOpen })),
+              h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid, graphOpen })),
             h('aside', { className: 'rail rail-r' + (inspectorOpen ? '' : ' collapsed'), 'aria-label': 'Path inspector' },
               inspectorOpen
-                ? h(window.ContextInspector, { doc, sel, derived, actions: inspActions, accent, drive: robot.drive, robot, plannerId: selectedPlannerId, javaProject: { ...javaProjectState, link: linkJavaProject, openRecent: openRecentJavaProject, refresh: refreshJavaProject, install: installJavaSupport, build: buildJavaCatalog, cancelBuild: cancelJavaCatalogBuild, export: () => onExportJava('linked') }, onClose: () => setInspectorOpen(false) })
-                : h('button', { className: 'inspector-tab', type: 'button', title: 'Show inspector', onClick: () => setInspectorOpen(true) }, h(window.UI.Icon, { name: 'sliders', size: 16 }), h('span', null, 'Inspector'))),
-            headMenu && h(window.UI.ContextMenu, { x: headMenu.x, y: headMenu.y, items: headMenu.items, onClose: () => setHeadMenu(null) })));
+                ? h(ContextInspector, { doc, sel, derived, actions: inspActions, accent, drive: robot.drive, robot, plannerId: selectedPlannerId, javaProject: { ...javaProjectState, link: linkJavaProject, openRecent: openRecentJavaProject, refresh: refreshJavaProject, install: installJavaSupport, build: buildJavaCatalog, cancelBuild: cancelJavaCatalogBuild, export: () => onExportJava('linked') }, onClose: () => setInspectorOpen(false) })
+                : h('button', { className: 'inspector-tab', type: 'button', title: 'Show inspector', onClick: () => setInspectorOpen(true) }, h(UI.Icon, { name: 'sliders', size: 16 }), h('span', null, 'Inspector'))),
+            headMenu && h(UI.ContextMenu, { x: headMenu.x, y: headMenu.y, items: headMenu.items, onClose: () => setHeadMenu(null) })));
   }
 
   function toolHint(tool) {
@@ -1451,5 +1461,4 @@
     }
   }
 
-  ReactDOM.createRoot(document.getElementById('root')).render(h(AppErrorBoundary, null, h(App)));
-})();
+export { App, AppErrorBoundary };

@@ -1,8 +1,9 @@
-// Autonomous Routine — autonomous routine model + run engine (no React). Exports window.AUTO
+import { PM } from "./pathMath";
+
+// Autonomous Routine — autonomous routine model + run engine (no React).
 // A routine is an ordered list of STEPS. Three step kinds: Path, Decision, Function.
 // A Function carries a runtime capability or a generated Java command.
 // Autonomous Routine is robot-agnostic: it ORCHESTRATES runtime generation, it does not define behaviors.
-(function () {
   const D2R = Math.PI / 180;
   let _id = 0;
   const uid = (p) => (p || 'n') + '_' + (++_id);
@@ -68,7 +69,7 @@
   // ---- build smooth handles for a preview trajectory ----
   function buildWps(raw) {
     const out = raw.map((w) => ({ linked: true, thetaOn: false, theta: 0, stop: false, ...w }));
-    out.forEach((w, i) => { const hd = window.PM.autoHandles(out, i); if (!w.prevC) w.prevC = hd.prevC; if (!w.nextC) w.nextC = hd.nextC; });
+    out.forEach((w, i) => { const hd = PM.autoHandles(out, i); if (!w.prevC) w.prevC = hd.prevC; if (!w.nextC) w.nextC = hd.nextC; });
     if (out.length) { out[0].thetaOn = true; out[out.length - 1].thetaOn = true; }
     return out;
   }
@@ -139,7 +140,7 @@
     if (node.type === 'path') doc = paths.find((path) => path.id === node.ref);
     else if (node.type === 'function' && node.cat === 'generate' && node.preview) doc = node.preview;
     if (!doc) return null;
-    const d = window.PM.derivePath(doc, robot, 56, plannerId);
+    const d = PM.derivePath(doc, robot, 56, plannerId);
     return { doc, deriv: d, pts: d.sample.pts, total: d.prof.totalTime || 0 };
   }
 
@@ -198,7 +199,7 @@
     if (!cur) cur = run.steps[run.steps.length - 1];
     if (cur.segIdx != null) {
       const seg = run.segs[cur.segIdx];
-      return window.PM.poseAtTime(time - cur.t0, seg.pts, seg.deriv.prof, seg.deriv.anchors, mode);
+      return PM.poseAtTime(time - cur.t0, seg.pts, seg.deriv.prof, seg.deriv.anchors, mode);
     }
     if (cur.pose) return { x: cur.pose.x, y: cur.pose.y, heading: cur.pose.heading || 0, speed: 0 };
     return null;
@@ -230,7 +231,7 @@
     });
   }
 
-  window.AUTO = { CATS, CAT_LIST, CONDITIONS, FUNCTIONS, TRIGGERS, pickerItems, SEQ_OPS, seqOp, nodeTitle, demoRoutine, newNode, walk, findNode, countSteps, branchCount,
+export const AUTO = { CATS, CAT_LIST, CONDITIONS, FUNCTIONS, TRIGGERS, pickerItems, SEQ_OPS, seqOp, nodeTitle, demoRoutine, newNode, walk, findNode, countSteps, branchCount,
     buildRun, poseAt, stepAt, fieldOverlay, genPath, D2R,
     update, remove, insertAfter, prepend, appendBranch, prependBranch, append, move, reorderRelative };
 
@@ -283,4 +284,3 @@
   }
   // total step count inside a branch (recursive)
   function branchCount(nodes) { let c = 0; walk(nodes || [], () => c++); return c; }
-})();

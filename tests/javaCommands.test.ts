@@ -95,10 +95,10 @@ describe("Java command marker invocations", () => {
   });
 
   it("wires desktop discovery and accessible custom parameter controls into the canonical renderer", () => {
-    const styles = fs.readFileSync(path.join(process.cwd(), "src/renderer/legacy/styles.css"), "utf8");
-    const app = fs.readFileSync(path.join(process.cwd(), "src/renderer/legacy/assets/app.js"), "utf8");
-    const inspector = fs.readFileSync(path.join(process.cwd(), "src/renderer/legacy/assets/context-inspector.js"), "utf8");
-    const primitives = fs.readFileSync(path.join(process.cwd(), "src/renderer/legacy/assets/ui-primitives.js"), "utf8");
+    const styles = fs.readFileSync(path.join(process.cwd(), "src/renderer/styles/app.css"), "utf8");
+    const app = fs.readFileSync(path.join(process.cwd(), "src/renderer/app/App.jsx"), "utf8");
+    const inspector = fs.readFileSync(path.join(process.cwd(), "src/renderer/components/ContextInspector.jsx"), "utf8");
+    const primitives = fs.readFileSync(path.join(process.cwd(), "src/renderer/components/ui.jsx"), "utf8");
     expect(app).toContain("window.bordeauxAPI.linkJavaProject()");
     expect(app).toContain("window.bordeauxAPI.refreshJavaProject()");
     expect(app).toContain("window.bordeauxAPI.listRecentJavaProjects()");

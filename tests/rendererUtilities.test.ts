@@ -1,26 +1,16 @@
-import fs from "node:fs";
-import vm from "node:vm";
 import { describe, expect, it } from "vitest";
+import { createUnitPreferences } from "../src/renderer/lib/unitPreferences";
+import { wheelZoomFactor } from "../src/renderer/lib/zoom";
 
 function unitPreferences(stored?: string) {
   const values = new Map<string, string>();
   if (stored !== undefined) values.set("bordeaux.unitSystem", stored);
   const document = { documentElement: { dataset: {} as Record<string, string> } };
-  const window: Record<string, unknown> = {};
   const localStorage = {
     getItem: (key: string) => values.get(key) ?? null,
     setItem: (key: string, value: string) => values.set(key, value),
   };
-  const source = fs.readFileSync(new URL("../src/renderer/legacy/assets/unit-preferences.js", import.meta.url), "utf8");
-  vm.runInNewContext(source, { window, document, localStorage });
-  return { prefs: window.UnitPrefs as any, document, values };
-}
-
-function fieldZoom() {
-  const window: Record<string, unknown> = {};
-  const source = fs.readFileSync(new URL("../src/renderer/legacy/assets/field-view.js", import.meta.url), "utf8");
-  vm.runInNewContext(source, { window, React: {}, Math });
-  return window.FieldZoom as { wheelZoomFactor(deltaY: number, deltaMode: number, viewportHeight: number): number };
+  return { prefs: createUnitPreferences(localStorage, document.documentElement), document, values };
 }
 
 describe("renderer utilities", () => {
@@ -43,7 +33,6 @@ describe("renderer utilities", () => {
   });
 
   it("normalizes and bounds wheel zoom across input devices", () => {
-    const { wheelZoomFactor } = fieldZoom();
     const down = wheelZoomFactor(120, 0, 800);
     const up = wheelZoomFactor(-120, 0, 800);
     expect(down).toBeLessThanOrEqual(1.08);

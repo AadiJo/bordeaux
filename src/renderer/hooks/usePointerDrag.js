@@ -1,5 +1,6 @@
-// Cancellable pointer drags with capture, blur, and unmount cleanup. Exports window.PointerDrag.
-(function () {
+import * as React from "react";
+
+// Cancellable pointer drags with capture, blur, and unmount cleanup.
   function begin(event, handlers) {
     const target = event.currentTarget;
     const pointerId = event.pointerId;
@@ -58,5 +59,4 @@
     }), []);
   }
 
-  window.PointerDrag = { begin, useController };
-})();
+export const PointerDrag = { begin, useController };

@@ -1,11 +1,16 @@
+import * as React from "react";
+import { AUTO } from "../lib/routineModel";
+import { PM } from "../lib/pathMath";
+import { UnitPrefs } from "../lib/unitPreferences";
+import { FIELD_DIMS } from "./FieldView";
+import { UI } from "./ui";
+
 // Bordeaux — docked right inspector. ALWAYS visible; content swaps with the
 // selection (none / waypoint / segment / range / marker). Smart defaults: paths are
-// smooth & tangent-following unless you intervene. Needs React + window.UI.
-// Exports window.ContextInspector
-(function () {
+// smooth & tangent-following unless you intervene.
   const h = React.createElement;
-  const { Num, Toggle, Seg, Icon, Dropdown, constraintRangeSummary } = window.UI;
-  const { FIELD_W, FIELD_H } = window.FIELD_DIMS;
+  const { Num, Toggle, Seg, Icon, Dropdown, constraintRangeSummary } = UI;
+  const { FIELD_W, FIELD_H } = FIELD_DIMS;
   const R2D = 180 / Math.PI;
 
   const HEAD_MODES = [{ v: 'manual', label: 'Manual' }, { v: 'tangent', label: 'Tangent' }, { v: 'targets', label: 'Targets' }];
@@ -15,7 +20,7 @@
   const wpName = (i, n) => i === 0 ? 'Start' : i === n - 1 ? 'End' : 'Waypoint ' + i;
 
   function ConstraintsBody({ c, robot, setC, moreLimits, setMoreLimits }) {
-    const hardLimits = window.PM.robotHardLimits(robot);
+    const hardLimits = PM.robotHardLimits(robot);
     const rotation = moreLimits ? h('div', { className: 'grid2 compact-fields' },
       h(Num, { label: 'Max \u03c9', value: c.maxAngVel, unit: '\u00b0/s', step: 1, precision: 0, onChange: (v) => setC({ maxAngVel: v }) }),
       h(Num, { label: 'Max \u03b1', value: c.maxAngAccel, unit: '\u00b0/s\u00b2', step: 1, precision: 0, onChange: (v) => setC({ maxAngAccel: v }) })) : null;
@@ -452,7 +457,7 @@
     const [jiggleStrokeTime, setJiggleStrokeTime] = React.useState(JIGGLE_DEFAULTS.strokeTimeS);
     const [jiggleError, setJiggleError] = React.useState(false);
     const wps = doc.waypoints;
-    const pathLimits = window.PM.effectiveConstraints(doc.constraints, robot);
+    const pathLimits = PM.effectiveConstraints(doc.constraints, robot);
     const isTank = drive === 'tank';
     const n = wps.length;
     const headingMode = isTank ? 'tangent' : (doc.headingMode || 'targets');
@@ -479,7 +484,7 @@
       body = h(React.Fragment, null,
         Stat3([
           { v: (derived.prof.totalTime || 0).toFixed(2) + 's', k: 'Time' },
-          { v: window.UnitPrefs.format(derived.totalDistance || derived.sample.length || 0, 'm', 2), k: 'Length' },
+          { v: UnitPrefs.format(derived.totalDistance || derived.sample.length || 0, 'm', 2), k: 'Length' },
           { v: issues.length ? String(issues.length) : '\u2713', k: issues.length ? 'Issues' : 'Clear', color: issues.length ? (errors ? 'var(--bad)' : 'var(--warn)') : 'var(--good)' },
         ]),
         h('div', { className: 'qrow', style: { marginTop: '10px' } },
@@ -506,7 +511,7 @@
           h(Num, { label: 'Start vel', value: doc.startVel || 0, unit: 'm/s', min: 0, onChange: (v) => actions.setDoc({ startVel: v }) }),
           h(Num, { label: 'Goal vel', value: doc.goalVel || 0, unit: 'm/s', min: 0, onChange: (v) => actions.setDoc({ goalVel: v }) })),
         h('div', { style: { height: '2px' } }),
-        h('div', { className: 'cgroup-h' }, window.PM.robotHardLimits(robot) ? 'Hard limits' : 'Global constraints'),
+        h('div', { className: 'cgroup-h' }, PM.robotHardLimits(robot) ? 'Hard limits' : 'Global constraints'),
         h(ConstraintsBody, {
           c: doc.constraints,
           robot,
@@ -653,12 +658,12 @@
       body = h(React.Fragment, null,
         h('div', { className: 'fieldlabel first' }, wpName(i, n) + ' \u2192 ' + wpName(i + 1, n)),
         Stat3([
-          { v: window.UnitPrefs.format(segLen, 'm', 2), k: 'Length' },
-          { v: isFinite(minR) ? window.UnitPrefs.format(minR, 'm', 2) : '\u221e', k: 'Min radius', color: isFinite(minR) && minR < 0.7 ? 'var(--bad)' : null },
+          { v: UnitPrefs.format(segLen, 'm', 2), k: 'Length' },
+          { v: isFinite(minR) ? UnitPrefs.format(minR, 'm', 2) : '\u221e', k: 'Min radius', color: isFinite(minR) && minR < 0.7 ? 'var(--bad)' : null },
           { v: dur.toFixed(2) + 's', k: 'Duration' },
         ]),
         h('div', { className: 'fieldlabel' }, 'Path type'),
-        h(Seg, { value: st, options: window.PM.SEGTYPES.map((type) => ({ v: type.id, label: type.label, title: type.hint })), ariaLabel: 'Path type', onChange: (v) => actions.setSegMeta(i, { segType: v }) }),
+        h(Seg, { value: st, options: PM.SEGTYPES.map((type) => ({ v: type.id, label: type.label, title: type.hint })), ariaLabel: 'Path type', onChange: (v) => actions.setSegMeta(i, { segType: v }) }),
         h('div', { className: 'fieldlabel' }, 'Timing'),
         h(Seg, { value: wps[i].segmentFollowMode || 'inherit', ariaLabel: 'Segment follow mode', options: [
           { v: 'inherit', label: 'Default', title: 'Use the path default' },
@@ -700,7 +705,7 @@
     // ---------------- ROTATION TARGET ----------------
     else if (sel.kind === 'rt' && doc.targets[sel.idx]) {
       const t = doc.targets[sel.idx];
-      const targetFraction = window.PM.featureFraction(t, derived.sample);
+      const targetFraction = PM.featureFraction(t, derived.sample);
       const targetDistance = targetFraction * (derived.sample.length || 0);
       const targetAnchor = t.anchor === 'dist' ? 'dist' : 'param';
       let targetSegment = 0;
@@ -723,7 +728,7 @@
     // ---------------- EVENT MARKER ----------------
     else if (sel.kind === 'em' && doc.markers[sel.idx]) {
       const m = doc.markers[sel.idx];
-      const markerFraction = window.PM.featureFraction(m, derived.sample);
+      const markerFraction = PM.featureFraction(m, derived.sample);
       const markerDistance = markerFraction * (derived.sample.length || 0);
       const markerAnchor = m.anchor === 'dist' ? 'dist' : 'param';
       const schedule = m.schedule || {};
@@ -891,7 +896,7 @@
           h(Toggle, { on: schedule.endTimeS != null, ariaLabel: 'Limit event end time', onChange: (on) => actions.setMarker(sel.idx, { schedule: { ...schedule, endTimeS: on ? (derived.prof.totalTime || 0) : undefined } }) })),
         schedule.endTimeS != null && h(Num, { label: 'End path time', value: schedule.endTimeS, unit: 's', min: 0, max: derived.prof.totalTime || 0, step: 0.1, precision: 2, onChange: (v) => actions.setMarker(sel.idx, { schedule: { ...schedule, endTimeS: v } }) }),
         h(Dropdown, { id: 'event-condition-id', label: 'Condition ID · optional', value: schedule.conditionId || '',
-          items: window.AUTO.pickerItems(window.AUTO.CONDITIONS, schedule.conditionId || '', 'No condition'),
+          items: AUTO.pickerItems(AUTO.CONDITIONS, schedule.conditionId || '', 'No condition'),
           placeholder: 'Choose a registered condition', icon: 'branch', allowCustom: true,
           customLabel: 'Enter exact event condition ID', customPlaceholder: 'Exact condition ID',
           onChange: (value) => actions.setMarker(sel.idx, { schedule: { ...schedule, conditionId: value || undefined } }) }),
@@ -913,9 +918,9 @@
       const loF = Math.min(effR.f0, effR.f1), hiF = Math.max(effR.f0, effR.f1);
       const clampFraction = (value) => Math.max(0, Math.min(1, value / 100));
       const rangeAnchor = rg.anchor === 'dist' ? 'dist' : rg.anchor === 'wp' ? 'wp' : 'param';
-      const anchorOptions = [{ v: 'param', label: 'Proportional' }, { v: 'wp', label: 'Local' }].concat(rangeAnchor === 'dist' ? [{ v: 'dist', label: 'Distance (legacy)' }] : []);
+      const anchorOptions = [{ v: 'param', label: 'Proportional' }, { v: 'wp', label: 'Local' }].concat(rangeAnchor === 'dist' ? [{ v: 'dist', label: 'Fixed distance' }] : []);
       icon = 'gauge'; title = 'Constraint Range';
-      tag = window.UnitPrefs.fromCanonical(loF * len, 'm').toFixed(1) + '\u2013' + window.UnitPrefs.format(hiF * len, 'm', 1);
+      tag = UnitPrefs.fromCanonical(loF * len, 'm').toFixed(1) + '\u2013' + UnitPrefs.format(hiF * len, 'm', 1);
       body = h(React.Fragment, null,
         h(Num, { label: 'Max velocity', value: rg.maxVel, unit: 'm/s', min: 0, max: pathLimits.maxVel, onChange: (v) => actions.setRange(sel.idx, { maxVel: v }) }),
         h('section', { className: 'range-anchor-editor', 'aria-label': 'Range position lock' },
@@ -970,6 +975,4 @@
       h('div', { className: 'ctxinsp-body' }, body));
   }
 
-  window.ContextInspector = ContextInspector;
-  window.BordeauxCommandEditor = { CommandParameterEditor, commandArguments, parameterValueError, safeControlId };
-})();
+export { ContextInspector, CommandParameterEditor, commandArguments, parameterValueError, safeControlId };

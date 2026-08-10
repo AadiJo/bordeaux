@@ -1,5 +1,10 @@
-// Bordeaux — interactive field view (CAD-style). Needs React + window.PM. Exports window.FieldView
-(function () {
+import * as React from "react";
+import fieldImage from "../assets/field.png";
+import { PM } from "../lib/pathMath";
+import { wheelZoomFactor } from "../lib/zoom";
+import { UI } from "./ui";
+
+// Bordeaux interactive field view (CAD-style).
   const { useRef, useState, useEffect, useMemo, useCallback } = React;
   const h = React.createElement;
 
@@ -12,11 +17,6 @@
 
   // muted semantic colors (reserved for meaning, low saturation)
   const C_START = '#4bbf86', C_END = '#d2655f', C_NODE = '#8b94a2', C_NEUTRAL = '#9aa3b0';
-
-  function wheelZoomFactor(deltaY, deltaMode, viewportHeight) {
-    const pixels = deltaY * (deltaMode === 1 ? 16 : deltaMode === 2 ? Math.max(1, viewportHeight) : 1);
-    return Math.exp(Math.max(-120, Math.min(120, pixels)) * 0.0006);
-  }
 
   const localFootprint = (robot) => robot.footprint && robot.footprint.kind === 'polygon' && Array.isArray(robot.footprint.verticesM)
     ? robot.footprint.verticesM
@@ -70,9 +70,9 @@
       const pp = derived.sample.pts;
       let wpoint = null;
       if (sel.kind === 'wp' && doc.waypoints[sel.idx]) wpoint = doc.waypoints[sel.idx];
-      else if (sel.kind === 'rt' && doc.targets[sel.idx]) wpoint = window.PM.pointAtFraction(window.PM.featureFraction(doc.targets[sel.idx], derived.sample), pp);
-      else if (sel.kind === 'em' && doc.markers[sel.idx]) wpoint = window.PM.pointAtFraction(window.PM.featureFraction(doc.markers[sel.idx], derived.sample), pp);
-      else if (sel.kind === 'cr' && doc.ranges && doc.ranges[sel.idx]) { const rg = doc.ranges[sel.idx]; wpoint = window.PM.pointAtFraction((rg.f0 + rg.f1) / 2, pp); }
+      else if (sel.kind === 'rt' && doc.targets[sel.idx]) wpoint = PM.pointAtFraction(PM.featureFraction(doc.targets[sel.idx], derived.sample), pp);
+      else if (sel.kind === 'em' && doc.markers[sel.idx]) wpoint = PM.pointAtFraction(PM.featureFraction(doc.markers[sel.idx], derived.sample), pp);
+      else if (sel.kind === 'cr' && doc.ranges && doc.ranges[sel.idx]) { const rg = doc.ranges[sel.idx]; wpoint = PM.pointAtFraction((rg.f0 + rg.f1) / 2, pp); }
       if (!wpoint) { onSelPos(null); return; }
       const ctm = svg.getScreenCTM(); if (!ctm) { onSelPos(null); return; }
       const ip = W2P(wpoint);
@@ -94,7 +94,7 @@
     useEffect(() => updateVisitFocus(null), [doc.id, updateVisitFocus]);
 
     const visitsAt = useCallback((world) => {
-      const candidates = window.PM.nearestVisits(world.x, world.y, pts, { tolerance: visitTolerance });
+      const candidates = PM.nearestVisits(world.x, world.y, pts, { tolerance: visitTolerance });
       if (!derived.wpFrac || derived.wpFrac.length < 2) return candidates;
       return candidates.map((candidate) => {
         let seg = derived.wpFrac.length - 2;
@@ -163,8 +163,8 @@
       let fraction = null;
       if (sel.kind === 'seg' && derived.wpFrac && derived.wpFrac.length > sel.idx + 1) fraction = (derived.wpFrac[sel.idx] + derived.wpFrac[sel.idx + 1]) / 2;
       else if (sel.kind === 'wp' && derived.wpFrac && Number.isFinite(derived.wpFrac[sel.idx])) fraction = derived.wpFrac[sel.idx];
-      else if (sel.kind === 'rt' && doc.targets[sel.idx]) fraction = window.PM.featureFraction(doc.targets[sel.idx], derived.sample);
-      else if (sel.kind === 'em' && doc.markers[sel.idx]) fraction = window.PM.featureFraction(doc.markers[sel.idx], derived.sample);
+      else if (sel.kind === 'rt' && doc.targets[sel.idx]) fraction = PM.featureFraction(doc.targets[sel.idx], derived.sample);
+      else if (sel.kind === 'em' && doc.markers[sel.idx]) fraction = PM.featureFraction(doc.markers[sel.idx], derived.sample);
       else if (sel.kind === 'cr' && doc.ranges && doc.ranges[sel.idx]) {
         const range = (derived.effRanges && derived.effRanges[sel.idx]) || doc.ranges[sel.idx];
         fraction = (range.f0 + range.f1) / 2;
@@ -182,7 +182,7 @@
       }
       if (sel.kind === 'seg' && current && current.seg === sel.idx) return;
       if (current && !Number.isInteger(current.wp) && Math.abs(current.f - fraction) <= 0.015) return;
-      const point = window.PM.pointAtFraction(fraction, pts);
+      const point = PM.pointAtFraction(fraction, pts);
       resolveVisit(point, { nearFraction: fraction, preserve: false });
     }, [sel, doc, derived, pts, visitTolerance, resolveVisit, resolveWaypointVisit, updateVisitFocus]);
 
@@ -210,7 +210,7 @@
     // ---- pointer handling ----
     const startRangeDrag = (world, initialVisit) => {
       const visit = initialVisit || resolveVisit(world);
-      const f0 = visit ? visit.f : window.PM.nearestFraction(world.x, world.y, pts);
+      const f0 = visit ? visit.f : PM.nearestFraction(world.x, world.y, pts);
       drag.current = { role: 'newrange', f0, f1: f0, lastF: f0, moved: false };
       setPreview({ f0, f1: f0 });
     };
@@ -300,8 +300,8 @@
           if (visit && Number.isInteger(visit.wp)) idx = visit.wp;
         }
         let lastF = null;
-        if (role === 'rt' && doc.targets[idx]) lastF = window.PM.featureFraction(doc.targets[idx], derived.sample);
-        else if (role === 'em' && doc.markers[idx]) lastF = window.PM.featureFraction(doc.markers[idx], derived.sample);
+        if (role === 'rt' && doc.targets[idx]) lastF = PM.featureFraction(doc.targets[idx], derived.sample);
+        else if (role === 'em' && doc.markers[idx]) lastF = PM.featureFraction(doc.markers[idx], derived.sample);
         else if ((role === 'rs' || role === 're') && doc.ranges && doc.ranges[idx]) {
           const range = (derived.effRanges && derived.effRanges[idx]) || doc.ranges[idx];
           lastF = role === 'rs' ? range.f0 : range.f1;
@@ -339,7 +339,7 @@
         if (d.moved) setView({ x: d.vb0.x - dx * upp, y: d.vb0.y - dy * upp, w: d.vb0.w, h: d.vb0.h });
         return;
       }
-      if (d.role === 'newrange') { const visit = projectVisit(world, d.lastF); d.f1 = visit ? visit.f : window.PM.nearestFraction(world.x, world.y, pts); d.lastF = d.f1; d.moved = true; setPreview({ f0: d.f0, f1: d.f1 }); return; }
+      if (d.role === 'newrange') { const visit = projectVisit(world, d.lastF); d.f1 = visit ? visit.f : PM.nearestFraction(world.x, world.y, pts); d.lastF = d.f1; d.moved = true; setPreview({ f0: d.f0, f1: d.f1 }); return; }
       if (d.role === 'head') {
         const w = doc.waypoints[d.idx];
         if (w) {
@@ -354,7 +354,7 @@
             const nx = doc.waypoints[d.idx + 1]; if (nx) cands.push({ deg: Math.atan2(nx.y - w.y, nx.x - w.x) * 180 / Math.PI, label: 'Face next' });
             const pv = doc.waypoints[d.idx - 1]; if (pv) cands.push({ deg: Math.atan2(pv.y - w.y, pv.x - w.x) * 180 / Math.PI, label: 'Face prev' });
             let best = null, bestD = 8;
-            cands.forEach((cd) => { const dd = Math.abs(window.PM.angWrap((deg - cd.deg) * Math.PI / 180) * 180 / Math.PI); if (dd < bestD) { bestD = dd; best = cd; } });
+            cands.forEach((cd) => { const dd = Math.abs(PM.angWrap((deg - cd.deg) * Math.PI / 180) * 180 / Math.PI); if (dd < bestD) { bestD = dd; best = cd; } });
             if (best) { deg = best.deg; label = best.label; } else deg = Math.round(deg);
           }
           setSnap(label ? { idx: d.idx, label } : null);
@@ -371,8 +371,8 @@
       else if (d.role === 'rth') actions.rotateTargetTo(d.idx, world, e.shiftKey);
       else if (d.role === 'look') actions.moveSegmentLookAt(d.idx, p);
       else if (d.role === 'em') { const visit = projectVisit(world, d.lastF); if (visit) d.lastF = visit.f; actions.moveMarkerTo(d.idx, world, visit && visit.f); }
-      else if (d.role === 'rs') { const visit = projectVisit(world, d.lastF); const f = visit ? visit.f : window.PM.nearestFraction(world.x, world.y, pts); d.lastF = f; actions.moveRangeHandle(d.idx, 0, f); }
-      else if (d.role === 're') { const visit = projectVisit(world, d.lastF); const f = visit ? visit.f : window.PM.nearestFraction(world.x, world.y, pts); d.lastF = f; actions.moveRangeHandle(d.idx, 1, f); }
+      else if (d.role === 'rs') { const visit = projectVisit(world, d.lastF); const f = visit ? visit.f : PM.nearestFraction(world.x, world.y, pts); d.lastF = f; actions.moveRangeHandle(d.idx, 0, f); }
+      else if (d.role === 're') { const visit = projectVisit(world, d.lastF); const f = visit ? visit.f : PM.nearestFraction(world.x, world.y, pts); d.lastF = f; actions.moveRangeHandle(d.idx, 1, f); }
     };
 
     const flushMove = () => {
@@ -430,7 +430,7 @@
         else if (tool === 'select') {
           if (d.onPath) {
             const visit = d.visit || resolveVisit(d.world, { cycle: true });
-            const f = visit ? visit.f : window.PM.nearestFraction(d.world.x, d.world.y, pts);
+            const f = visit ? visit.f : PM.nearestFraction(d.world.x, d.world.y, pts);
             let segment = visit ? visit.seg : (Number.isInteger(d.segment) ? d.segment : 0);
             if (!Number.isInteger(d.segment) && derived.wpFrac) {
               for (let i = 0; i < derived.wpFrac.length - 1; i++) if (f >= derived.wpFrac[i] - 1e-6) segment = i;
@@ -492,7 +492,7 @@
         return continuityOwned && ((((doc.waypoints[index].headingTransition || {}).placement) || 'after') === 'after');
       };
       const targetActive = (target) => {
-        const f = window.PM.featureFraction(target, derived.sample); let segment = 0;
+        const f = PM.featureFraction(target, derived.sample); let segment = 0;
         if (derived.wpFrac) for (let i = 0; i < derived.wpFrac.length - 1; i++) if (f >= derived.wpFrac[i] - 1e-6) segment = i;
         return segmentMode(segment) === 'targets';
       };
@@ -512,10 +512,10 @@
         return waypoint.theta || 0;
       };
       const colAt = (i) => {
-        if (metric === 'accel') return window.PM.metricColor('accel', 0.5 + 0.5 * (M.accel[i] / (M.aMax || 1)));
-        if (metric === 'angvel') return window.PM.metricColor('angvel', 0.5 + 0.5 * (M.omega[i] / (M.wMax || 1)));
-        if (metric === 'curvature') return window.PM.metricColor('curvature', M.curv[i] / (M.kMax || 1));
-        return window.PM.metricColor('velocity', M.v[i] / (M.vMax || 1));
+        if (metric === 'accel') return PM.metricColor('accel', 0.5 + 0.5 * (M.accel[i] / (M.aMax || 1)));
+        if (metric === 'angvel') return PM.metricColor('angvel', 0.5 + 0.5 * (M.omega[i] / (M.wMax || 1)));
+        if (metric === 'curvature') return PM.metricColor('curvature', M.curv[i] / (M.kMax || 1));
+        return PM.metricColor('velocity', M.v[i] / (M.vMax || 1));
       };
 
       if (showGrid) {
@@ -602,9 +602,9 @@
           reserveRotatedSpace(start.x, start.y, robot.l * SX + P(12), robot.w * SY + P(12), startHeading);
           reserveRotatedSpace(end.x, end.y, robot.l * SX + P(12), robot.w * SY + P(12), endHeading);
         }
-        doc.markers.forEach((marker) => { const c = W2P(window.PM.pointAtFraction(window.PM.featureFraction(marker, derived.sample), pts)); reserveLabelSpace(c.x, c.y - P(12), P(30), P(42)); });
+        doc.markers.forEach((marker) => { const c = W2P(PM.pointAtFraction(PM.featureFraction(marker, derived.sample), pts)); reserveLabelSpace(c.x, c.y - P(12), P(30), P(42)); });
         if (!isTank) doc.targets.filter(targetActive).forEach((target) => {
-          const c = W2P(window.PM.pointAtFraction(window.PM.featureFraction(target, derived.sample), pts));
+          const c = W2P(PM.pointAtFraction(PM.featureFraction(target, derived.sample), pts));
           const deg = target.deg;
           const rad = -deg * Math.PI / 180;
           const arrowOffset = P(8.5);
@@ -612,12 +612,12 @@
             robot.l * SX + P(29), robot.w * SY + P(20), deg);
         });
         (derived.checks || []).filter((check) => check.level !== 'note').forEach((check) => {
-          const c = W2P(window.PM.pointAtFraction(check.f, pts));
+          const c = W2P(PM.pointAtFraction(check.f, pts));
           reserveLabelSpace(c.x, c.y - P(28), P(28), P(28));
         });
         ranges.forEach((range) => {
           ['f0', 'f1'].forEach((key) => {
-            const c = W2P(window.PM.pointAtFraction(range[key], pts));
+            const c = W2P(PM.pointAtFraction(range[key], pts));
             reserveLabelSpace(c.x, c.y, P(24), P(24));
           });
         });
@@ -626,15 +626,15 @@
           for (let i = 0; i < doc.waypoints.length - 1; i++) {
             if (!chipTypes[doc.waypoints[i].segType]) continue;
             const fraction = ((derived.wpFrac[i] || 0) + (derived.wpFrac[i + 1] || 0)) / 2;
-            const c = W2P(window.PM.pointAtFraction(fraction, pts));
+            const c = W2P(PM.pointAtFraction(fraction, pts));
             reserveLabelSpace(c.x, c.y + P(17), P(40), P(25));
           }
         }
         const labelOverlap = (a, b) => Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x))
           * Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
         const placeRangeLabel = (fraction, anchor, width, height) => {
-          const before = W2P(window.PM.pointAtFraction(Math.max(0, fraction - 0.012), pts));
-          const after = W2P(window.PM.pointAtFraction(Math.min(1, fraction + 0.012), pts));
+          const before = W2P(PM.pointAtFraction(Math.max(0, fraction - 0.012), pts));
+          const after = W2P(PM.pointAtFraction(Math.min(1, fraction + 0.012), pts));
           const length = Math.hypot(after.x - before.x, after.y - before.y) || 1;
           const tx = (after.x - before.x) / length, ty = (after.y - before.y) / length;
           let nx = -ty, ny = tx;
@@ -686,14 +686,14 @@
           }
           if (rangeHit) els.push(h('path', { key: 'rhit' + ri, d: rangeHit, fill: 'none', stroke: 'transparent', strokeWidth: P(11), strokeLinecap: 'round', 'data-role': 'cr', 'data-idx': ri, style: { cursor: 'pointer' } }));
           [['f0', 'rs'], ['f1', 're']].forEach(([fk, role]) => {
-            const pf = window.PM.pointAtFraction(rg[fk], pts); const c = W2P(pf);
+            const pf = PM.pointAtFraction(rg[fk], pts); const c = W2P(pf);
             els.push(h('g', { key: role + ri, transform: `translate(${c.x} ${c.y})`, style: { cursor: 'ew-resize' } },
               h('circle', { r: P(7), fill: '#14161a', stroke: col, strokeWidth: P(2), 'data-role': role, 'data-idx': ri }),
               h('circle', { r: P(2.5), fill: col, 'data-role': role, 'data-idx': ri })));
           });
           const fraction = (rg.f0 + rg.f1) / 2;
-          const mid = window.PM.pointAtFraction(fraction, pts); const mc = W2P(mid);
-          const summary = window.UI.constraintRangeSummary(rg, doc.constraints, robot);
+          const mid = PM.pointAtFraction(fraction, pts); const mc = W2P(mid);
+          const summary = UI.constraintRangeSummary(rg, doc.constraints, robot);
           if (summary) {
             const text = summary.text;
             const tw = P(Math.max(78, text.length * 7.4 + 20)), th = P(24);
@@ -728,10 +728,10 @@
         const comb = [];
         for (let dl = step * 0.55; dl < totalLen - 0.04; dl += step) {
           const f = dl / totalLen;
-          const pf = window.PM.pointAtFraction(f, pts);
+          const pf = PM.pointAtFraction(f, pts);
           let segment = 0;
           if (derived.wpFrac) for (let i = 0; i < derived.wpFrac.length - 1; i++) if (f >= derived.wpFrac[i] - 1e-6) segment = i;
-          const rad = segmentMode(segment) === 'tangent' ? pf.heading : window.PM.headingAt(f, derived.anchors);
+          const rad = segmentMode(segment) === 'tangent' ? pf.heading : PM.headingAt(f, derived.anchors);
           const c = W2P(pf);
           const rot = rad * 180 / Math.PI;
           comb.push(h('g', { key: 'cb' + dl.toFixed(2), transform: `translate(${c.x} ${c.y}) rotate(${-rot})` },
@@ -758,7 +758,7 @@
       if (endpoint && endpoint.jiggle) {
         const baseRad = (endpoint.turnInPlace ? endpoint.turnInPlace.headingDeg : endHead) * Math.PI / 180;
         const physicalBase = baseRad + (derived.rev ? Math.PI : 0);
-        const positions = window.PM.jigglePositions(endpoint, physicalBase, endpoint.jiggle, { w: FIELD_W, h: FIELD_H });
+        const positions = PM.jigglePositions(endpoint, physicalBase, endpoint.jiggle, { w: FIELD_W, h: FIELD_H });
         if (positions) {
           const anchor = W2P(endpoint);
           const strokes = [];
@@ -775,7 +775,7 @@
       const markerOrder = doc.markers.map((mk, i) => ({ mk, i }));
       markerOrder.sort((a, b) => Number(sel.kind === 'em' && sel.idx === a.i) - Number(sel.kind === 'em' && sel.idx === b.i));
       markerOrder.forEach(({ mk, i }) => {
-        const pf = window.PM.pointAtFraction(window.PM.featureFraction(mk, derived.sample), pts); const c = W2P(pf);
+        const pf = PM.pointAtFraction(PM.featureFraction(mk, derived.sample), pts); const c = W2P(pf);
         const isSel = sel.kind === 'em' && sel.idx === i;
         const col = isSel ? accent : C_NEUTRAL;
         els.push(h('g', { key: 'em' + i, transform: `translate(${c.x} ${c.y})`, style: { cursor: 'pointer' } },
@@ -789,7 +789,7 @@
       targetOrder.sort((a, b) => Number(sel.kind === 'rt' && sel.idx === a.i) - Number(sel.kind === 'rt' && sel.idx === b.i));
       if (!isTank) targetOrder.forEach(({ rtg, i }) => {
         if (!targetActive(rtg)) return;
-        const pf = window.PM.pointAtFraction(window.PM.featureFraction(rtg, derived.sample), pts); const c = W2P(pf);
+        const pf = PM.pointAtFraction(PM.featureFraction(rtg, derived.sample), pts); const c = W2P(pf);
         const isSel = sel.kind === 'rt' && sel.idx === i;
         const deg = rtg.deg;
         const col = isSel ? accent : C_NEUTRAL;
@@ -809,7 +809,7 @@
         if (source && source.segmentHeadingMode === 'lookAt' && source.segmentLookAt && derived.wpFrac) {
           const tc = W2P(source.segmentLookAt), lo = derived.wpFrac[segment] || 0, hi = derived.wpFrac[segment + 1] || lo;
           [0.18, 0.5, 0.82].forEach((part, guide) => {
-            const point = window.PM.pointAtFraction(lo + (hi - lo) * part, pts), pc = W2P(point);
+            const point = PM.pointAtFraction(lo + (hi - lo) * part, pts), pc = W2P(point);
             els.push(h('line', { key: 'look-guide-' + guide, x1: pc.x, y1: pc.y, x2: tc.x, y2: tc.y, stroke: accent, strokeWidth: P(1), strokeOpacity: 0.18, strokeDasharray: `${P(4)} ${P(5)}`, style: { pointerEvents: 'none' } }));
           });
           els.push(h('g', { key: 'look-target', transform: `translate(${tc.x} ${tc.y})`, style: { cursor: 'grab' } },
@@ -863,7 +863,7 @@
           const st = doc.waypoints[i].segType;
           if (!ABBR[st]) continue;
           const fmid = ((derived.wpFrac[i] || 0) + (derived.wpFrac[i + 1] || 0)) / 2;
-          const pf = window.PM.pointAtFraction(fmid, pts); const c = W2P(pf);
+          const pf = PM.pointAtFraction(fmid, pts); const c = W2P(pf);
           const tw = P(30), th = P(15);
           els.push(h('g', { key: 'sc' + i, transform: `translate(${c.x} ${c.y + P(17)})`, style: { pointerEvents: 'none' } },
             h('rect', { x: -tw / 2, y: -th / 2, width: tw, height: th, rx: P(2.5), fill: 'rgba(14,16,20,0.9)', stroke: '#3a4250', strokeWidth: P(1) }),
@@ -875,7 +875,7 @@
       const fieldIssues = (derived.checks || []).filter((check) => check.level !== 'note');
       if (fieldIssues.length) {
         fieldIssues.forEach((check, i) => {
-          const pf = window.PM.pointAtFraction(check.f, pts); const c = W2P(pf);
+          const pf = PM.pointAtFraction(check.f, pts); const c = W2P(pf);
           const col = check.level === 'error' ? '#d2655f' : '#d9a441';
           els.push(h('g', { key: 'wn' + i, transform: `translate(${c.x} ${c.y - P(28)})`, style: { pointerEvents: 'none' } },
             h('path', { d: `M 0 ${-P(8)} L ${P(8)} ${P(6)} L ${-P(8)} ${P(6)} Z`, fill: 'rgba(14,16,20,0.92)', stroke: col, strokeWidth: P(1.4), strokeLinejoin: 'round' }),
@@ -895,7 +895,7 @@
       let path = '';
       for (let index = 0; index <= 20; index++) {
         const f = Math.max(0, Math.min(1, candidate.f - halfSpan + halfSpan * 2 * index / 20));
-        const point = W2P(window.PM.pointAtFraction(f, pts));
+        const point = W2P(PM.pointAtFraction(f, pts));
         path += (index ? ' L ' : 'M ') + point.x.toFixed(1) + ' ' + point.y.toFixed(1);
       }
       const center = W2P(candidate), labelX = Math.max(X0 + P(48), Math.min(X1 - P(48), center.x + P(13)));
@@ -910,7 +910,7 @@
 
     // ---------- ROBOT (dynamic) ----------
     const robotEl = useMemo(() => {
-      const pose = pts.length > 1 ? window.PM.poseAtTime(playTime, pts, derived.prof, derived.anchors, derived.mode, derived.rev)
+      const pose = pts.length > 1 ? PM.poseAtTime(playTime, pts, derived.prof, derived.anchors, derived.mode, derived.rev)
         : (doc.waypoints[0] ? { x: doc.waypoints[0].x, y: doc.waypoints[0].y, heading: ((doc.waypoints[0].theta || 0) + (derived.rev ? 180 : 0)) * Math.PI / 180, speed: 0 } : null);
       if (!pose) return null;
       const c = W2P(pose);
@@ -1035,7 +1035,7 @@
       h('rect', { x: -2000, y: -2000, width: IMG_W + 4000, height: IMG_H + 4000, fill: '#0a0b0d', 'data-role': 'bg' }),
       h('rect', { x: X0 - 6, y: Y0 - 6, width: (X1 - X0) + 12, height: (Y1 - Y0) + 12, rx: 4, fill: '#131418', stroke: '#2a2d33', strokeWidth: P(1.5), 'data-role': 'bg' }),
       h('foreignObject', { x: 0, y: 0, width: IMG_W, height: IMG_H, transform: flip ? `rotate(180 ${FIELD_CX} ${FIELD_CY})` : undefined, 'data-role': 'bg', style: { pointerEvents: 'none' } },
-        h('img', { src: (window.__resources && window.__resources.fieldImg) || 'uploads/FE-2026-_REBUILT_Playing_Field.png', width: IMG_W, height: IMG_H, draggable: false, style: { width: IMG_W + 'px', height: IMG_H + 'px', display: 'block', opacity: 0.9, filter: 'brightness(0.38) saturate(0.32) contrast(1.06)', WebkitUserDrag: 'none', userSelect: 'none', pointerEvents: 'none' } })),
+        h('img', { src: fieldImage, width: IMG_W, height: IMG_H, draggable: false, style: { width: IMG_W + 'px', height: IMG_H + 'px', display: 'block', opacity: 0.9, filter: 'brightness(0.38) saturate(0.32) contrast(1.06)', WebkitUserDrag: 'none', userSelect: 'none', pointerEvents: 'none' } })),
       h('rect', { x: X0 - 6, y: Y0 - 6, width: (X1 - X0) + 12, height: (Y1 - Y0) + 12, rx: 4, fill: 'none', stroke: '#ffffff', strokeOpacity: 0.07, strokeWidth: P(1), style: { pointerEvents: 'none' } }),
       routine ? routineLayers : staticLayers,
       routine ? null : visitFocusEl,
@@ -1047,7 +1047,5 @@
     );
   }
 
-  window.FieldView = FieldView;
-  window.FieldZoom = { wheelZoomFactor };
-  window.FIELD_DIMS = { FIELD_W, FIELD_H, IMG_W, IMG_H };
-})();
+export const FIELD_DIMS = { FIELD_W, FIELD_H, IMG_W, IMG_H };
+export { FieldView, wheelZoomFactor };
