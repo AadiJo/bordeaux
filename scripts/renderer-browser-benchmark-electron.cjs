@@ -290,6 +290,33 @@ app.whenReady().then(async () => {
     const undoCancelsDrag = matchesTarget(afterUndoRelease, undoOrigin, { x: undoOrigin.localX, y: undoOrigin.localY });
 
     await loadFixture();
+    const cancelOrigin = await center();
+    const cancelTarget = { x: cancelOrigin.x + 44, y: cancelOrigin.y - 20 };
+    const originalProject = JSON.parse(Buffer.from(process.env.BORDEAUX_BENCHMARK_PROJECT, "base64").toString("utf8"));
+    const originalCancelWaypoint = originalProject.paths[0].waypoints[50];
+    await pressMouse(cancelOrigin);
+    const cancelTargetLocal = await localAt(cancelTarget);
+    moveMouse(cancelTarget);
+    await waitForCorrect(cancelTarget, cancelTargetLocal);
+    await waitFor(async () => {
+      const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
+      const waypoint = state.autosavedProjects.at(-1)?.paths[0]?.waypoints[50];
+      return waypoint && Math.hypot(waypoint.x - originalCancelWaypoint.x, waypoint.y - originalCancelWaypoint.y) > 0.02;
+    }, 4000, "the active draft to be autosaved");
+    window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Z", modifiers: ["control"] });
+    window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Z", modifiers: ["control"] });
+    await waitForCorrect(cancelOrigin, { x: cancelOrigin.localX, y: cancelOrigin.localY });
+    releaseMouse(cancelTarget);
+    const restoredAutosave = await waitFor(async () => {
+      const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
+      const waypoint = state.autosavedProjects.at(-1)?.paths[0]?.waypoints[50];
+      return waypoint && Math.hypot(waypoint.x - originalCancelWaypoint.x, waypoint.y - originalCancelWaypoint.y) <= 1e-6
+        ? state.autosavedProjects.at(-1)
+        : null;
+    }, 4000, "the canceled draft autosave to be rolled back");
+    const cancelAutosaveRestored = Boolean(restoredAutosave);
+
+    await loadFixture();
     const switchOrigin = await center();
     const switchTarget = { x: switchOrigin.x + 35, y: switchOrigin.y + 15 };
     await pressMouse(switchOrigin);
@@ -313,7 +340,7 @@ app.whenReady().then(async () => {
     await delay(150);
     const pathSwitchCancelsDrag = switched && await window.webContents.executeJavaScript('document.querySelectorAll(\'[data-role="wp"]\').length === 3');
 
-    return { releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, pathSwitchCancelsDrag };
+    return { releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, pathSwitchCancelsDrag };
   }
 
   async function measureLatency() {

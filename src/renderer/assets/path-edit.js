@@ -33,7 +33,7 @@
       cancel() {
         const hadDraft = Boolean(draft);
         draft = null;
-        if (hadDraft) lastResolution = 'cancel';
+        lastResolution = hadDraft ? 'cancel' : null;
         if (hadDraft) revision += 1;
         cancelRevision += 1;
         emit();
