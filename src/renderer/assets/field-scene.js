@@ -72,4 +72,8 @@
     return parts.map((part) => part.command + part.value).join(' ');
   }
 
-export const FieldScene = Object.freeze({ fractionRange, segmentRange, pathData });
+  function fractionPathData(points, totalDistance, first, last, project, precision) {
+    return pathData(points, fractionRange(points, totalDistance, first, last), project, precision);
+  }
+
+export const FieldScene = Object.freeze({ fractionRange, segmentRange, pathData, fractionPathData });

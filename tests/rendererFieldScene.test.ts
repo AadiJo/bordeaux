@@ -7,6 +7,7 @@ interface Range { start: number; end: number; first?: Point; last?: Point }
 function fieldScene() {
   return loadRendererExport<{
     fractionRange(points: Point[], total: number, first: number, last: number): Range;
+    fractionPathData(points: Point[], total: number, first: number, last: number, project: (point: Point) => Point, precision?: number): string;
     segmentRange(derived: { sample: { pts: Point[]; length: number }; wpIdx: number[] }, segment: number): Range;
     pathData(points: Point[], range: Range | null, project: (point: Point) => Point, precision?: number): string;
   }>(new URL("../src/renderer/assets/field-scene.js", import.meta.url), "FieldScene");
@@ -30,6 +31,8 @@ describe("renderer field scene construction", () => {
 
     const shortRange = scene.fractionRange(points, 100, 0.3025, 0.303);
     expect(scene.pathData(points, shortRange, (point) => point, 3))
+      .toBe("M 30.250 15.125 L 30.300 15.150");
+    expect(scene.fractionPathData(points, 100, 0.3025, 0.303, (point) => point, 3))
       .toBe("M 30.250 15.125 L 30.300 15.150");
   });
 });

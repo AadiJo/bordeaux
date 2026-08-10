@@ -959,10 +959,8 @@ import { UI } from "./ui";
     }, [routine, routinePose, robot, view.w, cw]);
 
     const previewEl = (preview && pts.length > 1) ? (function () {
-      const lo = Math.min(preview.f0, preview.f1), hi = Math.max(preview.f0, preview.f1);
       const totalS = derived.sample.length || 1;
-      let dd = '', started = false;
-      for (let k = 0; k < pts.length; k++) { const f = pts[k].s / totalS; if (f >= lo && f <= hi) { const q = W2P(pts[k]); dd += (started ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); started = true; } }
+      const dd = FieldScene.fractionPathData(pts, totalS, preview.f0, preview.f1, W2P, 1);
       return dd ? h('path', { d: dd, fill: 'none', stroke: accent, strokeOpacity: 0.45, strokeWidth: P(12), strokeLinecap: 'round', style: { pointerEvents: 'none' } }) : null;
     })() : null;
 
