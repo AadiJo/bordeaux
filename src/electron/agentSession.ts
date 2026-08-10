@@ -349,9 +349,15 @@ export class AgentSessionService {
       if (proposal.id === this.committedPreviewId) this.committedPreviewId = null;
     }
     while (this.proposals.size > MAX_PROPOSALS) {
-      const proposalId = this.proposals.keys().next().value!;
+      let proposalId: string | undefined;
+      for (const id of this.proposals.keys()) {
+        if (id !== this.committedPreviewId) {
+          proposalId = id;
+          break;
+        }
+      }
+      if (!proposalId) break;
       this.proposals.delete(proposalId);
-      if (proposalId === this.committedPreviewId) this.committedPreviewId = null;
     }
   }
 
