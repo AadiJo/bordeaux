@@ -261,6 +261,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const [agentCandidateId, setAgentCandidateId] = useState(null);
     const [mcpEnabled, setMcpEnabled] = useState(false);
     const [agentSessionId] = useState(() => 'session_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)));
+    const [agentEditResolutionRevision, setAgentEditResolutionRevision] = useState(0);
     const agentRevision = useRef(-1);
     const agentPublishedContext = useRef(null);
     const agentProposalRef = useRef(agentProposal); agentProposalRef.current = agentProposal;
@@ -518,6 +519,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       const canceled = !draft && editStore.getLastResolution() === 'cancel';
       if (!draft && !canceled) return;
       markAgentProposalStale();
+      if (canceled) setAgentEditResolutionRevision((revision) => revision + 1);
       if (canceled || !dirtyRef.current) updateDirty(true);
       scheduleAutosave(canceled);
     }), [editStore, markAgentProposalStale, scheduleAutosave, updateDirty]);
@@ -562,7 +564,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       const timer = window.setTimeout(publish, 150);
       window.addEventListener('pointerup', publish, { once: true });
       return () => { window.clearTimeout(timer); window.removeEventListener('pointerup', publish); };
-    }, [project, activeIdx, agentSessionId, doc.id, materializeProject]);
+    }, [project, activeIdx, agentSessionId, agentEditResolutionRevision, doc.id, materializeProject]);
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.onAgentProposal !== 'function') return;
       let active = true;
