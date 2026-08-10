@@ -7,8 +7,17 @@ import type {
   TrajectorySample,
   ValidationIssue,
 } from "../types";
+import type * as z from "zod/v4";
+import type {
+  agentContextSchema,
+  fuelCollectionIntentSchema,
+  routeLocationSchema,
+  routeStepSchema,
+} from "./schemas";
 
 export type AllianceColor = "blue" | "red";
+
+export type AgentContext = z.infer<typeof agentContextSchema>;
 
 export interface AgentSessionSnapshot {
   sessionId: string;
@@ -81,48 +90,20 @@ export interface PathAnalysis {
   optimization?: PlannerOptimizationDiagnostics;
 }
 
-export interface FieldPointInput {
-  x: number;
-  y: number;
-  headingDeg?: number;
-}
+export type FieldPointInput = Extract<z.infer<typeof routeLocationSchema>, { x: number }>;
 
-export interface FieldTermInput {
-  term: string;
-}
+export type FieldTermInput = Extract<z.infer<typeof routeLocationSchema>, { term: string }>;
 
-export type RouteLocationInput = FieldPointInput | FieldTermInput;
+export type RouteLocationInput = z.infer<typeof routeLocationSchema>;
 
 export type RouteTraversal = "direct" | "trench-table" | "trench-away" | "bump-table" | "bump-away";
 
-export interface FuelCollectionIntent {
-  /** Maximum permitted intake-to-travel angular error. Default 5 degrees. */
-  maxHeadingErrorDeg?: number;
-  /** Explicitly permit a non-aligned strategy for this route portion. */
-  allowCrosswiseHeading?: boolean;
-}
+export type FuelCollectionIntent = z.infer<typeof fuelCollectionIntentSchema>;
 
-export type RouteStep =
-  | {
-      kind: "travel";
-      to: RouteLocationInput;
-      /** Crossing required on this leg, in physical table/away terms. */
-      traversal?: RouteTraversal;
-      collectFuel?: FuelCollectionIntent;
-    }
-  | {
-      kind: "swoosh";
-      /** Far longitudinal extent of a deterministic 180-degree smooth reversal. */
-      at: RouteLocationInput;
-      traversal?: RouteTraversal;
-      turn: "clockwise" | "counterclockwise";
-      radiusM: number;
-      /** Moves the maneuver back along its approach from a named boundary. */
-      insetM?: number;
-      collectFuel?: FuelCollectionIntent;
-    };
+export type RouteStep = z.infer<typeof routeStepSchema>;
 
 export interface PlanPathRequest {
+  context?: AgentContext;
   intent: string;
   name?: string;
   alliance: AllianceColor;
@@ -136,15 +117,12 @@ export interface PlanPathRequest {
   maximumCandidates?: number;
   nearTieWindowS?: number;
   basePathId?: string;
-  /** Fallback for migrated projects without robot.heightM; configured project height wins. */
   robotHeightM?: number;
-  /** Resolve a mechanism-aware physical heading at the final pose. */
   finishFacing?: {
     mechanism: "shooter";
     target: RouteLocationInput;
     maxHeadingErrorDeg?: number;
   };
-  /** Legacy-goals shorthand: treat the complete route as a collection span. */
   collectFuel?: FuelCollectionIntent;
   endAction?: {
     commandId: string;
@@ -152,7 +130,6 @@ export interface PlanPathRequest {
     arguments?: Record<string, import("../types").CommandArgumentValue>;
     cancelOnPathEnd?: boolean;
   };
-  /** Preserve a requested action when no authoritative Java binding is available yet. */
   endActionIntent?: {
     semanticTag: string;
     description: string;
@@ -201,6 +178,7 @@ export interface PathProposal {
   id: string;
   baseSessionId: string;
   baseRevision: number;
+  baseActivePathId: string;
   intent: string;
   operation: "add" | "replace";
   targetPathId?: string;
@@ -214,10 +192,68 @@ export interface PathProposal {
   appliedRevision?: number;
 }
 
+export interface CandidateSummary {
+  id: string;
+  label: string;
+  valid: boolean;
+  requiredPortalIds?: string[];
+  metrics?: RouteCandidateMetrics;
+  changedFields?: string[];
+  rejectionReason?: string;
+  findingCounts: {
+    errors: number;
+    warnings: number;
+    notes: number;
+  };
+}
+
+export interface ProposalSummary {
+  status: "ready" | "stale" | "applied" | "rejected" | "expired";
+  proposalId: string;
+  proposalUri: string;
+  baseContext: AgentContext;
+  intent: string;
+  operation: PathProposal["operation"] | RobotProfileProposal["operation"];
+  targetPathId?: string;
+  recommendedCandidate: CandidateSummary | null;
+  candidates: CandidateSummary[];
+  recommendationReason?: string;
+  blockingIssues?: string[];
+  advisories?: string[];
+  summary?: string[];
+  supersededProposalId?: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface BlockedPlanningOutcome {
+  status: "blocked";
+  code: "NO_VALID_CANDIDATE";
+  proposalId: null;
+  baseContext: AgentContext;
+  candidates: CandidateSummary[];
+  blockingIssues: string[];
+}
+
+export interface NeedsInputOutcome {
+  status: "needs_input";
+  code: "ROBOT_PROFILE_INCOMPLETE" | "TARGET_FACING_REQUIRED";
+  baseContext: AgentContext;
+  questions: string[];
+}
+
+export interface StaleContextOutcome {
+  status: "stale_context";
+  code: "STALE_CONTEXT";
+  message: string;
+  currentContext: AgentContext;
+}
+
 export interface RobotProfileProposal {
   id: string;
   baseSessionId: string;
   baseRevision: number;
+  baseActivePathId: string;
   intent: string;
   operation: "configureRobot";
   planning: RobotPlanningProfile;

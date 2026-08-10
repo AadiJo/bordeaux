@@ -1,21 +1,141 @@
-import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
+import { McpServer, ResourceTemplate, type CallToolResult, type JSONValue } from "@modelcontextprotocol/server";
 import { StdioServerTransport, serveStdio } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod/v4";
 import type { AgentRequest } from "../electron/agentSession";
-import { FIELD_H, FIELD_W } from "../shared/math/fieldBounds";
+import {
+  agentContextSchema,
+  analyzePathInputSchema,
+  getProposalInputSchema,
+  inspectRobotProfileInputSchema,
+  inspectSessionInputSchema,
+  planPathRequestSchema,
+  proposeRobotProfileInputSchema,
+  repairPathInputSchema,
+  resolveFieldTermsInputSchema,
+} from "../shared/agent/schemas";
 
 export interface BordeauxMcpBridge {
-  request(request: AgentRequest): Promise<unknown>;
+  request(request: AgentRequest, signal?: AbortSignal): Promise<unknown>;
 }
 
-function textResult(value: unknown) {
-  const text = JSON.stringify(value, null, 2);
-  return { content: [{ type: "text" as const, text }], structuredContent: { result: value as any } };
+function jsonValue(value: unknown): JSONValue {
+  return JSON.parse(JSON.stringify(value)) as JSONValue;
+}
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function resultText(value: unknown): string {
+  const object = objectValue(value);
+  if (object?.status === "ready" && typeof object.proposalId === "string") {
+    const recommended = objectValue(object.recommendedCandidate);
+    return `Proposal ${object.proposalId} is ready${recommended && typeof recommended.id === "string" ? `; recommended candidate ${recommended.id}` : ""}. Detailed data is available from ${String(object.proposalUri)}.`;
+  }
+  if (object?.status === "blocked") return `No proposal was staged. ${Array.isArray(object.blockingIssues) ? object.blockingIssues.join(" ") : "No generated candidate passed validation."}`;
+  if (object?.status === "needs_input") return `Planning needs input: ${Array.isArray(object.questions) ? object.questions.join(" ") : "inspect the structured result"}`;
+  if (object?.status === "stale_context") return String(object.message ?? "The editor context changed; inspect the session and retry.");
+  if (object?.status === "complete" && typeof object.pathId === "string") return `Analysis complete for ${object.pathId}; inspect structuredContent for measured findings and extrema.`;
+  if (object?.context && typeof object.projectName === "string") return `Bordeaux project ${object.projectName}, revision ${String(object.revision)}, active path ${String(object.activePathId)}.`;
+  if (typeof object?.completeForFuelCollection === "boolean") return object.completeForFuelCollection ? "The robot profile is complete for FUEL collection." : "The robot profile has required unanswered questions.";
+  if (Array.isArray(value)) {
+    const resolved = value.filter((item) => objectValue(item)?.status === "resolved").length;
+    return `Resolved ${resolved} of ${value.length} field terms. Inspect structuredContent for coordinates and diagnostics.`;
+  }
+  return "Bordeaux returned structured data.";
+}
+
+function toolResult(value: unknown): CallToolResult {
+  const object = objectValue(value);
+  const content: CallToolResult["content"] = [{ type: "text", text: resultText(value) }];
+  if (typeof object?.proposalUri === "string" && typeof object.proposalId === "string") {
+    content.push({ type: "resource_link", name: `Proposal ${object.proposalId}`, uri: object.proposalUri, mimeType: "application/json", description: "Full staged Bordeaux proposal." });
+  }
+  if (typeof object?.analysisUri === "string" && typeof object.pathId === "string") {
+    content.push({ type: "resource_link", name: `Analysis ${object.pathId}`, uri: object.analysisUri, mimeType: "application/json", description: "Detailed path analysis with bounded samples." });
+  }
+  return { content, structuredContent: jsonValue(value) };
+}
+
+function errorCode(message: string): { code: string; retryable: boolean } {
+  if (/finish loading|Open a Bordeaux project/.test(message)) return { code: "SESSION_NOT_READY", retryable: true };
+  if (/changed while|changed before|stale/i.test(message)) return { code: "STALE_CONTEXT", retryable: true };
+  if (/canceled|timed out/i.test(message)) return { code: "CANCELED", retryable: true };
+  if (/does not exist|expired/.test(message)) return { code: "NOT_FOUND", retryable: false };
+  if (/authoritative Java|runtime-ready command|Semantic action/.test(message)) return { code: "ACTION_BINDING_REQUIRED", retryable: true };
+  return { code: "REQUEST_FAILED", retryable: true };
+}
+
+function toolError(error: unknown): CallToolResult {
+  const message = error instanceof Error ? error.message : String(error);
+  const classified = errorCode(message);
+  const value = { status: "error", error: { ...classified, message } };
+  return { isError: true, content: [{ type: "text", text: `${classified.code}: ${message}` }], structuredContent: value };
+}
+
+async function callBridge(bridge: BordeauxMcpBridge, request: AgentRequest, signal?: AbortSignal): Promise<CallToolResult> {
+  try { return toolResult(await bridge.request(request, signal)); }
+  catch (error) { return toolError(error); }
 }
 
 function jsonResource(uri: URL, value: unknown) {
   return { contents: [{ uri: uri.toString(), mimeType: "application/json", text: JSON.stringify(value, null, 2) }] };
 }
+
+const localRead = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
+const localPreview = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
+
+const errorOutputSchema = z.object({
+  status: z.literal("error"),
+  error: z.object({ code: z.string(), message: z.string(), retryable: z.boolean() }),
+});
+const staleContextOutputSchema = z.object({ status: z.literal("stale_context"), code: z.literal("STALE_CONTEXT"), message: z.string(), currentContext: agentContextSchema });
+const candidateSummaryOutputSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  valid: z.boolean(),
+  requiredPortalIds: z.array(z.string()).optional(),
+  metrics: z.object({
+    totalTimeS: z.number(), totalDistanceM: z.number(), minimumClearanceM: z.number(), waypointCount: z.number(), peakCurvatureInvM: z.number(), peakAngularVelocityRadps: z.number(),
+    estimatedCollectionAreaM2: z.number().optional(), shootingRangeM: z.number().optional(), preferredShootingRangeErrorM: z.number().optional(),
+  }).optional(),
+  changedFields: z.array(z.string()).optional(),
+  rejectionReason: z.string().optional(),
+  findingCounts: z.object({ errors: z.number().int(), warnings: z.number().int(), notes: z.number().int() }),
+});
+const proposalSummaryOutputSchema = z.object({
+  status: z.enum(["ready", "stale", "applied", "rejected", "expired"]),
+  proposalId: z.string(),
+  proposalUri: z.string(),
+  baseContext: agentContextSchema,
+  intent: z.string(),
+  operation: z.enum(["add", "replace", "configureRobot"]),
+  targetPathId: z.string().optional(),
+  recommendedCandidate: candidateSummaryOutputSchema.nullable(),
+  candidates: z.array(candidateSummaryOutputSchema),
+  recommendationReason: z.string().optional(),
+  blockingIssues: z.array(z.string()).optional(),
+  advisories: z.array(z.string()).optional(),
+  summary: z.array(z.string()).optional(),
+  supersededProposalId: z.string().optional(),
+  createdAt: z.string(),
+  expiresAt: z.string(),
+});
+const blockedPlanningOutputSchema = z.object({
+  status: z.literal("blocked"),
+  code: z.literal("NO_VALID_CANDIDATE"),
+  proposalId: z.null(),
+  baseContext: agentContextSchema,
+  candidates: z.array(candidateSummaryOutputSchema),
+  blockingIssues: z.array(z.string()),
+});
+const needsInputOutputSchema = z.object({
+  status: z.literal("needs_input"),
+  code: z.enum(["ROBOT_PROFILE_INCOMPLETE", "TARGET_FACING_REQUIRED"]),
+  baseContext: agentContextSchema,
+  questions: z.array(z.string()),
+});
+const proposalOutcomeOutputSchema = z.union([proposalSummaryOutputSchema, blockedPlanningOutputSchema, needsInputOutputSchema, staleContextOutputSchema, errorOutputSchema]);
 
 export function buildMcpServer(bridge: BordeauxMcpBridge): McpServer {
   const server = new McpServer({ name: "Bordeaux", version: "0.1.0" });
@@ -42,92 +162,68 @@ export function buildMcpServer(bridge: BordeauxMcpBridge): McpServer {
     ],
   }));
   server.registerResource("Current Java commands", "bordeaux://commands/current", { mimeType: "application/json", description: "Authoritative linked Java commands, or an empty catalog when none is linked." }, async (uri) => jsonResource(uri, await bridge.request({ method: "commands" })));
-  server.registerResource("Path analysis", new ResourceTemplate("bordeaux://paths/{id}/analysis", { list: undefined }), { mimeType: "application/json", description: "Authored path data, bounded raw planner samples, extrema, and measured findings." }, async (uri, variables) => jsonResource(uri, await bridge.request({ method: "analyze_path", params: { pathId: String(variables.id) } })));
-  server.registerResource("Proposal", new ResourceTemplate("bordeaux://proposals/{id}", { list: undefined }), { mimeType: "application/json", description: "A staged path or repair proposal and its current application status." }, async (uri, variables) => jsonResource(uri, await bridge.request({ method: "get_proposal", params: { proposalId: String(variables.id) } })));
+  server.registerResource("Path analysis", new ResourceTemplate("bordeaux://paths/{id}/analysis", { list: undefined }), { mimeType: "application/json", description: "Detailed authored path data, bounded raw planner samples, extrema, and measured findings." }, async (uri, variables) => jsonResource(uri, await bridge.request({ method: "analyze_path", params: { pathId: String(variables.id), detail: "samples" } })));
+  server.registerResource("Current proposal", "bordeaux://proposals/current", { mimeType: "application/json", description: "The active reviewable proposal summary, or null when no proposal is active." }, async (uri) => jsonResource(uri, await bridge.request({ method: "get_current_proposal" })));
+  server.registerResource("Proposal", new ResourceTemplate("bordeaux://proposals/{id}", { list: undefined }), { mimeType: "application/json", description: "A full staged proposal and its current application status." }, async (uri, variables) => jsonResource(uri, await bridge.request({ method: "get_proposal", params: { proposalId: String(variables.id), detail: "full" } })));
+  server.registerResource("Proposal candidate", new ResourceTemplate("bordeaux://proposals/{proposalId}/candidates/{candidateId}", { list: undefined }), { mimeType: "application/json", description: "One full path or repair candidate, including its detailed analysis." }, async (uri, variables) => jsonResource(uri, await bridge.request({ method: "get_proposal_candidate", params: { proposalId: String(variables.proposalId), candidateId: String(variables.candidateId) } })));
 
-  server.registerTool("inspect_session", { description: "Inspect the live Bordeaux project without changing it.", inputSchema: z.object({}), annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true } }, async () => textResult(await bridge.request({ method: "inspect_session" })));
-  server.registerTool("inspect_robot_profile", { description: "Inspect the agent-only robot planning details and get the exact unanswered questions needed before planning collection or shooting.", inputSchema: z.object({}), annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true } }, async () => textResult(await bridge.request({ method: "inspect_robot_profile" })));
-  const robotPlanningProfile = z.object({
-    intake: z.object({
-      name: z.string().min(1).max(80),
-      centerM: z.object({ x: z.number(), y: z.number() }).describe("Robot-local meters: +X forward, +Y left."),
-      directionDeg: z.number().min(-180).max(180).describe("Outward collection direction counterclockwise from robot +X; front is 0 degrees."),
-      captureWidthM: z.number().positive().max(3),
-      maxCollectSpeedMps: z.number().positive().max(12),
-    }).optional(),
-    shooter: z.object({
-      directionDeg: z.number().min(-180).max(180).describe("Firing direction counterclockwise from robot +X; front is 0 degrees."),
-      requiresTargetFacing: z.boolean(),
-      preferredRangeM: z.number().positive().max(20).optional(),
-    }).optional(),
-    notes: z.string().max(4_000).optional(),
-  });
+  server.registerTool("inspect_session", {
+    title: "Inspect Bordeaux session",
+    description: "Inspect the live project and obtain the context handle required for retry-safe planning. This never changes the editor.",
+    inputSchema: inspectSessionInputSchema,
+    outputSchema: z.union([z.object({ context: agentContextSchema, sessionId: z.string(), revision: z.number(), projectName: z.string(), activePathId: z.string() }).passthrough(), errorOutputSchema]),
+    annotations: localRead,
+  }, async (_args, ctx) => callBridge(bridge, { method: "inspect_session" }, ctx.mcpReq.signal));
+  server.registerTool("inspect_robot_profile", {
+    title: "Inspect robot planning profile",
+    description: "Inspect intake and shooter geometry. requiredQuestions contains only unanswered facts; optionalQuestions are never planning blockers.",
+    inputSchema: inspectRobotProfileInputSchema,
+    outputSchema: z.union([z.object({ completeForFuelCollection: z.boolean(), missing: z.array(z.string()), requiredQuestions: z.array(z.string()), questions: z.array(z.string()), optionalQuestions: z.array(z.string()) }).passthrough(), errorOutputSchema]),
+    annotations: localRead,
+  }, async (_args, ctx) => callBridge(bridge, { method: "inspect_robot_profile" }, ctx.mcpReq.signal));
   server.registerTool("propose_robot_profile", {
-    description: "Stage team-provided intake, shooter, and planning details for explicit review on Bordeaux's Robot page. Omitted fields retain the inspected profile; this never changes the project directly.",
-    inputSchema: z.object({ intent: z.string().min(1).max(1_000), planning: robotPlanningProfile }),
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
-  }, async (args) => textResult(await bridge.request({ method: "propose_robot_profile", params: args })));
+    title: "Propose robot planning profile",
+    description: "Stage team-provided intake, shooter, and planning details for explicit Robot-page review. Pass inspect_session.context to reject stale editor state. This supersedes any current preview and never changes the project directly.",
+    inputSchema: proposeRobotProfileInputSchema,
+    outputSchema: z.union([proposalSummaryOutputSchema, staleContextOutputSchema, errorOutputSchema]),
+    annotations: localPreview,
+  }, async (args, ctx) => callBridge(bridge, { method: "propose_robot_profile", params: args }, ctx.mcpReq.signal));
   server.registerTool("resolve_field_terms", {
-    description: "Resolve game-manual and robot-relative vocabulary to authoritative field locations. Explicit red/blue ownership is independent of the editor view; alliance-left/right on a TRENCH/BUMP is driver-relative. Robot-relative front/back/left/right requires a pose.",
-    inputSchema: z.object({
-      phrases: z.array(z.string().min(1).max(160)).min(1).max(24),
-      alliance: z.enum(["blue", "red"]).optional(),
-      pose: z.discriminatedUnion("headingSource", [
-        z.object({ headingSource: z.literal("physical"), x: z.number().min(0).max(FIELD_W), y: z.number().min(0).max(FIELD_H), physicalHeadingRad: z.number() }),
-        z.object({ headingSource: z.literal("authored"), x: z.number().min(0).max(FIELD_W), y: z.number().min(0).max(FIELD_H), authoredHeadingRad: z.number(), driveBackward: z.boolean() }),
-      ]).optional(),
-      relativeDistanceM: z.number().min(0.01).max(5).optional(),
-      robotHeightM: z.number().positive().max(5).optional().describe("Fallback height only for migrated projects whose robot configuration has no height; configured project height is authoritative."),
-    }),
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
-  }, async (args) => textResult(await bridge.request({ method: "resolve_field_terms", params: args })));
+    title: "Resolve Bordeaux field terms",
+    description: "Resolve game-manual and robot-relative vocabulary to authoritative field locations. Explicit red/blue ownership is independent of the editor view; alliance-left/right is driver-relative.",
+    inputSchema: resolveFieldTermsInputSchema,
+    outputSchema: z.union([z.array(z.object({ phrase: z.string(), status: z.enum(["resolved", "unresolved", "ambiguous"]), matches: z.array(z.object({ id: z.string(), label: z.string(), point: z.object({ x: z.number(), y: z.number() }) }).passthrough()) }).passthrough()), errorOutputSchema]),
+    annotations: localRead,
+  }, async (args, ctx) => callBridge(bridge, { method: "resolve_field_terms", params: args }, ctx.mcpReq.signal));
   server.registerTool("analyze_path", {
-    description: "Analyze an existing live path through Bordeaux's selected planner and return raw sampled values, extrema, and measured findings without mutation.",
-    inputSchema: z.object({ pathId: z.string().max(160).optional(), sampleLimit: z.number().int().min(50).max(2_000).optional(), minimumClearanceM: z.number().min(0).max(2).optional() }),
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
-  }, async (args) => textResult(await bridge.request({ method: "analyze_path", params: args })));
+    title: "Analyze Bordeaux path",
+    description: "Analyze a live path without mutation. The default summary omits raw samples; request detail=samples only when exact trajectory samples are needed.",
+    inputSchema: analyzePathInputSchema,
+    outputSchema: z.json(),
+    annotations: localRead,
+  }, async (args, ctx) => callBridge(bridge, { method: "analyze_path", params: args }, ctx.mcpReq.signal));
   server.registerTool("repair_path", {
-    description: "Generate bounded repairs for named analysis findings and stage them in Bordeaux for user review. This never applies a project change.",
-    inputSchema: z.object({ pathId: z.string().max(160).optional(), findingIds: z.array(z.string().min(1).max(200)).min(1).max(8), minimumClearanceM: z.number().min(0).max(2).optional() }),
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
-  }, async (args) => textResult(await bridge.request({ method: "repair_path", params: args })));
-  const location = z.union([z.object({ x: z.number(), y: z.number(), headingDeg: z.number().optional() }), z.object({ term: z.string().min(1).max(160) })]);
-  const legTraversal = z.enum(["direct", "trench-table", "trench-away", "bump-table", "bump-away"]);
-  const collectFuel = z.object({
-    maxHeadingErrorDeg: z.number().min(1).max(90).optional().describe("Maximum intake-to-travel heading error; defaults to 5 degrees."),
-    allowCrosswiseHeading: z.boolean().optional().describe("Only true when the user explicitly wants a non-aligned collection strategy."),
-  });
-  const routeStep = z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("travel"), to: location, traversal: legTraversal.optional(), collectFuel: collectFuel.optional() }),
-    z.object({
-      kind: z.literal("swoosh"),
-      at: location.describe("Far longitudinal extent of the 180-degree maneuver, not its entry or center."),
-      traversal: legTraversal.optional().describe("Exact portal used on the approach leg when it reaches an alliance barrier."),
-      turn: z.enum(["clockwise", "counterclockwise"]).describe("Turn direction as viewed in canonical Bordeaux overhead coordinates (+X right, +Y up)."),
-      radiusM: z.number().min(0.25).max(2.5).describe("Radius of the 180-degree reversal in meters."),
-      insetM: z.number().min(0).max(2).optional().describe("Distance to move the far extent back along the approach from a named zone boundary."),
-      collectFuel: collectFuel.optional(),
-    }),
-  ]);
+    title: "Propose Bordeaux path repair",
+    description: "Generate bounded repairs for named findings. Pass inspect_session.context. Invalid candidates return status=blocked and are not staged; a ready result supersedes the current preview.",
+    inputSchema: repairPathInputSchema,
+    outputSchema: proposalOutcomeOutputSchema,
+    annotations: localPreview,
+  }, async (args, ctx) => callBridge(bridge, { method: "repair_path", params: args }, ctx.mcpReq.signal));
   server.registerTool("plan_path", {
-    description: "Stage planner-scored path previews. Use ordered steps for mixed crossings or a swoosh and mark collectFuel only on steps that sweep ball-bearing space. Bordeaux spatially clips intake heading and the configured intake-speed cap to the official FUEL region, leaving approaches and exits uncapped by intake speed. For initial FUEL collection, target the approximately 72-inch-deep staging band around the CENTER LINE rather than the full NEUTRAL ZONE depth, and distribute lanes across the requested field half through the CENTER LINE using the configured intake width. This is not a global optimum.",
-    inputSchema: z.object({
-      intent: z.string().min(1).max(2_000), name: z.string().max(120).optional(), alliance: z.enum(["blue", "red"]), start: location.optional(), goals: z.array(location).min(1).max(12).optional(), steps: z.array(routeStep).min(1).max(12).optional(),
-      traversal: z.enum(["fastest", "trench", "bump", "compare"]).optional(), minimumClearanceM: z.number().min(0).max(2).optional().describe("Advisory clearance target used for warnings and near-tie ranking; modeled intersections remain invalid."), maximumCandidates: z.number().int().min(1).max(5).optional(), nearTieWindowS: z.number().min(0).max(2).optional(), basePathId: z.string().max(160).optional(),
-      robotHeightM: z.number().positive().max(5).optional().describe("Fallback height only for migrated projects whose robot configuration has no height; configured project height is authoritative."),
-      collectFuel: collectFuel.optional().describe("Legacy-goals shorthand only. Ordered routes should mark each collecting travel/swoosh step instead."),
-      finishFacing: z.object({ mechanism: z.literal("shooter"), target: location, maxHeadingErrorDeg: z.number().min(1).max(45).optional() }).optional().describe("Mechanism-aware physical heading at the final pose. Use a separate non-collecting final travel step."),
-      endAction: z.object({ commandId: z.string().min(1).max(256), semanticTag: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(64), arguments: z.record(z.string(), z.json()).optional(), cancelOnPathEnd: z.boolean().optional() }).optional(),
-      endActionIntent: z.object({ semanticTag: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(64), description: z.string().min(1).max(200) }).optional(),
-    }).refine((value) => Boolean(value.goals) !== Boolean(value.steps), { message: "Provide exactly one of goals or ordered steps." }).refine((value) => !(value.steps && value.traversal), { message: "Ordered steps use per-leg traversal and cannot include global traversal." }).refine((value) => !(value.endAction && value.endActionIntent), { message: "Provide endAction or endActionIntent, not both." }),
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
-  }, async (args) => textResult(await bridge.request({ method: "plan_path", params: args })));
+    title: "Propose Bordeaux autonomous path",
+    description: "Validate and stage planner-scored path previews. Pass inspect_session.context. Use ordered steps for mixed crossings, keep collection only on FUEL-sweeping steps, and use a separate final approach for finishFacing. Missing facts return needs_input; invalid candidates return blocked without staging; ready results supersede the current preview. This is not a global optimum.",
+    inputSchema: planPathRequestSchema,
+    outputSchema: proposalOutcomeOutputSchema,
+    annotations: localPreview,
+  }, async (args, ctx) => callBridge(bridge, { method: "plan_path", params: args }, ctx.mcpReq.signal));
   server.registerTool("get_proposal", {
-    description: "Read a staged proposal's candidates, diagnostics, recommendation, and current status.",
-    inputSchema: z.object({ proposalId: z.string().min(1).max(200) }),
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
-  }, async (args) => textResult(await bridge.request({ method: "get_proposal", params: args })));
-  server.registerPrompt("configure_robot_for_planning", { description: "Interview the team for missing robot facts, then stage a reviewable Robot-page proposal." }, async () => ({ messages: [{ role: "user", content: { type: "text", text: "Read bordeaux://robot/planning-profile and bordeaux://session/current. Ask only the missing questions returned by the profile resource: primary intake robot-local center and direction, effective capture width, maximum safe collection speed, and—when shooting matters—shooter direction, target-facing requirement, and preferred range. Explain that +X is robot forward, +Y is robot left, and directions are counterclockwise degrees from +X. Do not guess. After the user answers, call propose_robot_profile. Tell the user to review and apply it on Bordeaux's Robot page; never apply, save, or export it yourself." } }] }));
+    title: "Inspect Bordeaux proposal",
+    description: "Read a compact proposal summary by default. Use detail=full only when the complete paths and analyses are required; candidate resources are usually more efficient.",
+    inputSchema: getProposalInputSchema,
+    outputSchema: z.json(),
+    annotations: localRead,
+  }, async (args, ctx) => callBridge(bridge, { method: "get_proposal", params: args }, ctx.mcpReq.signal));
+  server.registerPrompt("configure_robot_for_planning", { description: "Interview the team for missing robot facts, then stage a reviewable Robot-page proposal." }, async () => ({ messages: [{ role: "user", content: { type: "text", text: "Read bordeaux://robot/planning-profile and bordeaux://session/current. Ask only requiredQuestions from the profile resource; optionalQuestions are not blockers. Explain that +X is robot forward, +Y is robot left, and directions are counterclockwise degrees from +X. Do not guess. After the user answers, call propose_robot_profile with the current context handle. Tell the user to review and apply it on Bordeaux's Robot page; never apply, save, or export it yourself." } }] }));
   server.registerPrompt("author_autonomous_path", { description: "Required safe workflow for coordinate-correct, topology-preserving path authoring and in-app approval." }, async () => ({ messages: [{ role: "user", content: { type: "text", text: "Read bordeaux://session/current, bordeaux://robot/planning-profile, bordeaux://field/2026-rebuilt, and bordeaux://guidance/path-authoring before planning. If the robot profile reports missing facts relevant to the request, ask the user those exact questions and stage their answers with propose_robot_profile; never guess mechanism geometry. Canonical Bordeaux coordinates match the overhead image: red is left/low-X and blue is right/high-X; allianceView changes display orientation only and never landmark ownership. Official +Y is away from the scoring table. Resolve every game-manual term explicitly and respect navigable:false on fiducials, structure faces, and off-field areas. Treat alliance-left/right as driver-relative vocabulary, not screen-relative guessing. Plan against the configured robot-local footprint and height: the full oriented polygon must fit, BUMPs are traversable surfaces with full depth, TRENCHes are width- and height-limited overhead passages, and HUBs plus field walls are solid. Never substitute a guessed centerline radius or an uncertified DEPOT polygon. If outbound and inbound crossings differ, use ordered steps with a traversal on each leg; never use legacy goals or a single global traversal. Encode a swoosh only with the typed 180-degree swoosh step, explicit turn direction, radius, and a footprint-safe inset when its named extent is a zone boundary—never with guessed loop coordinates. If the user wants to collect initial FUEL, keep collection as the route objective, mark collectFuel only on steps intended to sweep ball-bearing space, and resolve both edges of the official approximately 72-inch-deep FUEL band around the CENTER LINE. This band is much shallower than the full 283-inch NEUTRAL ZONE. Route the outbound and return lanes inside that green region. If one field half is requested, distribute those lanes across the full half through the CENTER LINE using the configured intake capture width and robot footprint; do not hug only the wall-side portion. Bordeaux clips the intake-speed and intake-heading rules to the actual in-region portions, so never extend collection caps through empty approaches, TRENCHes, BUMPs, or alliance zones. Use distinct collection lanes with little retracing. Treat authored heading as physical robot orientation. Tangents control geometry, while swerve heading may rotate independently after collection. Use finishFacing so Bordeaux begins rotating toward the HUB after leaving the final FUEL lane and completes the alignment while still driving; never request manufactured low-speed heading-transition ranges or a full stationary endpoint turn. Confirm the proposal's requiredPortalIds match the requested order before recommending it. Preserve requested actions: bind endAction only through an authoritative Java command; otherwise send endActionIntent so Bordeaux saves a pending endpoint marker, allows valid geometry to be added, and requires binding before Java export. Analyze existing paths before repairs, recommend only a valid candidate, and tell the user to review Apply/Reject in Bordeaux. Never claim global optimality or attempt file, export, build, or deploy operations." } }] }));
   return server;
 }

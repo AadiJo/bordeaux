@@ -21,6 +21,8 @@ The field pack inventories zones, lines, all TRENCH/BUMP portals, HUB bodies and
 
 `plan_path` generates a bounded set of typed route skeletons, runs the selected Bordeaux planner, rejects modeled collisions and illegal alliance-barrier crossings, and ranks the remaining generated candidates. Simple routes may use `goals` plus one global traversal policy. A route with different outbound and inbound crossings must use ordered `steps` with per-leg traversal requirements. Bordeaux validates the exact ordered portal IDs and adds footprint-sized straight entry/exit runs through each portal.
 
+`inspect_session` returns an explicit `context` handle containing the session ID, revision, and active path. Pass that handle to planning, repair, analysis, and robot-profile proposal calls. If the editor changes first, Bordeaux returns `stale_context` before starting expensive work. Calls without a handle remain accepted for older clients, but are not retry-safe.
+
 A `swoosh` step is a deterministic 180-degree reversal with an explicit turn direction, radius, and optional boundary inset. Its `at` location is the maneuver's far longitudinal extent—not its entry or center. It is not an arbitrary loop inferred from prose. Its recommendation is not a proof of a globally optimal match strategy.
 
 When a request says to collect as much initial FUEL as practical, agents must keep collection as the route objective. The complete `NEUTRAL ZONE` is 283 in (7.19 m) deep, but the official starting FUEL corral is only approximately 72 in (1.83 m) deep around the `CENTER LINE`. Initial collection routes therefore resolve the near or far edge of that FUEL band and use distinct lanes with little retracing instead of driving to the far edge of the complete zone. Each collecting travel or swoosh step is marked with `collectFuel`; only those segments receive tangent-aware intake heading and the configured collection-speed limit. Bordeaux still cannot promise an exact FUEL count because placement varies from match to match.
@@ -64,8 +66,10 @@ An end action is accepted only from an authoritative generated Java command cata
 
 ## MCP surface
 
-- Resources: current session, robot planning profile, 2026 field pack, the path-authoring contract, linked Java commands, path analysis, and proposals.
+- Resources: current session, robot planning profile, 2026 field pack, the path-authoring contract, linked Java commands, detailed path analysis, the current proposal, full proposals, and individual proposal candidates.
 - Read-only tools: `inspect_session`, `inspect_robot_profile`, `resolve_field_terms`, `analyze_path`, and `get_proposal`.
 - Preview tools: `propose_robot_profile`, `plan_path`, and `repair_path`.
 
-`analyze_path` returns bounded raw planner samples, extrema, structural/planner findings, authored limits, and ordered waypoint/segment references. `repair_path` only stages a candidate when a bounded clone improves the requested finding without introducing a worse error or warning.
+Tool results use typed structured output plus a compact text fallback. Preview tools return one of `ready`, `blocked`, `needs_input`, or `stale_context`. A `ready` result includes compact candidate metrics and a resource link; complete paths and bounded raw samples remain behind proposal/candidate resources. A `blocked` result is diagnostic only and is not staged in the editor, so an invalid candidate is never labeled as recommended.
+
+`analyze_path` defaults to a summary containing extrema and findings. Use `detail: "samples"` or read `bordeaux://paths/{id}/analysis` only when exact bounded samples are required. `repair_path` only stages a candidate when a bounded clone improves the requested finding without introducing a worse error or warning. Staging a new ready proposal supersedes the previous preview and reports its ID.
