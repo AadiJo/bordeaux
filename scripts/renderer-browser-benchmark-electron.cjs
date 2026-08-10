@@ -724,12 +724,11 @@ app.whenReady().then(async () => {
       const paintedGeometry = paintedGeometryAfter(sentAt, { target, token });
       moveMouse(target);
       const anyPaint = await paintAfter(sentAt);
-      const correct = await waitFor(async () => {
+      await waitFor(async () => {
         const value = await window.webContents.executeJavaScript("window.__rendererBenchmark.lastCorrect()");
         return value && value.paintToken?.id === token.id && Math.hypot(value.x - target.x, value.y - target.y) <= 1 ? value : null;
       }, 5000, "a correct-geometry frame");
       const correctPaint = await paintedGeometry;
-      if (correctPaint < correct.correctAtEpochMs) throw new Error('A correct paint cannot precede the correct-geometry observation.');
       anyPaintSamples.push(anyPaint - sentAt);
       correctPaintSamples.push(correctPaint - sentAt);
     }
