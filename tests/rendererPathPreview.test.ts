@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadRendererExport } from "./helpers/loadRendererExport";
 
 interface WorkerJob { id: number; quality: "interactive" | "final"; perSegment: number }
@@ -8,15 +8,21 @@ class FakeWorker {
   terminated = false;
   onmessage: ((event: { data: unknown }) => void) | null = null;
   onerror: ((event: { message?: string }) => void) | null = null;
-  postMessage(job: WorkerJob) { this.jobs.push(job); }
+  onmessageerror: ((event: { data?: unknown }) => void) | null = null;
+  postError: Error | null = null;
+  postMessage(job: WorkerJob) {
+    if (this.postError) throw this.postError;
+    this.jobs.push(job);
+  }
   resolve(data: unknown) { this.onmessage?.({ data }); }
   fail(message = "worker failed") { this.onerror?.({ message }); }
+  failMessage(data?: unknown) { this.onmessageerror?.({ data }); }
   terminate() { this.terminated = true; }
 }
 
 function previewModule() {
   return loadRendererExport<{
-    create(options: { workerFactory: () => FakeWorker; derive?: (job: unknown) => unknown }): {
+    create(options: { workerFactory: () => FakeWorker; derive?: (job: unknown) => unknown; timeoutMs?: number }): {
       request(input: { path: unknown; robot: unknown; plannerId: string; quality: "interactive" | "final"; key?: string }): number;
       getSnapshot(): { status: string; revision: number; quality: string; path: unknown; value: unknown };
       retain(): () => void;
@@ -24,7 +30,7 @@ function previewModule() {
     };
     samplesForQuality(quality: string): number;
   }>(new URL("../src/renderer/assets/path-preview.js", import.meta.url), "PathPreview", {
-    context: { performance, queueMicrotask },
+    context: { performance, queueMicrotask, setTimeout, clearTimeout },
     replacements: [[
       "const workerFactory = config.workerFactory || (() => new Worker(new URL('./path-preview-worker.js', import.meta.url), { type: 'module' }));",
       "const workerFactory = config.workerFactory;",
@@ -33,6 +39,8 @@ function previewModule() {
 }
 
 describe("renderer path preview scheduler", () => {
+  afterEach(() => vi.useRealTimers());
+
   it("does not allocate a worker until the scheduler receives work", () => {
     const worker = new FakeWorker();
     let allocations = 0;
@@ -138,6 +146,52 @@ describe("renderer path preview scheduler", () => {
     expect(workerIndex).toBe(3);
     workers[2].resolve({ id: nextRevision, value: { recovered: "worker" }, durationMs: 1 });
     expect(preview.getSnapshot()).toMatchObject({ status: "ready", revision: nextRevision, value: { recovered: "worker" } });
+  });
+
+  it("recovers when posting to the worker throws", async () => {
+    const workers = [new FakeWorker(), new FakeWorker()];
+    workers[0].postError = new DOMException("could not clone", "DataCloneError");
+    let workerIndex = 0;
+    const preview = previewModule().create({ workerFactory: () => workers[workerIndex++] });
+
+    const revision = preview.request({ path: { id: "path" }, robot: {}, plannerId: "profiledSpline", quality: "interactive", key: "path" });
+
+    expect(workers[0].terminated).toBe(true);
+    expect(workers[1].jobs).toEqual([expect.objectContaining({ id: revision })]);
+    workers[1].resolve({ id: revision, value: { recovered: true }, durationMs: 1 });
+    expect(preview.getSnapshot()).toMatchObject({ status: "ready", revision, value: { recovered: true } });
+  });
+
+  it.each(["messageerror", "invalid response"])("recovers from a worker %s", (failure) => {
+    const workers = [new FakeWorker(), new FakeWorker()];
+    let workerIndex = 0;
+    const preview = previewModule().create({ workerFactory: () => workers[workerIndex++] });
+    const revision = preview.request({ path: { id: "path" }, robot: {}, plannerId: "profiledSpline", quality: "interactive", key: "path" });
+
+    if (failure === "messageerror") workers[0].failMessage();
+    else workers[0].resolve({ id: revision + 1, value: { wrong: true } });
+
+    expect(workers[0].terminated).toBe(true);
+    expect(workers[1].jobs).toEqual([expect.objectContaining({ id: revision })]);
+  });
+
+  it("recovers when a worker stops responding", async () => {
+    vi.useFakeTimers();
+    const workers = [new FakeWorker(), new FakeWorker()];
+    let workerIndex = 0;
+    const preview = previewModule().create({
+      workerFactory: () => workers[workerIndex++],
+      derive: () => ({ recovered: true }),
+      timeoutMs: 20,
+    });
+    const revision = preview.request({ path: { id: "path" }, robot: {}, plannerId: "profiledSpline", quality: "interactive", key: "path" });
+
+    await vi.advanceTimersByTimeAsync(20);
+    expect(workers[0].terminated).toBe(true);
+    expect(workers[1].jobs).toEqual([expect.objectContaining({ id: revision })]);
+    await vi.advanceTimersByTimeAsync(20);
+    await Promise.resolve();
+    expect(preview.getSnapshot()).toMatchObject({ status: "ready", revision, value: { recovered: true } });
   });
 
   it("survives a StrictMode cleanup followed immediately by remount", async () => {

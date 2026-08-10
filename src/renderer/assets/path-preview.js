@@ -15,8 +15,10 @@ import { PM } from "../lib/pathMath";
     const listeners = new Set();
     const derive = config.derive || ((job) => PM.derivePath(job.path, job.robot, job.perSegment, job.plannerId));
     const workerFactory = config.workerFactory || (() => new Worker(new URL('./path-preview-worker.js', import.meta.url), { type: 'module' }));
+    const timeoutMs = Number.isFinite(config.timeoutMs) ? Math.max(1, config.timeoutMs) : 5000;
     let worker = null;
     let inFlight = null;
+    let inFlightTimer = 0;
     let queued = null;
     let directScheduled = false;
     let latestRevision = 0;
@@ -82,23 +84,48 @@ import { PM } from "../lib/pathMath";
       });
     };
 
+    const clearInFlightTimer = () => {
+      if (inFlightTimer) clearTimeout(inFlightTimer);
+      inFlightTimer = 0;
+    };
+
+    const takeInFlight = () => {
+      const job = inFlight;
+      inFlight = null;
+      clearInFlightTimer();
+      return job;
+    };
+
+    let recoverWorker;
     const send = (job) => {
+      const targetWorker = worker;
+      if (!targetWorker) {
+        queued = job;
+        runDirect();
+        return;
+      }
       inFlight = job;
-      worker.postMessage({
-        id: job.revision,
-        path: job.path,
-        robot: job.robot,
-        plannerId: job.plannerId,
-        perSegment: job.perSegment,
-        quality: job.quality,
-      });
+      clearInFlightTimer();
+      inFlightTimer = setTimeout(() => recoverWorker(targetWorker, 'Path preview worker timed out.'), timeoutMs);
+      try {
+        targetWorker.postMessage({
+          id: job.revision,
+          path: job.path,
+          robot: job.robot,
+          plannerId: job.plannerId,
+          perSegment: job.perSegment,
+          quality: job.quality,
+        });
+      } catch (error) {
+        recoverWorker(targetWorker, error instanceof Error ? error.message : String(error));
+      }
     };
 
     const destroy = () => {
       if (destroyed) return;
       destroyed = true;
       queued = null;
-      inFlight = null;
+      takeInFlight();
       listeners.clear();
       if (worker) worker.terminate();
       worker = null;
@@ -107,9 +134,12 @@ import { PM } from "../lib/pathMath";
     const attachWorker = (nextWorker) => {
       worker = nextWorker;
       nextWorker.onmessage = (event) => {
-        if (worker !== nextWorker || !inFlight || event.data.id !== inFlight.revision) return;
-        const completed = inFlight;
-        inFlight = null;
+        if (worker !== nextWorker || !inFlight) return;
+        if (!event.data || event.data.id !== inFlight.revision) {
+          recoverWorker(nextWorker, 'Path preview worker returned an invalid response.');
+          return;
+        }
+        const completed = takeInFlight();
         publish(completed, event.data);
         if (queued) {
           const next = queued;
@@ -118,32 +148,33 @@ import { PM } from "../lib/pathMath";
         }
       };
       nextWorker.onerror = (event) => {
-        if (worker !== nextWorker) return;
-        const completed = inFlight;
-        inFlight = null;
-        nextWorker.terminate();
-        worker = null;
-        if (!queued && completed && completed.retried) {
-          queued = completed;
-          runDirect();
-          return;
-        }
-        let next = queued;
-        queued = null;
-        if (!next && completed && !completed.retried) next = { ...completed, retried: true };
-        try {
-          attachWorker(workerFactory());
-          if (next) send(next);
-        } catch (_error) {
-          worker = null;
-          if (next) {
-            queued = next;
-            runDirect();
-          } else if (completed) {
-            publish(completed, { error: { message: event.message || 'Path preview worker failed.' } });
-          }
-        }
+        recoverWorker(nextWorker, event.message || 'Path preview worker failed.');
       };
+      nextWorker.onmessageerror = () => recoverWorker(nextWorker, 'Path preview worker returned an unreadable response.');
+    };
+
+    recoverWorker = (failedWorker, message) => {
+      if (worker !== failedWorker || destroyed) return;
+      const completed = takeInFlight();
+      failedWorker.terminate();
+      worker = null;
+      if (!queued && completed && completed.retried) {
+        queued = completed;
+        runDirect();
+        return;
+      }
+      let next = queued;
+      queued = null;
+      if (!next && completed) next = { ...completed, retried: true };
+      if (!next) return;
+      try {
+        attachWorker(workerFactory());
+        send(next);
+      } catch (_error) {
+        worker = null;
+        queued = next;
+        runDirect();
+      }
     };
 
     const ensureWorker = () => {
