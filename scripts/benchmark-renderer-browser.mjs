@@ -129,22 +129,24 @@ async function buildVariant(reference, key) {
 
 function runVariant(label, variant, checkCorrectness, runCorrectnessOnly = false) {
   return new Promise((resolve, reject) => {
+    const childEnv = {
+      ...process.env,
+      BORDEAUX_BENCHMARK_LABEL: label,
+      BORDEAUX_BENCHMARK_PROJECT: encodedFixture,
+      BORDEAUX_BENCHMARK_RENDERER_HTML: variant.html,
+      BORDEAUX_BENCHMARK_WORKER_ASSET: variant.workerAsset ? `./assets/${variant.workerAsset}` : "",
+      BORDEAUX_BROWSER_LATENCY_SAMPLES: latencySamples,
+      BORDEAUX_BROWSER_STRESS_MS: stressMs,
+      BORDEAUX_BROWSER_CHECK_CORRECTNESS: checkCorrectness ? "1" : "0",
+      BORDEAUX_BROWSER_CORRECTNESS_ONLY: runCorrectnessOnly ? "1" : "0",
+      DISPLAY: process.env.DISPLAY || ":0",
+      XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || "/mnt/wslg/runtime-dir",
+      ELECTRON_DISABLE_SECURITY_WARNINGS: "true",
+    };
+    delete childEnv.ELECTRON_RUN_AS_NODE;
     const child = spawn(electron, [runner], {
       cwd: repository,
-      env: {
-        ...process.env,
-        BORDEAUX_BENCHMARK_LABEL: label,
-        BORDEAUX_BENCHMARK_PROJECT: encodedFixture,
-        BORDEAUX_BENCHMARK_RENDERER_HTML: variant.html,
-        BORDEAUX_BENCHMARK_WORKER_ASSET: variant.workerAsset ? `./assets/${variant.workerAsset}` : "",
-        BORDEAUX_BROWSER_LATENCY_SAMPLES: latencySamples,
-        BORDEAUX_BROWSER_STRESS_MS: stressMs,
-        BORDEAUX_BROWSER_CHECK_CORRECTNESS: checkCorrectness ? "1" : "0",
-        BORDEAUX_BROWSER_CORRECTNESS_ONLY: runCorrectnessOnly ? "1" : "0",
-        DISPLAY: process.env.DISPLAY || ":0",
-        XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || "/mnt/wslg/runtime-dir",
-        ELECTRON_DISABLE_SECURITY_WARNINGS: "true",
-      },
+      env: childEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
