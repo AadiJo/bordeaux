@@ -422,10 +422,17 @@ app.whenReady().then(async () => {
       return staleInUi && state.proposalStatuses.some((entry) => entry.id === proposal.id && entry.status === "stale") ? state : null;
     }, 1000, "an agent proposal to become stale during a drag");
     await window.webContents.executeJavaScript("document.querySelector('.agent-proposal button.primary')?.click()");
-    await delay(50);
-    const staleProposalBlockedDuringDrag = staleProposalState.proposalStatuses.some((entry) => entry.status === "stale")
-      && await window.webContents.executeJavaScript("document.querySelectorAll('[data-role=wp]').length === 100");
+    const proposalSaveCount = staleProposalState.savedProjects.length;
     releaseMouse(proposalDragTarget);
+    await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkCommand('save-project')");
+    const proposalAfterApply = await waitFor(async () => {
+      const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
+      return state.savedProjects.length > proposalSaveCount ? state : null;
+    }, 3000, "the project after the stale proposal apply attempt");
+    const proposalStatuses = proposalAfterApply.proposalStatuses.filter((entry) => entry.id === proposal.id);
+    const staleProposalBlockedDuringDrag = proposalStatuses.some((entry) => entry.status === "stale")
+      && !proposalStatuses.some((entry) => entry.status === "applied")
+      && proposalAfterApply.savedProjects.at(-1).paths.length === 2;
 
     await loadFixture();
     const workerJob = {
