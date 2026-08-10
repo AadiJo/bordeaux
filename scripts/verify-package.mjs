@@ -16,11 +16,7 @@ const requiredEntries = [
   "node_modules/electron-updater/package.json",
   "node_modules/zod/package.json",
 ];
-const requiredResources = [
-  "app-update.yml",
-  "java/bordeaux-processor.jar",
-  "java/bordeaux-runtime.jar",
-];
+const requiredResources = ["java/bordeaux-processor.jar", "java/bordeaux-runtime.jar"];
 
 function collectArchives(target, archives) {
   const stat = fs.statSync(target);
@@ -38,7 +34,9 @@ function extractArchiveFile(archive, entry) {
   return extractFile(archive, entry.replaceAll("/", path.sep));
 }
 
-const targets = process.argv.slice(2);
+const args = process.argv.slice(2);
+const storeBuild = args[0] === "--store";
+const targets = storeBuild ? args.slice(1) : args;
 if (targets.length === 0) targets.push("release");
 const archives = [];
 for (const target of targets) {
@@ -90,7 +88,14 @@ for (const archive of archives) {
     }
   }
 
-  const updateConfig = fs.readFileSync(path.join(resourcesDirectory, "app-update.yml"), "utf8");
+  const updateConfigPath = path.join(resourcesDirectory, "app-update.yml");
+  if (storeBuild) {
+    if (fs.existsSync(updateConfigPath)) throw new Error(`${archive} must not include GitHub update configuration in a Store build`);
+    console.log(`Verified ${path.relative(process.cwd(), archive)} (${entries.length} entries, ${archiveBytes.toLocaleString()} bytes)`);
+    continue;
+  }
+  if (!fs.existsSync(updateConfigPath)) throw new Error(`${archive} is missing packaged resource: app-update.yml`);
+  const updateConfig = fs.readFileSync(updateConfigPath, "utf8");
   for (const [field, value] of Object.entries({ provider: "github", owner: "Zw96042", repo: "bordeaux", channel: "beta", releaseType: "prerelease" })) {
     if (!new RegExp(`^${field}:\\s*${value}\\s*$`, "m").test(updateConfig)) {
       throw new Error(`${archive} app-update.yml has unexpected ${field}`);

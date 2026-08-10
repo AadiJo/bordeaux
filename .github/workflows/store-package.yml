@@ -45,7 +45,7 @@ jobs:
       - run: npm test
       - run: npm run typecheck
       - run: npm run package:win:store
-      - run: npm run verify:package -- release
+      - run: npm run verify:package -- --store release
       - run: node scripts/verify-windows-store-package.mjs release
       - uses: actions/upload-artifact@v4
         with:
