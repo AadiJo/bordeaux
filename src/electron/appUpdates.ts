@@ -2,9 +2,12 @@ export interface UpdateVersionInfo {
   version: string;
 }
 
+export type AppUpdateChannel = "beta" | "latest";
+
 export interface AppUpdaterLike {
   autoDownload: boolean;
   autoInstallOnAppQuit: boolean;
+  autoRunAppAfterInstall: boolean;
   allowPrerelease: boolean;
   allowDowngrade: boolean;
   channel: string | null;
@@ -27,6 +30,7 @@ export interface UpdateRuntime {
   supported: boolean;
   currentVersion: string;
   isProjectDirty(): boolean;
+  prepareToInstall(): void | Promise<void>;
   warn(message: string, error?: unknown): void;
 }
 
@@ -38,13 +42,26 @@ export function supportsAppUpdates(platform: NodeJS.Platform): boolean {
   return platform === "darwin" || platform === "win32" || platform === "linux";
 }
 
-export function usesGitHubAppUpdates(platform: NodeJS.Platform, windowsStore: boolean): boolean {
-  return supportsAppUpdates(platform) && !(platform === "win32" && windowsStore);
+export function usesGitHubAppUpdates(
+  platform: NodeJS.Platform,
+  windowsStore: boolean,
+  windowsPortable = false,
+  linuxAppImage = true,
+): boolean {
+  if (!supportsAppUpdates(platform)) return false;
+  if (platform === "win32") return !windowsStore && !windowsPortable;
+  if (platform === "linux") return linuxAppImage;
+  return true;
+}
+
+export function appUpdateChannel(version: string): AppUpdateChannel {
+  return /^\d+\.\d+\.\d+$/.test(version) ? "latest" : "beta";
 }
 
 export class AppUpdateController {
   private started = false;
   private interactiveCheck = false;
+  private installing = false;
   private checkPromise: Promise<void> | null = null;
   private readonly promptedVersions = new Set<string>();
 
@@ -58,15 +75,20 @@ export class AppUpdateController {
     return this.runtime.packaged && this.runtime.supported && this.updater !== null;
   }
 
+  get channel(): AppUpdateChannel {
+    return appUpdateChannel(this.runtime.currentVersion);
+  }
+
   start(): void {
     if (this.started || !this.available) return;
     const updater = this.updater;
     if (!updater) return;
     this.started = true;
     updater.autoDownload = true;
-    updater.autoInstallOnAppQuit = true;
-    updater.allowPrerelease = true;
-    updater.channel = "beta";
+    updater.autoInstallOnAppQuit = false;
+    updater.autoRunAppAfterInstall = true;
+    updater.allowPrerelease = this.channel === "beta";
+    updater.channel = this.channel;
     updater.allowDowngrade = false;
 
     updater.on("update-available", (info) => {
@@ -79,16 +101,20 @@ export class AppUpdateController {
       void this.presenter.upToDate(this.runtime.currentVersion);
     });
     updater.on("error", (error) => {
-      this.runtime.warn("Bordeaux update check failed", error);
-      if (!this.interactiveCheck) return;
-      this.interactiveCheck = false;
-      void this.presenter.failed(errorMessage(error));
+      this.runtime.warn("Bordeaux updater failed", error);
+      if (this.interactiveCheck) {
+        this.interactiveCheck = false;
+        void this.presenter.failed(errorMessage(error));
+      } else if (this.installing) {
+        this.installing = false;
+        void this.presenter.failed(errorMessage(error));
+      }
     });
     updater.on("update-downloaded", (info) => {
       if (this.promptedVersions.has(info.version)) return;
       this.promptedVersions.add(info.version);
       this.interactiveCheck = false;
-      void this.offerRestart(info.version);
+      void this.offerRestart(info.version).finally(() => this.promptedVersions.delete(info.version));
     });
   }
 
@@ -104,7 +130,11 @@ export class AppUpdateController {
     if (this.checkPromise) return this.checkPromise;
     this.checkPromise = (async () => {
       try {
-        await updater.checkForUpdates();
+        const result = await updater.checkForUpdates();
+        if (result === null && this.interactiveCheck) {
+          this.interactiveCheck = false;
+          await this.presenter.unavailable(this.runtime.currentVersion);
+        }
       } catch (error) {
         this.runtime.warn("Bordeaux update check failed", error);
         if (this.interactiveCheck) {
@@ -122,6 +152,21 @@ export class AppUpdateController {
     const projectDirty = this.runtime.isProjectDirty();
     const choice = await this.presenter.ready(version, projectDirty);
     if (choice !== "restart" || this.runtime.isProjectDirty()) return;
-    this.updater?.quitAndInstall(false, true);
+    try {
+      await this.runtime.prepareToInstall();
+    } catch (error) {
+      this.runtime.warn("Bordeaux could not prepare to install the update", error);
+      await this.presenter.failed(errorMessage(error));
+      return;
+    }
+    if (this.runtime.isProjectDirty()) return;
+    this.installing = true;
+    try {
+      this.updater?.quitAndInstall(false, true);
+    } catch (error) {
+      this.installing = false;
+      this.runtime.warn("Bordeaux could not start the update installer", error);
+      await this.presenter.failed(errorMessage(error));
+    }
   }
 }

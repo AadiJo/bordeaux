@@ -69,6 +69,7 @@ function endpointForLaunch(): string {
 export class AgentBridgeServer {
   private server: net.Server | null = null;
   private descriptor: AgentRuntimeDescriptor | null = null;
+  private readonly sockets = new Set<net.Socket>();
 
   constructor(private readonly userData: string, private readonly sessions: AgentSessionService) {}
 
@@ -87,6 +88,8 @@ export class AgentBridgeServer {
       token: randomBytes(32).toString("base64url"),
     };
     const server = net.createServer((socket) => {
+      this.sockets.add(socket);
+      socket.once("close", () => this.sockets.delete(socket));
       socket.setTimeout(REQUEST_TIMEOUT_MS, () => socket.destroy());
       void readOne(socket, REQUEST_TIMEOUT_MS).then(async (raw) => {
         const envelope = raw as Partial<BridgeEnvelope>;
@@ -120,6 +123,8 @@ export class AgentBridgeServer {
     const descriptor = this.descriptor;
     this.server = null;
     this.descriptor = null;
+    for (const socket of this.sockets) socket.destroy();
+    this.sockets.clear();
     if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
     await fs.promises.rm(descriptorPath(this.userData), { force: true });
     if (descriptor && process.platform !== "win32") await fs.promises.rm(descriptor.endpoint, { force: true });
