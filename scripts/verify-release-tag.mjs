@@ -4,8 +4,12 @@ const manifest = JSON.parse(fs.readFileSync(new URL("../package.json", import.me
 const argument = process.argv[2];
 const isTagBuild = argument !== undefined || process.env.GITHUB_REF_TYPE === "tag";
 
+if (!/^\d+\.\d+\.\d+$/.test(manifest.version)) {
+  throw new Error(`Production version ${manifest.version || "<missing>"} must look like 0.2.0 without a prerelease suffix`);
+}
+
 if (!isTagBuild) {
-  console.log("Not a tag build; release tag check skipped.");
+  console.log(`Verified Bordeaux production version ${manifest.version}; release tag check skipped outside a tag build.`);
 } else {
   const tag = argument ?? process.env.GITHUB_REF_NAME;
   const expected = `v${manifest.version}`;

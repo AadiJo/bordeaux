@@ -5,14 +5,16 @@ import yaml from "js-yaml";
 
 const platform = process.argv[2];
 const outputDirectory = path.resolve(process.argv[3] ?? "release");
+const channel = process.argv[4] ?? "beta";
+if (channel !== "beta" && channel !== "latest") throw new Error("Update channel must be beta or latest");
 const manifestName = platform === "mac"
-  ? "beta-mac.yml"
+  ? `${channel}-mac.yml`
   : platform === "windows"
-    ? "beta.yml"
+    ? `${channel}.yml`
     : platform === "linux"
-      ? "beta-linux.yml"
+      ? `${channel}-linux.yml`
       : platform === "linux-arm64"
-        ? "beta-linux-arm64.yml"
+        ? `${channel}-linux-arm64.yml`
         : null;
 const expectedExtension = platform === "mac" ? ".zip" : platform === "windows" ? ".exe" : platform?.startsWith("linux") ? ".AppImage" : null;
 
@@ -55,4 +57,4 @@ for (const entry of updateManifest.files) {
 }
 
 if (!hasInstallable) throw new Error(`${manifestName} does not reference a ${platform} ${expectedExtension} update`);
-console.log(`Verified ${manifestName} for Bordeaux ${packageManifest.version} (${updateManifest.files.length} files).`);
+console.log(`Verified ${channel} manifest ${manifestName} for Bordeaux ${packageManifest.version} (${updateManifest.files.length} files).`);

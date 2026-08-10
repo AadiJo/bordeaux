@@ -117,25 +117,25 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npm run package:mac:ci -- --config.mac.notarize=true --config.forceCodeSigning=true
+        run: npm run package:mac:ci -- --config.mac.notarize=true --config.forceCodeSigning=true --config.publish.channel=beta --config.publish.releaseType=prerelease
       - name: Build Windows packages
         if: matrix.platform == 'windows'
         env:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-        run: npm run package:win
+        run: npm run package:win -- --config.publish.channel=beta --config.publish.releaseType=prerelease
       - name: Build Linux AppImages
         if: matrix.platform == 'linux'
-        run: npm run package:linux
+        run: npm run package:linux -- --config.publish.channel=beta --config.publish.releaseType=prerelease
       - run: npm run verify:package -- release
       - name: Verify public beta update manifest
         if: matrix.platform != 'linux'
-        run: node scripts/verify-update-manifest.mjs ${{ matrix.platform }} release
+        run: node scripts/verify-update-manifest.mjs ${{ matrix.platform }} release beta
       - name: Verify public beta Linux update manifests
         if: matrix.platform == 'linux'
         run: |
-          node scripts/verify-update-manifest.mjs linux release
-          node scripts/verify-update-manifest.mjs linux-arm64 release
+          node scripts/verify-update-manifest.mjs linux release beta
+          node scripts/verify-update-manifest.mjs linux-arm64 release beta
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
