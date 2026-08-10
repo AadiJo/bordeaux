@@ -1,6 +1,6 @@
 # Desktop packaging
 
-Bordeaux uses electron-builder. Packaging includes the compiled Electron main/preload code and the canonical `public/renderer` renderer.
+Bordeaux uses electron-builder. Packaging includes the compiled Electron main/preload code and the Vite-built `dist-renderer` application.
 
 ## Icons
 

@@ -11,14 +11,14 @@ function unitPreferences(stored?: string) {
     getItem: (key: string) => values.get(key) ?? null,
     setItem: (key: string, value: string) => values.set(key, value),
   };
-  const source = fs.readFileSync(new URL("../public/renderer/assets/unit-preferences.js", import.meta.url), "utf8");
+  const source = fs.readFileSync(new URL("../src/renderer/legacy/assets/unit-preferences.js", import.meta.url), "utf8");
   vm.runInNewContext(source, { window, document, localStorage });
   return { prefs: window.UnitPrefs as any, document, values };
 }
 
 function fieldZoom() {
   const window: Record<string, unknown> = {};
-  const source = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
+  const source = fs.readFileSync(new URL("../src/renderer/legacy/assets/field-view.js", import.meta.url), "utf8");
   vm.runInNewContext(source, { window, React: {}, Math });
   return window.FieldZoom as { wheelZoomFactor(deltaY: number, deltaMode: number, viewportHeight: number): number };
 }
