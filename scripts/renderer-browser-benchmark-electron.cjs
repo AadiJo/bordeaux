@@ -317,6 +317,53 @@ app.whenReady().then(async () => {
     const cancelAutosaveRestored = Boolean(restoredAutosave);
 
     await loadFixture();
+    const commandOrigin = await center();
+    const commandTarget = { x: commandOrigin.x - 52, y: commandOrigin.y + 18 };
+    const originalCommandWaypoint = originalProject.paths[0].waypoints[50];
+    const expectedNudgeX = originalCommandWaypoint.x + 0.05;
+    const saveWaypoint = async () => {
+      const before = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState().savedProjects.length");
+      await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkCommand('save-project')");
+      const state = await waitFor(async () => {
+        const next = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
+        return next.savedProjects.length > before ? next : null;
+      }, 3000, "the command-race project to be saved");
+      return state.savedProjects.at(-1).paths[0].waypoints[50];
+    };
+    const pressKey = (keyCode, modifiers = []) => {
+      window.webContents.sendInputEvent({ type: "keyDown", keyCode, modifiers });
+      window.webContents.sendInputEvent({ type: "keyUp", keyCode, modifiers });
+    };
+    await pressMouse(commandOrigin);
+    const commandTargetLocal = await localAt(commandTarget);
+    moveMouse(commandTarget);
+    await waitForCorrect(commandTarget, commandTargetLocal);
+    pressKey("Right");
+    releaseMouse(commandTarget);
+    await delay(150);
+    const commandWaypoint = await saveWaypoint();
+    const commandSurvivesDrag = Math.abs(commandWaypoint.x - expectedNudgeX) <= 1e-6
+      && Math.abs(commandWaypoint.y - originalCommandWaypoint.y) <= 1e-6;
+
+    pressKey("Z", ["control"]);
+    await delay(150);
+    const undoneWaypoint = await saveWaypoint();
+    const commandUndoRestores = Math.hypot(undoneWaypoint.x - originalCommandWaypoint.x, undoneWaypoint.y - originalCommandWaypoint.y) <= 1e-6;
+    const redoCancelOrigin = await center();
+    const redoCancelTarget = { x: redoCancelOrigin.x + 38, y: redoCancelOrigin.y + 20 };
+    await pressMouse(redoCancelOrigin);
+    const redoCancelTargetLocal = await localAt(redoCancelTarget);
+    moveMouse(redoCancelTarget);
+    await waitForCorrect(redoCancelTarget, redoCancelTargetLocal);
+    pressKey("Z", ["control"]);
+    releaseMouse(redoCancelTarget);
+    pressKey("Y", ["control"]);
+    await delay(150);
+    const redoneWaypoint = await saveWaypoint();
+    const cancelPreservesRedo = Math.abs(redoneWaypoint.x - expectedNudgeX) <= 1e-6
+      && Math.abs(redoneWaypoint.y - originalCommandWaypoint.y) <= 1e-6;
+
+    await loadFixture();
     const switchOrigin = await center();
     const switchTarget = { x: switchOrigin.x + 35, y: switchOrigin.y + 15 };
     await pressMouse(switchOrigin);
@@ -340,7 +387,7 @@ app.whenReady().then(async () => {
     await delay(150);
     const pathSwitchCancelsDrag = switched && await window.webContents.executeJavaScript('document.querySelectorAll(\'[data-role="wp"]\').length === 3');
 
-    return { releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, pathSwitchCancelsDrag };
+    return { releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, commandSurvivesDrag, commandUndoRestores, cancelPreservesRedo, pathSwitchCancelsDrag };
   }
 
   async function measureLatency() {

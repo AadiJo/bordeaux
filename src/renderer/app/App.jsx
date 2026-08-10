@@ -563,23 +563,24 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       return PathLinks.sync({ ...pr, paths }, nd.id, before);
     }); }, [activeIdx]);
     const beginHistory = useCallback(() => { hist.current.past.push(clone(docRef.current)); if (hist.current.past.length > 80) hist.current.past.shift(); hist.current.future = []; projectHist.current.future = []; force((x) => x + 1); }, []);
-    const commit = useCallback((fn) => { beginHistory(); writeDoc(fn(clone(docRef.current))); }, [beginHistory, writeDoc]);
     const beginEdit = useCallback(() => {
       if (editStore.getSnapshot()) return;
-      beginHistory();
       editStore.begin(clone(docRef.current));
-    }, [beginHistory, editStore]);
+    }, [editStore]);
     const finishEdit = useCallback(() => {
       const next = editStore.finish();
       if (!next) return;
+      beginHistory();
       writeDoc(next);
-    }, [editStore, writeDoc]);
+    }, [beginHistory, editStore, writeDoc]);
     const cancelEdit = useCallback(() => {
-      if (!editStore.cancel()) return false;
-      hist.current.past.pop();
-      force((x) => x + 1);
-      return true;
+      return editStore.cancel();
     }, [editStore]);
+    const commit = useCallback((fn) => {
+      cancelEdit();
+      beginHistory();
+      writeDoc(fn(clone(docRef.current)));
+    }, [beginHistory, cancelEdit, writeDoc]);
     useEffect(() => {
       const draft = editStore.getSnapshot();
       if (draft && doc && draft.id !== doc.id) cancelEdit();
