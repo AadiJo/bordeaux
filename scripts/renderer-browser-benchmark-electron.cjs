@@ -9,7 +9,8 @@ const stressDurationMs = Number.parseInt(process.env.BORDEAUX_BROWSER_STRESS_MS 
 const inputHz = Number.parseInt(process.env.BORDEAUX_BROWSER_INPUT_HZ || "120", 10);
 const checkCorrectness = process.env.BORDEAUX_BROWSER_CHECK_CORRECTNESS === "1";
 const correctnessOnly = process.env.BORDEAUX_BROWSER_CORRECTNESS_ONLY === "1";
-const workerAsset = process.env.BORDEAUX_BENCHMARK_WORKER_ASSET || "";
+const forceDirectPreview = process.env.BORDEAUX_BENCHMARK_FORCE_DIRECT === "1";
+const mainClockOffsetMs = Number.parseFloat(process.env.BORDEAUX_BENCHMARK_MAIN_CLOCK_OFFSET_MS || "0");
 const frameBudgetMs = 1000 / 60;
 const primaryPath = { id: "browser_benchmark_path", name: "100-waypoint browser benchmark" };
 const alternatePath = { id: "browser_benchmark_alternate", name: "Alternate benchmark path" };
@@ -24,6 +25,7 @@ app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const epochNow = () => performance.timeOrigin + performance.now();
+const stressMainNow = () => epochNow() + mainClockOffsetMs;
 
 function percentile(values, fraction) {
   const sorted = values.toSorted((a, b) => a - b);
@@ -106,14 +108,21 @@ async function waitFor(predicate, timeoutMs, description) {
 
 function installProbe(waypointIndex) {
   window.confirm = () => true;
+  const rendererNow = () => performance.now();
   const epoch = () => performance.timeOrigin + performance.now();
   const state = {
     active: false,
     frames: [],
     geometry: [],
+    inputStartedAt: null,
+    inputEndedAt: null,
     lastGeometry: null,
     pending: null,
     lastCorrect: null,
+    transport: [],
+    transportSummaries: [],
+    workerTransportProofs: 0,
+    transportProofActive: false,
     trace: null,
     traceAfterRelease: 0,
     armedPaintToken: null,
@@ -123,6 +132,10 @@ function installProbe(waypointIndex) {
   const waypoint = () => document.querySelector(`[data-role="wp"][data-idx="${waypointIndex}"]`);
   const benchmarkSvg = waypoint()?.ownerSVGElement;
   const benchmarkInverse = benchmarkSvg?.getScreenCTM()?.inverse();
+  const worldToSvg = (point) => point && ({
+    x: 397 + point.x * (3502 - 397) / 17.548,
+    y: 1486 - point.y * (1486 - 97) / 8.052,
+  });
   const localAt = (x, y) => {
     if (!benchmarkSvg || !benchmarkInverse) return null;
     const point = benchmarkSvg.createSVGPoint();
@@ -171,20 +184,38 @@ function installProbe(waypointIndex) {
     geometry.curve.style.setProperty('stroke-opacity', '1');
     state.taggedGeometry = { node: geometry.node, curve: geometry.curve };
   };
+  window.addEventListener('bordeaux-benchmark:path-preview-transport', (event) => {
+    if (event.detail?.phase === 'summary') state.transportSummaries.push(event.detail);
+    else state.transport.push({ ...event.detail, atRendererMs: rendererNow() });
+  });
   window.addEventListener("pointermove", (event) => {
+    const receivedAtRendererMs = rendererNow();
     const local = localAt(event.clientX, event.clientY);
-    state.pending = { x: event.clientX, y: event.clientY, localX: local?.x, localY: local?.y, inputAtEpochMs: epoch(), paintToken: state.armedPaintToken };
+    state.pending = {
+      x: event.clientX,
+      y: event.clientY,
+      localX: local?.x,
+      localY: local?.y,
+      inputAtEpochMs: epoch(),
+      inputAtRendererMs: receivedAtRendererMs,
+      transportStartIndex: state.transport.length,
+      paintToken: state.armedPaintToken,
+    };
     state.armedPaintToken = null;
+    if (state.active) {
+      if (state.inputStartedAt === null) state.inputStartedAt = receivedAtRendererMs;
+      state.inputEndedAt = receivedAtRendererMs;
+    }
   }, true);
   window.addEventListener("pointerup", () => { if (state.trace) state.traceAfterRelease = epoch(); }, true);
   const tick = (timestamp) => {
     const geometry = inspect();
     const current = geometry?.value || null;
     if (state.active) {
-      state.frames.push(epoch());
+      state.frames.push(rendererNow());
       if (current?.curveCorrect && (!state.lastGeometry
         || Math.hypot(current.localX - state.lastGeometry.localX, current.localY - state.lastGeometry.localY) > 0.75)) {
-        state.geometry.push(epoch());
+        state.geometry.push(rendererNow());
         state.lastGeometry = current;
       }
     }
@@ -192,8 +223,34 @@ function installProbe(waypointIndex) {
     if (state.pending && current?.curveCorrect
       && Math.hypot(current.x - state.pending.x, current.y - state.pending.y) <= 2.5
       && Math.hypot(current.localX - state.pending.localX, current.localY - state.pending.localY) <= 7) {
+      const matchingResult = state.transport.slice(state.pending.transportStartIndex).findLast((entry) => {
+        if (entry.phase !== 'result' || entry.quality !== 'interactive' || !entry.waypoint) return false;
+        const expected = worldToSvg(entry.waypoint);
+        return Math.hypot(current.localX - expected.x, current.localY - expected.y) <= 1;
+      });
+      const workerTransport = matchingResult?.source === 'worker'
+        && state.transport.slice(state.pending.transportStartIndex).some((entry) => entry.phase === 'request'
+          && entry.source === 'worker'
+          && entry.schedulerId === matchingResult.schedulerId
+          && entry.revision === matchingResult.revision);
+      const transportResolved = workerTransport || matchingResult?.source === 'direct';
+      if (state.transportProofActive && !transportResolved) {
+        requestAnimationFrame(tick);
+        return;
+      }
+      if (state.transportProofActive) {
+        state.transportProofActive = false;
+        if (workerTransport) state.workerTransportProofs += 1;
+        window.dispatchEvent(new CustomEvent('bordeaux-benchmark:path-preview-transport-control', { detail: { mode: 'stop' } }));
+      }
       if (state.pending.paintToken && geometry?.curve) applyPaintToken(geometry, state.pending.paintToken);
-      state.lastCorrect = { ...state.pending, correctAtEpochMs: epoch() };
+      state.lastCorrect = {
+        ...state.pending,
+        correctAtEpochMs: epoch(),
+        workerTransport,
+        transportSource: matchingResult?.source || null,
+        transportRevision: matchingResult?.revision || null,
+      };
       state.pending = null;
     }
     requestAnimationFrame(tick);
@@ -208,11 +265,18 @@ function installProbe(waypointIndex) {
       state.active = true;
       state.frames = [];
       state.geometry = [];
+      state.inputStartedAt = null;
+      state.inputEndedAt = null;
       state.lastGeometry = current;
     },
     stop() {
       state.active = false;
-      return { frames: state.frames, geometry: state.geometry };
+      return {
+        frames: state.frames,
+        geometry: state.geometry,
+        inputBoundsRendererMs: { startedAt: state.inputStartedAt, endedAt: state.inputEndedAt },
+        workerTransportProofs: state.workerTransportProofs,
+      };
     },
     armPaintToken() {
       const clearedPrevious = Boolean(state.taggedGeometry);
@@ -223,6 +287,29 @@ function installProbe(waypointIndex) {
       return token;
     },
     clearPaintToken,
+    startTransportProof() {
+      state.transportProofActive = true;
+      window.dispatchEvent(new CustomEvent('bordeaux-benchmark:path-preview-transport-control', {
+        detail: { mode: 'proof' },
+      }));
+    },
+    startTimedTransport(windowId) {
+      state.transportSummaries = state.transportSummaries.filter((summary) => summary.windowId !== windowId);
+      window.dispatchEvent(new CustomEvent('bordeaux-benchmark:path-preview-transport-control', {
+        detail: { mode: 'timed-start', windowId },
+      }));
+    },
+    finishTimedTransport(windowId) {
+      window.dispatchEvent(new CustomEvent('bordeaux-benchmark:path-preview-transport-control', {
+        detail: { mode: 'timed-report', windowId },
+      }));
+      const summaries = state.transportSummaries.filter((summary) => summary.windowId === windowId);
+      return summaries.reduce((total, summary) => ({
+        interactiveWorkerRequests: total.interactiveWorkerRequests + summary.interactiveWorkerRequests,
+        matchingWorkerResults: total.matchingWorkerResults + summary.matchingWorkerResults,
+        directResults: total.directResults + summary.directResults,
+      }), { interactiveWorkerRequests: 0, matchingWorkerResults: 0, directResults: 0 });
+    },
     startTrace() { state.trace = []; state.traceAfterRelease = 0; },
     stopTrace() { const trace = state.trace || []; state.trace = null; return trace; },
   };
@@ -244,6 +331,10 @@ app.whenReady().then(async () => {
     },
   });
   window.webContents.setFrameRate(60);
+  const loadRenderer = () => window.loadFile(rendererHtml, { query: {
+    bordeauxBenchmarkTransport: forceDirectPreview ? "force-direct" : "observe",
+    bordeauxBenchmarkWaypoint: "50",
+  } });
 
   const paintTimestamps = [];
   const paintWaiters = new Set();
@@ -311,7 +402,7 @@ app.whenReady().then(async () => {
   async function loadFixture() {
     const load = () => new Promise((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error(`Timed out loading ${rendererHtml}`)), 10000);
-      window.loadFile(rendererHtml).then(
+      loadRenderer().then(
         (value) => { clearTimeout(timeout); resolve(value); },
         (error) => { clearTimeout(timeout); reject(error); },
       );
@@ -361,9 +452,22 @@ app.whenReady().then(async () => {
     timeoutMs,
     `correct curve geometry at ${target.x},${target.y}`,
   );
+  const proveApplicationWorkerTransport = async (origin) => {
+    const target = { x: origin.x + 24, y: origin.y - 9 };
+    const expectedLocal = await localAt(target);
+    await window.webContents.executeJavaScript("window.__rendererBenchmark.startTransportProof()");
+    moveMouse(target);
+    await waitForCorrect(target, expectedLocal);
+    const correct = await waitFor(async () => {
+      const value = await window.webContents.executeJavaScript("window.__rendererBenchmark.lastCorrect()");
+      return value && Math.hypot(value.x - target.x, value.y - target.y) <= 1 ? value : null;
+    }, 5000, "the discarded application worker preflight");
+    await window.webContents.executeJavaScript("window.dispatchEvent(new CustomEvent('bordeaux-benchmark:path-preview-transport-control', { detail: { mode: 'stop' } }))");
+    return correct.workerTransport === true;
+  };
 
   async function correctnessChecks() {
-    await window.loadFile(rendererHtml);
+    await loadRenderer();
     await waitFor(
       () => window.webContents.executeJavaScript('document.querySelectorAll(\'[data-role="wp"]\').length > 0'),
       3000,
@@ -400,6 +504,7 @@ app.whenReady().then(async () => {
       intent: "Add the benchmark path",
       baseSessionId: publishedSession.sessionId,
       baseRevision: publishedSession.revision,
+      baseActivePathId: publishedSession.activePathId,
       candidates: [{ id: "browser_benchmark_agent_candidate", label: "Benchmark candidate", valid: true, path: proposalPath }],
       recommendedCandidateId: "browser_benchmark_agent_candidate",
       createdAt: new Date().toISOString(),
@@ -435,36 +540,24 @@ app.whenReady().then(async () => {
       && proposalAfterApply.savedProjects.at(-1).paths.length === 2;
 
     await loadFixture();
-    const workerJob = {
-      id: 2468,
-      path: workerFixture.paths[0],
-      robot: workerFixture.robot,
-      plannerId: workerFixture.plannerId,
-      perSegment: 14,
-      quality: "interactive",
-    };
-    const workerResult = workerAsset ? await window.webContents.executeJavaScript(`new Promise((resolve) => {
-      const worker = new Worker(new URL(${JSON.stringify(workerAsset)}, location.href), { type: 'module' });
-      const timer = setTimeout(() => { worker.terminate(); resolve({ timeout: true }); }, 5000);
-      worker.onmessage = (event) => { clearTimeout(timer); worker.terminate(); resolve(event.data); };
-      worker.onerror = (event) => { clearTimeout(timer); worker.terminate(); resolve({ error: event.message || 'worker error' }); };
-      worker.postMessage(${JSON.stringify(workerJob)});
-    })`) : null;
-    const realWorkerRoundTrip = workerResult?.id === workerJob.id
-      && !workerResult.error
-      && Array.isArray(workerResult.value?.sample?.pts)
-      && workerResult.value.sample.pts.length > workerJob.path.waypoints.length;
     const origin = await center();
     const lastMove = { x: origin.x + 42, y: origin.y - 16 };
     const release = { x: lastMove.x + 28, y: lastMove.y + 10 };
     await pressMouse(origin);
     const lastMoveLocal = await localAt(lastMove);
     const releaseLocal = await localAt(release);
+    await window.webContents.executeJavaScript("window.__rendererBenchmark.startTransportProof()");
     const correctnessPaintToken = await window.webContents.executeJavaScript("window.__rendererBenchmark.armPaintToken()");
     const correctnessPaintStartedAt = epochNow();
     const correctnessPaint = paintedGeometryAfter(correctnessPaintStartedAt, { target: lastMove, token: correctnessPaintToken });
     moveMouse(lastMove);
     await waitForCorrect(lastMove, lastMoveLocal);
+    const correctnessTransport = await waitFor(async () => {
+      const value = await window.webContents.executeJavaScript("window.__rendererBenchmark.lastCorrect()");
+      return value && Math.hypot(value.x - lastMove.x, value.y - lastMove.y) <= 1
+        && (value.workerTransport === true || value.transportSource === 'direct') ? value : null;
+    }, 5000, "the correctness application's preview transport");
+    const applicationWorkerTransport = correctnessTransport?.workerTransport === true;
     const correctnessPaintAt = await correctnessPaint;
     const nativeImagePaintProof = correctnessPaintAt >= correctnessPaintStartedAt;
     await window.webContents.executeJavaScript("window.__rendererBenchmark.startTrace()");
@@ -747,14 +840,16 @@ app.whenReady().then(async () => {
       && Math.hypot(sourceEnd.x - targetStart.x, sourceEnd.y - targetStart.y) <= 1e-6
       && Math.hypot(sourceEnd.x - expectedSourceEnd.x, sourceEnd.y - expectedSourceEnd.y) <= 1e-6;
 
-    return { realWorkerRoundTrip, nativeImagePaintProof, restoreConflictStaysDirty, staleProposalBlockedDuringDrag, releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, commandSurvivesDrag, commandUndoRestores, cancelPreservesRedo, pathSwitchCancelsDrag, openDuringDragKeepsFile, saveOpenKeepsFile, renameSurvivesDrag, moveSurvivesDrag, linkSurvivesDrag };
+    return { applicationWorkerTransport, nativeImagePaintProof, restoreConflictStaysDirty, staleProposalBlockedDuringDrag, releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, commandSurvivesDrag, commandUndoRestores, cancelPreservesRedo, pathSwitchCancelsDrag, openDuringDragKeepsFile, saveOpenKeepsFile, renameSurvivesDrag, moveSurvivesDrag, linkSurvivesDrag };
   }
 
   async function measureLatency() {
     await loadFixture();
     const origin = await center();
     await pressMouse(origin);
+    const preflightWorkerTransport = await proveApplicationWorkerTransport(origin);
     await waitForPaintQuiet(80);
+    await window.webContents.executeJavaScript("window.__rendererBenchmark.startTimedTransport('latency')");
     const correctPaintSamples = [];
     const anyPaintSamples = [];
     let target = origin;
@@ -780,20 +875,33 @@ app.whenReady().then(async () => {
       anyPaintSamples.push(anyPaint - sentAt);
       correctPaintSamples.push(correctPaint - sentAt);
     }
+    const timedTransport = await window.webContents.executeJavaScript("window.__rendererBenchmark.finishTimedTransport('latency')");
+    const applicationWorkerTransport = preflightWorkerTransport
+      && timedTransport.matchingWorkerResults >= latencySamples
+      && timedTransport.interactiveWorkerRequests === timedTransport.matchingWorkerResults
+      && timedTransport.directResults === 0;
     await window.webContents.executeJavaScript("window.__rendererBenchmark.clearPaintToken()");
     releaseMouse(target);
     await waitForPaintQuiet(100);
-    return { anyPaintMs: statistics(anyPaintSamples), correctPaintMs: statistics(correctPaintSamples), samples: correctPaintSamples };
+    return {
+      anyPaintMs: statistics(anyPaintSamples),
+      correctPaintMs: statistics(correctPaintSamples),
+      samples: correctPaintSamples,
+      applicationWorkerTransport,
+      transport: { preflightWorkerTransport, ...timedTransport },
+    };
   }
 
   async function measureStress() {
     await loadFixture();
     const origin = await center();
     await pressMouse(origin);
+    const preflightWorkerTransport = await proveApplicationWorkerTransport(origin);
     await waitForPaintQuiet(80);
+    await window.webContents.executeJavaScript("window.__rendererBenchmark.startTimedTransport('stress')");
     await window.webContents.executeJavaScript("window.__rendererBenchmark.start()");
     const firstPaint = paintTimestamps.length;
-    const startedAt = epochNow();
+    const dispatchStartedAt = stressMainNow();
     const inputIntervalMs = 1000 / inputHz;
     const inputCount = Math.max(1, Math.floor(stressDurationMs / inputIntervalMs));
     let target = origin;
@@ -801,16 +909,29 @@ app.whenReady().then(async () => {
     const finalTarget = { x: origin.x + Math.cos(finalAngle) * 54, y: origin.y + Math.sin(finalAngle) * 32 };
     const finalTargetLocal = await localAt(finalTarget);
     for (let index = 0; index < inputCount; index++) {
-      const remaining = startedAt + index * inputIntervalMs - epochNow();
+      const remaining = dispatchStartedAt + index * inputIntervalMs - stressMainNow();
       if (remaining > 0.5) await delay(remaining);
       const angle = index / 11;
       target = { x: origin.x + Math.cos(angle) * 54, y: origin.y + Math.sin(angle) * 32 };
       moveMouse(target);
     }
-    const endedAt = epochNow();
+    const paintEndAtInputDispatch = paintTimestamps.length;
     await waitForCorrect(target, finalTargetLocal);
+    await waitFor(async () => {
+      const value = await window.webContents.executeJavaScript("window.__rendererBenchmark.lastCorrect()");
+      return value && Math.hypot(value.x - target.x, value.y - target.y) <= 1 ? value : null;
+    }, 5000, "the final stress input's correct geometry record");
     releaseMouse(target);
     const probe = await window.webContents.executeJavaScript("window.__rendererBenchmark.stop()");
+    const timedTransport = await window.webContents.executeJavaScript("window.__rendererBenchmark.finishTimedTransport('stress')");
+    const applicationWorkerTransport = preflightWorkerTransport
+      && timedTransport.matchingWorkerResults >= 1
+      && timedTransport.interactiveWorkerRequests === timedTransport.matchingWorkerResults
+      && timedTransport.directResults === 0;
+    const { startedAt, endedAt } = probe.inputBoundsRendererMs;
+    if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt) || endedAt <= startedAt) {
+      throw new Error("The renderer did not observe a bounded stress input window.");
+    }
     const framesDuringInput = probe.frames.filter((timestamp) => timestamp >= startedAt && timestamp <= endedAt);
     // Bound the sample so a stall that resumes after input ends is still charged to the input window.
     const frameBoundaries = [startedAt, ...framesDuringInput, endedAt];
@@ -821,7 +942,7 @@ app.whenReady().then(async () => {
     const geometry = probe.geometry.filter((timestamp) => timestamp >= startedAt && timestamp <= endedAt);
     const geometryBoundaries = [startedAt, ...geometry, endedAt];
     const geometryGaps = geometryBoundaries.slice(1).map((timestamp, index) => timestamp - geometryBoundaries[index]);
-    const paints = paintTimestamps.slice(firstPaint).filter((timestamp) => timestamp <= endedAt);
+    const paints = paintTimestamps.slice(firstPaint, paintEndAtInputDispatch);
     const actualDurationMs = endedAt - startedAt;
     await waitForPaintQuiet(100);
     return {
@@ -832,8 +953,10 @@ app.whenReady().then(async () => {
       correctCurveUpdates: geometry.length,
       correctCurveRateHz: geometry.length / actualDurationMs * 1000,
       maxCorrectCurveGapMs: Math.max(...geometryGaps),
-      timingBoundsEpochMs: { startedAt, endedAt },
-      rawGeometryEpochMs: probe.geometry,
+      applicationWorkerTransport,
+      transport: { preflightWorkerTransport, ...timedTransport },
+      timingBoundsRendererMs: { startedAt, endedAt },
+      rawGeometryRendererMs: probe.geometry,
       ...frameSummary(frameDeltas),
     };
   }

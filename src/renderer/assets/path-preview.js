@@ -6,6 +6,79 @@ import { PM } from "../lib/pathMath";
     return SAMPLES_BY_QUALITY[quality] || SAMPLES_BY_QUALITY.final;
   }
 
+  function browserBenchmarkTransport() {
+    if (typeof location === 'undefined' || typeof URLSearchParams === 'undefined'
+      || typeof CustomEvent === 'undefined' || typeof dispatchEvent !== 'function'
+      || typeof addEventListener !== 'function') return null;
+    if (!location.search) return null;
+    const params = new URLSearchParams(location.search);
+    const mode = params.get('bordeauxBenchmarkTransport');
+    if (mode !== 'observe' && mode !== 'force-direct') return null;
+    const waypointIndex = Number.parseInt(params.get('bordeauxBenchmarkWaypoint'), 10);
+    if (!Number.isInteger(waypointIndex) || waypointIndex < 0) return null;
+    let observerMode = 'stopped';
+    let windowId = null;
+    let schedulerId = 0;
+    let workerRequests = new Set();
+    let workerResults = new Set();
+    let directResults = 0;
+    addEventListener('bordeaux-benchmark:path-preview-transport-control', (event) => {
+      const control = typeof event.detail === 'string' ? { mode: event.detail } : event.detail;
+      if (control?.mode === 'proof' || control?.mode === 'stop') {
+        observerMode = control.mode === 'proof' ? 'proof' : 'stopped';
+        return;
+      }
+      if (control?.mode === 'timed-start') {
+        observerMode = 'timed';
+        windowId = control.windowId;
+        workerRequests = new Set();
+        workerResults = new Set();
+        directResults = 0;
+        return;
+      }
+      if (control?.mode !== 'timed-report' || observerMode !== 'timed' || control.windowId !== windowId) return;
+      observerMode = 'stopped';
+      dispatchEvent(new CustomEvent('bordeaux-benchmark:path-preview-transport', {
+        detail: {
+          phase: 'summary',
+          windowId,
+          schedulerId,
+          interactiveWorkerRequests: workerRequests.size,
+          matchingWorkerResults: workerResults.size,
+          directResults,
+        },
+      }));
+    });
+    return {
+      forceDirect: mode === 'force-direct',
+      observe(event) {
+        schedulerId = event.schedulerId;
+        if (observerMode === 'timed') {
+          if (event.job.quality !== 'interactive') return;
+          if (event.phase === 'request' && event.source === 'worker') workerRequests.add(event.job.revision);
+          else if (event.phase === 'result' && event.source === 'worker' && workerRequests.has(event.job.revision)) workerResults.add(event.job.revision);
+          else if (event.phase === 'result' && event.source === 'direct') directResults += 1;
+          return;
+        }
+        if (observerMode !== 'proof') return;
+        const waypoint = event.job.path?.waypoints?.[waypointIndex];
+        dispatchEvent(new CustomEvent('bordeaux-benchmark:path-preview-transport', {
+          detail: {
+            phase: event.phase,
+            source: event.source,
+            schedulerId: event.schedulerId,
+            revision: event.job.revision,
+            quality: event.job.quality,
+            key: event.job.key ?? null,
+            waypoint: waypoint ? { x: waypoint.x, y: waypoint.y } : null,
+          },
+        }));
+      },
+    };
+  }
+
+  let schedulerSequence = 0;
+
   /**
    * Owns path-preview scheduling. At most one worker job and one replacement job
    * are retained, so pointer motion cannot build an obsolete rendering backlog.
@@ -14,7 +87,14 @@ import { PM } from "../lib/pathMath";
     const config = options || {};
     const listeners = new Set();
     const derive = config.derive || ((job) => PM.derivePath(job.path, job.robot, job.perSegment, job.plannerId));
-    const workerFactory = config.workerFactory || (() => new Worker(new URL('./path-preview-worker.js', import.meta.url), { type: 'module' }));
+    const benchmarkTransport = config.transportObserver
+      ? { forceDirect: Boolean(config.forceDirect), observe: config.transportObserver }
+      : browserBenchmarkTransport();
+    const schedulerId = benchmarkTransport ? ++schedulerSequence : 0;
+    const workerFactory = config.workerFactory || (() => {
+      if (benchmarkTransport?.forceDirect) throw new Error('Benchmark forced direct path-preview derivation.');
+      return new Worker(new URL('./path-preview-worker.js', import.meta.url), { type: 'module' });
+    });
     const timeoutMs = Number.isFinite(config.timeoutMs) ? Math.max(1, config.timeoutMs) : 5000;
     let worker = null;
     let inFlight = null;
@@ -44,11 +124,20 @@ import { PM } from "../lib/pathMath";
       listeners.forEach((listener) => listener());
     };
 
-    const publish = (job, result) => {
+    const observeTransport = (phase, source, job) => {
+      if (!benchmarkTransport?.observe) return;
+      try { benchmarkTransport.observe({ phase, source, schedulerId, job }); }
+      catch (_error) { /* Benchmark observation must never affect preview fallback. */ }
+    };
+
+    const publish = (job, result, source) => {
       if (destroyed || job.revision < publishedRevision) return;
       const current = job.revision === latestRevision;
       if (result.error && !current) return;
-      if (!result.error) publishedRevision = job.revision;
+      if (!result.error) {
+        publishedRevision = job.revision;
+        observeTransport('result', source, job);
+      }
       snapshot = result.error
         ? { ...snapshot, status: 'error', revision: latestRevision, sourceRevision: job.revision, quality: job.quality, error: result.error, errorKey: job.key, errorPath: job.path }
         : {
@@ -77,9 +166,9 @@ import { PM } from "../lib/pathMath";
         if (!job || destroyed) return;
         const startedAt = performance.now();
         try {
-          publish(job, { value: derive(job), durationMs: performance.now() - startedAt });
+          publish(job, { value: derive(job), durationMs: performance.now() - startedAt }, 'direct');
         } catch (error) {
-          publish(job, { error: { message: error instanceof Error ? error.message : String(error) } });
+          publish(job, { error: { message: error instanceof Error ? error.message : String(error) } }, 'direct');
         }
         if (directJob) runDirect();
       });
@@ -117,6 +206,7 @@ import { PM } from "../lib/pathMath";
           perSegment: job.perSegment,
           quality: job.quality,
         });
+        observeTransport('request', 'worker', job);
       } catch (error) {
         recoverWorker(targetWorker, error instanceof Error ? error.message : String(error));
       }
@@ -145,7 +235,7 @@ import { PM } from "../lib/pathMath";
           return;
         }
         const completed = takeInFlight();
-        publish(completed, result);
+        publish(completed, result, 'worker');
         if (queued) {
           const next = queued;
           queued = null;

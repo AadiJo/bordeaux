@@ -2,6 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadRendererExport } from "./helpers/loadRendererExport";
 
 interface WorkerJob { id: number; quality: "interactive" | "final"; perSegment: number }
+interface TransportEvent {
+  phase: "request" | "result";
+  source: "worker" | "direct";
+  schedulerId: number;
+  job: { revision: number; quality: "interactive" | "final"; perSegment: number };
+}
 
 class FakeWorker {
   readonly jobs: WorkerJob[] = [];
@@ -20,9 +26,9 @@ class FakeWorker {
   terminate() { this.terminated = true; }
 }
 
-function previewModule() {
+function previewModule(context: Record<string, unknown> = {}) {
   return loadRendererExport<{
-    create(options: { workerFactory: () => FakeWorker; derive?: (job: unknown) => unknown; timeoutMs?: number }): {
+    create(options: { workerFactory?: () => FakeWorker; derive?: (job: unknown) => unknown; timeoutMs?: number; transportObserver?: (event: TransportEvent) => void }): {
       request(input: { path: unknown; robot: unknown; plannerId: string; quality: "interactive" | "final"; key?: string }): number;
       getSnapshot(): { status: string; revision: number; quality: string; path: unknown; value: unknown };
       retain(): () => void;
@@ -30,12 +36,44 @@ function previewModule() {
     };
     samplesForQuality(quality: string): number;
   }>(new URL("../src/renderer/assets/path-preview.js", import.meta.url), "PathPreview", {
-    context: { performance, queueMicrotask, setTimeout, clearTimeout },
+    context: { performance, queueMicrotask, setTimeout, clearTimeout, ...context },
     replacements: [[
-      "const workerFactory = config.workerFactory || (() => new Worker(new URL('./path-preview-worker.js', import.meta.url), { type: 'module' }));",
-      "const workerFactory = config.workerFactory;",
+      "return new Worker(new URL('./path-preview-worker.js', import.meta.url), { type: 'module' });",
+      "return config.workerFactory();",
     ]],
   });
+}
+
+function benchmarkEventBus(mode: "observe" | "force-direct") {
+  const listeners = new Map<string, Array<(event: BenchmarkEvent) => void>>();
+  const events: BenchmarkEvent[] = [];
+  class BenchmarkEvent {
+    constructor(readonly type: string, readonly init: { detail: unknown }) {}
+    get detail() { return this.init.detail; }
+  }
+  const dispatchEvent = (event: BenchmarkEvent) => {
+    events.push(event);
+    listeners.get(event.type)?.forEach((listener) => listener(event));
+    return true;
+  };
+  const addEventListener = (type: string, listener: (event: BenchmarkEvent) => void) => {
+    const registered = listeners.get(type) ?? [];
+    registered.push(listener);
+    listeners.set(type, registered);
+  };
+  return {
+    context: {
+      location: { search: `?bordeauxBenchmarkTransport=${mode}&bordeauxBenchmarkWaypoint=0` },
+      URLSearchParams,
+      CustomEvent: BenchmarkEvent,
+      dispatchEvent,
+      addEventListener,
+    },
+    dispatch(type: string, detail: unknown) { dispatchEvent(new BenchmarkEvent(type, { detail })); },
+    transportDetails() {
+      return events.filter((event) => event.type === "bordeaux-benchmark:path-preview-transport").map((event) => event.detail);
+    },
+  };
 }
 
 describe("renderer path preview scheduler", () => {
@@ -50,6 +88,77 @@ describe("renderer path preview scheduler", () => {
     preview.request({ path: {}, robot: {}, plannerId: "profiledSpline", quality: "interactive" });
     expect(allocations).toBe(1);
     preview.destroy();
+  });
+
+  it("observes matching application worker requests and results", () => {
+    const worker = new FakeWorker();
+    const transport: TransportEvent[] = [];
+    const preview = previewModule().create({ workerFactory: () => worker, transportObserver: (event) => transport.push(event) });
+
+    const revision = preview.request({ path: {}, robot: {}, plannerId: "profiledSpline", quality: "interactive" });
+    worker.resolve({ id: revision, value: { rendered: true } });
+
+    expect(transport).toEqual([
+      expect.objectContaining({ phase: "request", source: "worker", job: expect.objectContaining({ revision }) }),
+      expect.objectContaining({ phase: "result", source: "worker", job: expect.objectContaining({ revision }) }),
+    ]);
+    expect(transport[0].schedulerId).toBe(transport[1].schedulerId);
+  });
+
+  it("identifies a direct fallback without claiming worker transport", async () => {
+    const transport: TransportEvent[] = [];
+    const preview = previewModule().create({
+      workerFactory: () => { throw new Error("worker unavailable"); },
+      derive: () => ({ rendered: true }),
+      transportObserver: (event) => transport.push(event),
+    });
+
+    preview.request({ path: {}, robot: {}, plannerId: "profiledSpline", quality: "interactive" });
+    await Promise.resolve();
+
+    expect(transport).toEqual([
+      expect.objectContaining({ phase: "result", source: "direct" }),
+    ]);
+    expect(transport).not.toContainEqual(expect.objectContaining({ source: "worker" }));
+  });
+
+  it("summarizes timed worker transport without per-job events", () => {
+    const bus = benchmarkEventBus("observe");
+    const worker = new FakeWorker();
+    const preview = previewModule(bus.context).create({ workerFactory: () => worker });
+    bus.dispatch("bordeaux-benchmark:path-preview-transport-control", { mode: "timed-start", windowId: "latency" });
+
+    const revision = preview.request({ path: { waypoints: [{ x: 1, y: 2 }] }, robot: {}, plannerId: "profiledSpline", quality: "interactive" });
+    worker.resolve({ id: revision, value: { rendered: true } });
+    bus.dispatch("bordeaux-benchmark:path-preview-transport-control", { mode: "timed-report", windowId: "latency" });
+
+    expect(bus.transportDetails()).toEqual([{
+      phase: "summary",
+      windowId: "latency",
+      schedulerId: expect.any(Number),
+      interactiveWorkerRequests: 1,
+      matchingWorkerResults: 1,
+      directResults: 0,
+    }]);
+  });
+
+  it("reports a timed direct fallback without emitting a false worker result", async () => {
+    const bus = benchmarkEventBus("force-direct");
+    const preview = previewModule(bus.context).create({ derive: () => ({ rendered: true }) });
+    bus.dispatch("bordeaux-benchmark:path-preview-transport-control", { mode: "timed-start", windowId: "stress" });
+
+    preview.request({ path: { waypoints: [{ x: 1, y: 2 }] }, robot: {}, plannerId: "profiledSpline", quality: "interactive" });
+    await Promise.resolve();
+    bus.dispatch("bordeaux-benchmark:path-preview-transport-control", { mode: "timed-report", windowId: "stress" });
+
+    expect(bus.transportDetails()).toEqual([{
+      phase: "summary",
+      windowId: "stress",
+      schedulerId: expect.any(Number),
+      interactiveWorkerRequests: 0,
+      matchingWorkerResults: 0,
+      directResults: 1,
+    }]);
   });
 
   it("keeps only the latest replacement while a worker job is running", () => {

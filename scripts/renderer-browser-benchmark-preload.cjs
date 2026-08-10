@@ -98,7 +98,7 @@ contextBridge.exposeInMainWorld("bordeauxAPI", {
     state.publishedSessions.push(clone(snapshot));
   },
   updateAgentProposalStatus: (id, status, appliedRevision) => state.proposalStatuses.push({ id, status, appliedRevision }),
-  acknowledgeAgentProposal: (id, _sessionId, _revision, accepted = true) => {
+  acknowledgeAgentProposal: (id, _sessionId, _revision, _activePathId, accepted = true) => {
     if (!accepted) state.proposalStatuses.push({ id, status: "stale" });
   },
   getActiveAgentProposal: async () => null,
