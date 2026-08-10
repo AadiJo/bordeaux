@@ -28,6 +28,7 @@ import { UI } from "./ui";
 
   function FieldView(props) {
     const { doc, derived, editStore, insertionPreview, proposalPreviews, sel, tool, view, setView, alliance, showGrid, robot, drive, accent, metric, playTime, actions, routine, routinePose } = props;
+    const interactionReady = props.interactionReady !== false;
     const showHandles = props.showHandles !== false;
     const svgRef = useRef(null);
     const [cw, setCw] = useState(1200);
@@ -238,6 +239,7 @@ import { UI } from "./ui";
 
     const onDown = (e) => {
       if (e.button !== 0 && e.button !== 1) return;
+      if (!interactionReady) return;
       e.preventDefault();
       const t = e.target;
       const role = t.getAttribute && t.getAttribute('data-role');

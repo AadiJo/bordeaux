@@ -253,8 +253,8 @@ app.whenReady().then(async () => {
     await delay(100);
     const releaseFinal = await readProbe();
     const trace = await window.webContents.executeJavaScript("window.__rendererBenchmark.stopTrace()");
-    const allowedReleaseDistance = Math.hypot(release.x - lastMove.x, release.y - lastMove.y) + 4;
-    const releaseStable = trace.every((point) => Math.hypot(point.x - release.x, point.y - release.y) <= allowedReleaseDistance);
+    const releaseStable = trace.length > 0 && trace.every((point) => point.curveCorrect
+      && Math.hypot(point.x - release.x, point.y - release.y) <= 4);
 
     await loadFixture();
     const saveOrigin = await center();

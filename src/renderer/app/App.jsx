@@ -163,7 +163,8 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       ? { path: preview.path, value: preview.value }
       : null;
     const displayed = draftPreview || committedPreview || { path: derivedPath || doc, value: derived };
-    return h(FieldView, { ...props, editStore, doc: displayed.path, derived: displayed.value, robot, playTime: playback.time });
+    const currentSource = draft || doc;
+    return h(FieldView, { ...props, editStore, doc: displayed.path, derived: displayed.value, interactionReady: displayed.path === currentSource, robot, playTime: playback.time });
   }
   function PlaybackTransport({ store, ...props }) {
     const playback = usePlayback(store);
@@ -191,7 +192,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const fallback = useMemo(() => {
       try { return { path: doc, value: PM.derivePath(doc, robot, 14, plannerId), error: null }; }
       catch (error) { return { path: doc, value: null, error }; }
-    }, [doc.id, robot, plannerId]);
+    }, [doc, robot, plannerId]);
     const lastValid = useRef(fallback.value ? { path: fallback.path, value: fallback.value } : null);
     const [snapshot, setSnapshot] = useState(() => ({
       status: fallback.value ? 'ready' : 'error',
