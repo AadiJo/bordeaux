@@ -6,9 +6,10 @@ Run `npm run benchmark:renderer:browser` from a clean checkout after fetching
 is written to the ignored `.benchmark-results/renderer-browser.json` file.
 
 The fixture is a 100-waypoint profiled spline in a 1440×900 offscreen Electron
-window. Each variant uses its production Vite bundle and real preview worker.
-The harness verifies terminal pointer coordinates, save/dirty behavior, undo,
-path-switch cancellation, and matching waypoint/curve geometry before timing.
+window. Each variant uses its production Vite bundle. Before timing the candidate,
+the harness loads its emitted preview worker and requires a real request/result
+round trip, then verifies terminal pointer coordinates, save/dirty behavior,
+undo, path-switch cancellation, and matching waypoint/curve geometry.
 
 Latency is measured from Electron input dispatch to the first compositor paint
 where both the dragged waypoint and the SVG centerline match that input. The

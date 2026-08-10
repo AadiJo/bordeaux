@@ -107,9 +107,11 @@ async function buildVariant(reference, key) {
     build: { outDir, emptyOutDir: true, sourcemap: false, target: "es2022" },
   });
   const assets = await fs.readdir(path.join(outDir, "assets"));
+  const workerAsset = assets.find((asset) => asset.startsWith("path-preview-worker-")) || null;
   return {
     html: path.join(outDir, "index.html"),
-    workerBundle: assets.some((asset) => asset.startsWith("path-preview-worker-")),
+    workerAsset,
+    workerBundle: Boolean(workerAsset),
   };
 }
 
@@ -122,6 +124,7 @@ function runVariant(label, variant, checkCorrectness) {
         BORDEAUX_BENCHMARK_LABEL: label,
         BORDEAUX_BENCHMARK_PROJECT: encodedFixture,
         BORDEAUX_BENCHMARK_RENDERER_HTML: variant.html,
+        BORDEAUX_BENCHMARK_WORKER_ASSET: variant.workerAsset ? `./assets/${variant.workerAsset}` : "",
         BORDEAUX_BROWSER_LATENCY_SAMPLES: latencySamples,
         BORDEAUX_BROWSER_STRESS_MS: stressMs,
         BORDEAUX_BROWSER_CHECK_CORRECTNESS: checkCorrectness ? "1" : "0",
@@ -220,7 +223,7 @@ try {
       input: `mouse input at 120 Hz; ${latencySamples} isolated latency samples; ${stressMs} ms stress; ${trials} alternating trials`,
       correctPaint: "input dispatch to the first compositor paint after the waypoint matches in screen and pre-drag SVG coordinates and the centerline contains it",
       droppedFrames: "missed 16.67 ms requestAnimationFrame slots during continuous input",
-      worker: "production Vite bundle with its emitted Web Worker; no worker replacement or mock",
+      worker: "production Vite worker bundle loaded directly and required to complete a structured-clone request/result round trip",
       clockPhase: "a correct paint must occur at or after the renderer observes matching waypoint and curve geometry",
     },
     variants,

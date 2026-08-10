@@ -8,6 +8,7 @@ const latencySamples = Number.parseInt(process.env.BORDEAUX_BROWSER_LATENCY_SAMP
 const stressDurationMs = Number.parseInt(process.env.BORDEAUX_BROWSER_STRESS_MS || "2000", 10);
 const inputHz = Number.parseInt(process.env.BORDEAUX_BROWSER_INPUT_HZ || "120", 10);
 const checkCorrectness = process.env.BORDEAUX_BROWSER_CHECK_CORRECTNESS === "1";
+const workerAsset = process.env.BORDEAUX_BENCHMARK_WORKER_ASSET || "";
 const frameBudgetMs = 1000 / 60;
 
 if (!rendererHtml) throw new Error("BORDEAUX_BENCHMARK_RENDERER_HTML is required");
@@ -239,6 +240,26 @@ app.whenReady().then(async () => {
 
   async function correctnessChecks() {
     await loadFixture();
+    const workerFixture = JSON.parse(Buffer.from(process.env.BORDEAUX_BENCHMARK_PROJECT, "base64").toString("utf8"));
+    const workerJob = {
+      id: 2468,
+      path: workerFixture.paths[0],
+      robot: workerFixture.robot,
+      plannerId: workerFixture.plannerId,
+      perSegment: 14,
+      quality: "interactive",
+    };
+    const workerResult = workerAsset ? await window.webContents.executeJavaScript(`new Promise((resolve) => {
+      const worker = new Worker(new URL(${JSON.stringify(workerAsset)}, location.href), { type: 'module' });
+      const timer = setTimeout(() => { worker.terminate(); resolve({ timeout: true }); }, 5000);
+      worker.onmessage = (event) => { clearTimeout(timer); worker.terminate(); resolve(event.data); };
+      worker.onerror = (event) => { clearTimeout(timer); worker.terminate(); resolve({ error: event.message || 'worker error' }); };
+      worker.postMessage(${JSON.stringify(workerJob)});
+    })`) : null;
+    const realWorkerRoundTrip = workerResult?.id === workerJob.id
+      && !workerResult.error
+      && Array.isArray(workerResult.value?.sample?.pts)
+      && workerResult.value.sample.pts.length > workerJob.path.waypoints.length;
     const origin = await center();
     const lastMove = { x: origin.x + 42, y: origin.y - 16 };
     const release = { x: lastMove.x + 28, y: lastMove.y + 10 };
@@ -387,7 +408,7 @@ app.whenReady().then(async () => {
     await delay(150);
     const pathSwitchCancelsDrag = switched && await window.webContents.executeJavaScript('document.querySelectorAll(\'[data-role="wp"]\').length === 3');
 
-    return { releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, commandSurvivesDrag, commandUndoRestores, cancelPreservesRedo, pathSwitchCancelsDrag };
+    return { realWorkerRoundTrip, releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, commandSurvivesDrag, commandUndoRestores, cancelPreservesRedo, pathSwitchCancelsDrag };
   }
 
   async function measureLatency() {
