@@ -13,7 +13,7 @@ npm install
 npm run dev
 ```
 
-The renderer source lives in `src/renderer` and builds with Vite to `dist-renderer`. Electron and shared planner code also live in `src`; robot-side support lives in `java`.
+The renderer source lives in `src/renderer` and builds with Vite to `dist-renderer`. `main.tsx` mounts the React application, feature components live under `components`, browser-side domain helpers under `lib`, and static resources under `assets` and `styles`. Renderer modules use explicit imports; no ordered scripts or application globals are required. Electron and shared planner code also live in `src`; robot-side support lives in `java`.
 
 ## Verify
 
