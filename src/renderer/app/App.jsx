@@ -412,23 +412,29 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.onAgentProposal !== 'function') return;
       let active = true;
+      let receivedLiveProposal = false;
       let lastProposalKey = '';
       const receiveProposal = (proposal) => {
         if (!active || !proposal) return;
         const proposalKey = proposal.id + ':' + proposal.status;
         if (proposalKey === lastProposalKey) return;
         lastProposalKey = proposalKey;
-        if (window.bordeauxAPI.acknowledgeAgentProposal) window.bordeauxAPI.acknowledgeAgentProposal(proposal.id);
         const stale = proposal.baseSessionId !== agentSessionId || proposal.baseRevision !== agentRevision.current;
         const received = stale && proposal.status === 'ready' ? { ...proposal, status: 'stale' } : proposal;
+        if (window.bordeauxAPI.acknowledgeAgentProposal) window.bordeauxAPI.acknowledgeAgentProposal(proposal.id, agentSessionId, agentRevision.current);
         if (stale && proposal.status === 'ready' && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(proposal.id, 'stale');
         setAgentProposal(received);
         setAgentCandidateId(proposal.recommendedCandidateId || null);
         setPage(proposal.operation === 'configureRobot' ? 'robot' : 'plan');
       };
-      const unsubscribe = window.bordeauxAPI.onAgentProposal(receiveProposal);
+      const unsubscribe = window.bordeauxAPI.onAgentProposal((proposal) => {
+        receivedLiveProposal = true;
+        receiveProposal(proposal);
+      });
       if (typeof window.bordeauxAPI.getActiveAgentProposal === 'function') {
-        Promise.resolve(window.bordeauxAPI.getActiveAgentProposal()).then(receiveProposal).catch(() => undefined);
+        Promise.resolve(window.bordeauxAPI.getActiveAgentProposal()).then((proposal) => {
+          if (!receivedLiveProposal) receiveProposal(proposal);
+        }).catch(() => undefined);
       }
       return () => { active = false; unsubscribe(); };
     }, [agentSessionId]);

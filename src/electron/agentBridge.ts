@@ -163,20 +163,28 @@ export class AgentBridgeClient {
     return value;
   }
 
-  async request(request: AgentRequest): Promise<unknown> {
+  async request(request: AgentRequest, signal?: AbortSignal): Promise<unknown> {
+    if (signal?.aborted) throw new Error("Agent request was canceled.");
     const descriptor = await this.readDescriptor();
+    if (signal?.aborted) throw new Error("Agent request was canceled.");
     const socket = net.createConnection(descriptor.endpoint);
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("Could not connect to the Bordeaux MCP session.")), 2_000);
-      socket.once("connect", () => { clearTimeout(timer); resolve(); });
-      socket.once("error", (error) => { clearTimeout(timer); reject(error); });
-    });
-    const id = randomUUID();
-    socket.write(encode({ id, token: descriptor.token, request } satisfies BridgeEnvelope));
-    const response = await readOne(socket, REQUEST_TIMEOUT_MS) as { id?: string; result?: unknown; error?: string };
-    socket.destroy();
-    if (response.error) throw new Error(response.error);
-    if (response.id !== id) throw new Error("The Bordeaux MCP response did not match its request.");
-    return response.result;
+    const onAbort = () => socket.destroy(new Error("Agent request was canceled."));
+    signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("Could not connect to the Bordeaux MCP session.")), 2_000);
+        socket.once("connect", () => { clearTimeout(timer); resolve(); });
+        socket.once("error", (error) => { clearTimeout(timer); reject(error); });
+      });
+      const id = randomUUID();
+      socket.write(encode({ id, token: descriptor.token, request } satisfies BridgeEnvelope));
+      const response = await readOne(socket, REQUEST_TIMEOUT_MS) as { id?: string; result?: unknown; error?: string };
+      if (response.error) throw new Error(response.error);
+      if (response.id !== id) throw new Error("The Bordeaux MCP response did not match its request.");
+      return response.result;
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+      socket.destroy();
+    }
   }
 }
