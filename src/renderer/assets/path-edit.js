@@ -30,7 +30,7 @@
       cancel() {
         const hadDraft = Boolean(draft);
         draft = null;
-        revision += 1;
+        if (hadDraft) revision += 1;
         cancelRevision += 1;
         emit();
         return hadDraft;

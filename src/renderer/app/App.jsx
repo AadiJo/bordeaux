@@ -146,14 +146,19 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const draft = useSyncExternalStore(editStore.subscribe, editStore.getSnapshot, editStore.getSnapshot);
     const previewer = useMemo(() => PathPreview.create(), []);
     const [preview, setPreview] = useState(() => previewer.getSnapshot());
+    useEffect(() => previewer.retain(), [previewer]);
     useEffect(() => previewer.subscribe(() => setPreview(previewer.getSnapshot())), [previewer]);
     useEffect(() => {
       if (draft) previewer.request({ key: draft.id, path: draft, robot, plannerId, quality: 'interactive' });
     }, [previewer, draft, robot, plannerId]);
-    useEffect(() => () => previewer.destroy(), [previewer]);
-    const committedPreview = !draft && derivedPath !== doc && preview.key === doc.id && preview.value;
-    const draftDerived = draft && preview.key === draft.id && preview.value ? preview.value : committedPreview || derived;
-    return h(FieldView, { ...props, doc: draft || doc, derived: draftDerived, robot, playTime: playback.time });
+    const draftPreview = draft && preview.path && preview.path.id === draft.id && preview.value
+      ? { path: preview.path, value: preview.value }
+      : null;
+    const committedPreview = !draft && preview.path === doc && preview.value
+      ? { path: preview.path, value: preview.value }
+      : null;
+    const displayed = draftPreview || committedPreview || { path: derivedPath || doc, value: derived };
+    return h(FieldView, { ...props, editStore, doc: displayed.path, derived: displayed.value, robot, playTime: playback.time });
   }
   function PlaybackTransport({ store, ...props }) {
     const playback = usePlayback(store);
@@ -193,11 +198,11 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       durationMs: 0,
     }));
 
+    useEffect(() => previewer.retain(), [previewer]);
     useEffect(() => previewer.subscribe(() => setSnapshot(previewer.getSnapshot())), [previewer]);
     useEffect(() => {
       previewer.request({ key: doc.id, path: doc, robot, plannerId, quality });
     }, [previewer, doc, robot, plannerId, quality]);
-    useEffect(() => () => previewer.destroy(), [previewer]);
 
     const current = snapshot.path === doc && snapshot.value
       ? { path: doc, value: snapshot.value }
@@ -408,11 +413,42 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
 
     const doc = project.paths[activeIdx];
     const docRef = useRef(doc); docRef.current = doc;
+    const projectRef = useRef(project); projectRef.current = project;
+    const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
     const hist = useRef({ past: [], future: [] });
     const routineHist = useRef({ past: [], future: [] });
     const projectHist = useRef({ past: [], future: [] });
     const autosaveRevision = useRef(0);
+    const autosaveTimer = useRef(0);
     const [, force] = useState(0);
+    const updateDirty = useCallback((next) => {
+      dirtyRef.current = next;
+      setDirty(next);
+    }, []);
+    const materializeProject = useCallback(() => {
+      const base = projectRef.current;
+      const draft = editStore.getSnapshot();
+      const materialized = editStore.materialize(base);
+      if (!draft || materialized === base) return base;
+      const before = base.paths.find((path) => path.id === draft.id);
+      return PathLinks.sync(materialized, draft.id, before);
+    }, [editStore]);
+    const scheduleAutosave = useCallback(() => {
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.autosaveProject !== 'function') return;
+      const revision = ++autosaveRevision.current;
+      if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);
+      autosaveTimer.current = window.setTimeout(() => {
+        autosaveTimer.current = 0;
+        const sourceProject = projectRef.current;
+        const editRevision = editStore.getRevision();
+        window.bordeauxAPI.autosaveProject(materializeProject())
+          .then((result) => {
+            if (revision === autosaveRevision.current && sourceProject === projectRef.current
+              && editRevision === editStore.getRevision() && result && result.saved) updateDirty(false);
+          })
+          .catch((error) => console.warn('Could not autosave the Bordeaux project:', error));
+      }, 900);
+    }, [editStore, materializeProject, updateDirty]);
 
     useEffect(() => {
       const activePathId = project.paths[activeIdx] && project.paths[activeIdx].id;
@@ -422,19 +458,18 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
 
     useEffect(() => {
       if (skipDirty.current) skipDirty.current = false;
-      else setDirty(true);
-    }, [project]);
+      else updateDirty(true);
+    }, [project, updateDirty]);
     useEffect(() => { if (window.bordeauxAPI) window.bordeauxAPI.setDirty(dirty); }, [dirty]);
-    useEffect(() => {
-      if (!window.bordeauxAPI || typeof window.bordeauxAPI.autosaveProject !== 'function') return undefined;
-      const revision = ++autosaveRevision.current;
-      const timer = window.setTimeout(() => {
-        window.bordeauxAPI.autosaveProject(project)
-          .then((result) => { if (revision === autosaveRevision.current && result && result.saved) setDirty(false); })
-          .catch((error) => console.warn('Could not autosave the Bordeaux project:', error));
-      }, 900);
-      return () => window.clearTimeout(timer);
-    }, [project]);
+    useEffect(() => scheduleAutosave(), [project, scheduleAutosave]);
+    useEffect(() => editStore.subscribe(() => {
+      if (!editStore.getSnapshot()) return;
+      if (!dirtyRef.current) updateDirty(true);
+      scheduleAutosave();
+    }), [editStore, scheduleAutosave, updateDirty]);
+    useEffect(() => () => {
+      if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);
+    }, []);
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.publishAgentSession !== 'function') return;
       let published = false;
@@ -446,7 +481,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         window.bordeauxAPI.publishAgentSession({
           sessionId: agentSessionId,
           revision,
-          project: clone(project),
+          project: clone(materializeProject()),
           activePathId: doc.id,
           allianceView: 'blue',
           fieldPack: { id: '2026-rebuilt', revision: '2026-manual-tu19-welded-4' },
@@ -460,7 +495,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       const timer = window.setTimeout(publish, 150);
       window.addEventListener('pointerup', publish, { once: true });
       return () => { window.clearTimeout(timer); window.removeEventListener('pointerup', publish); };
-    }, [project, activeIdx, agentSessionId, doc.id]);
+    }, [project, activeIdx, agentSessionId, doc.id, materializeProject]);
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.onAgentProposal !== 'function') return;
       let active = true;
@@ -528,9 +563,10 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       writeDoc(next);
     }, [editStore, writeDoc]);
     const cancelEdit = useCallback(() => {
-      if (!editStore.cancel()) return;
+      if (!editStore.cancel()) return false;
       hist.current.past.pop();
       force((x) => x + 1);
+      return true;
     }, [editStore]);
     useEffect(() => {
       const draft = editStore.getSnapshot();
@@ -543,6 +579,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }, [editStore, writeDoc]);
 
     const undo = useCallback(() => {
+      if (cancelEdit()) return;
       const H = hist.current;
       if (H.past.length) { H.future.push(clone(docRef.current)); writeDoc(H.past.pop()); force((x) => x + 1); return; }
       const R = routineHist.current;
@@ -555,8 +592,9 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       const P = projectHist.current; if (!P.past.length) return;
       P.future.push({ project: clone(project), activeIdx });
       const previous = P.past.pop(); routineHist.current = { past: [], future: [] }; setProject(previous.project); setActiveIdx(previous.activeIdx); setSel({ kind: null, idx: -1 }); force((x) => x + 1);
-    }, [writeDoc, project, activeIdx]);
+    }, [cancelEdit, writeDoc, project, activeIdx]);
     const redo = useCallback(() => {
+      if (cancelEdit()) return;
       const H = hist.current;
       if (H.future.length) { H.past.push(clone(docRef.current)); writeDoc(H.future.pop()); force((x) => x + 1); return; }
       const R = routineHist.current;
@@ -569,7 +607,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       const P = projectHist.current; if (!P.future.length) return;
       P.past.push({ project: clone(project), activeIdx });
       const next = P.future.pop(); routineHist.current = { past: [], future: [] }; setProject(next.project); setActiveIdx(next.activeIdx); setSel({ kind: null, idx: -1 }); force((x) => x + 1);
-    }, [writeDoc, project, activeIdx]);
+    }, [cancelEdit, writeDoc, project, activeIdx]);
 
     const select = useCallback((kind, idx) => setSel(kind ? { kind, idx } : { kind: null, idx: -1 }), []);
     // ---- field actions ----
@@ -1071,6 +1109,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       return base + ' ' + suffix;
     };
     const resetForPath = (i) => {
+      cancelEdit();
       setActiveIdx(i); setSel({ kind: null, idx: -1 }); playbackStore.reset();
       hist.current = { past: [], future: [] }; setPage('plan');
     };
@@ -1215,10 +1254,10 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         nextProject = { ...project, paths: [...project.paths, clone(agentCandidate.path)] };
       }
       projectHist.current.past.push(before); if (projectHist.current.past.length > 80) projectHist.current.past.shift(); projectHist.current.future = [];
-      setProject(nextProject); if (agentProposal.operation !== 'configureRobot') resetForPath(nextIndex); setDirty(true);
+      setProject(nextProject); if (agentProposal.operation !== 'configureRobot') resetForPath(nextIndex); updateDirty(true);
       if (window.bordeauxAPI && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(agentProposal.id, 'applied', agentRevision.current + 1);
       setAgentProposal({ ...agentProposal, status: 'applied', appliedRevision: agentRevision.current + 1 });
-    }, [agentProposal, agentCandidate, project, activeIdx, agentSessionId]);
+    }, [agentProposal, agentCandidate, project, activeIdx, agentSessionId, updateDirty]);
 
     const total = derived.prof.totalTime || 0;
     useEffect(() => playbackStore.setTotal(total), [playbackStore, total]);
@@ -1271,6 +1310,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     // ---- desktop project workflow ----
     const canReplaceProject = useCallback(() => !dirty || confirm('Discard unsaved changes to this project?'), [dirty]);
     const loadProject = useCallback((incoming) => {
+      cancelEdit();
       const next = normalizeProject(incoming);
       const javaGeneration = ++javaRestoreGeneration.current;
       const requestedPathId = next.editor && next.editor.activePathId;
@@ -1284,10 +1324,10 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       hist.current = { past: [], future: [] };
       routineHist.current = { past: [], future: [] };
       projectHist.current = { past: [], future: [] };
-      setDirty(false);
+      updateDirty(false);
       setJavaProjectState((current) => ({ ...current, status: 'unlinked', operation: null, catalog: null, integration: null, bookmarkId: null, error: '', notice: '' }));
       if (next.editor && next.editor.javaProjectBookmarkId) void openRecentJavaProject(next.editor.javaProjectBookmarkId, javaGeneration);
-    }, [openRecentJavaProject, playbackStore, routinePlaybackStore]);
+    }, [cancelEdit, openRecentJavaProject, playbackStore, routinePlaybackStore, updateDirty]);
     useEffect(() => {
       let active = true;
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.restoreLastProject !== 'function') return undefined;
@@ -1313,13 +1353,15 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const saveProject = useCallback(async (saveAs) => {
       if (!window.bordeauxAPI) return;
       try {
-        const result = await window.bordeauxAPI.saveProject(project, saveAs === true);
+        const sourceProject = projectRef.current;
+        const editRevision = editStore.getRevision();
+        const result = await window.bordeauxAPI.saveProject(materializeProject(), saveAs === true);
         if (result && result.canceled) return;
-        setDirty(false);
+        if (sourceProject === projectRef.current && editRevision === editStore.getRevision()) updateDirty(false);
       } catch (error) {
         alert('Could not save project: ' + (error && error.message ? error.message : error));
       }
-    }, [project]);
+    }, [editStore, materializeProject, updateDirty]);
 
     const onExportJava = useCallback(async (destination) => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.exportJava !== 'function') {
@@ -1333,7 +1375,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       setExportError('');
       setJavaProjectState((current) => ({ ...current, operation: 'export', error: '', notice: '' }));
       try {
-        const result = await window.bordeauxAPI.exportJava(project, destination === 'saveAs' ? 'saveAs' : 'linked');
+        const result = await window.bordeauxAPI.exportJava(materializeProject(), destination === 'saveAs' ? 'saveAs' : 'linked');
         setJavaProjectState((current) => ({
           ...current,
           operation: null,
@@ -1345,7 +1387,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         setJavaProjectState((current) => ({ ...current, operation: null }));
         setExportError(message);
       }
-    }, [project, javaProjectState.catalog]);
+    }, [javaProjectState.catalog, materializeProject]);
 
     useEffect(() => {
       if (!window.bordeauxAPI) return undefined;
@@ -1442,7 +1484,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
               derivation.error && h('div', { className: 'insert-preview derivation-error', role: 'alert' },
                 h('div', { className: 'insert-preview-copy' }, h('b', null, 'Path preview unavailable'), h('span', null, derivation.error.message || String(derivation.error))),
                 h('span', null, 'Showing the last valid preview. Undo or edit the selected geometry.')),
-              h(EditablePlaybackField, { store: playbackStore, editStore, doc, derived, derivedPath: derivation.path, robot, plannerId, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, drive: robot.drive, accent, metric, actions: fieldActions, onSelPos, showHandles: true }),
+              h(EditablePlaybackField, { store: playbackStore, editStore, doc, derived, derivedPath: derivation.path, robot, plannerId, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, drive: robot.drive, accent, metric, actions: fieldActions, showHandles: true }),
               tool !== 'select' && !waypointPreview && h('div', { className: 'stage-hint', dangerouslySetInnerHTML: { __html: toolHint(tool) } }),
               waypointPreview && h('div', { className: 'insert-preview', role: 'region', 'aria-label': 'Preview waypoint insertion' },
                 h('div', { className: 'insert-preview-copy' },

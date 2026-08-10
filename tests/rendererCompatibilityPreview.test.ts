@@ -116,7 +116,7 @@ describe("renderer application", () => {
 
   it("wires field gestures through the shared coalesced drag controller", () => {
     const field = fs.readFileSync(new URL("../src/renderer/components/FieldView.jsx", import.meta.url), "utf8");
-    expect(field).toContain("PointerDrag.begin");
+    expect(field).toContain("PointerDrag.useController");
     expect(field).toContain("coalesce: true");
   });
 

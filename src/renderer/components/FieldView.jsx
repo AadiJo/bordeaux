@@ -27,7 +27,7 @@ import { UI } from "./ui";
   const forwardExtent = (robot) => Math.max(...localFootprint(robot).map((point) => point.x)) * SX;
 
   function FieldView(props) {
-    const { doc, derived, insertionPreview, proposalPreviews, sel, tool, view, setView, alliance, showGrid, robot, drive, accent, metric, playTime, actions, routine, routinePose } = props;
+    const { doc, derived, editStore, insertionPreview, proposalPreviews, sel, tool, view, setView, alliance, showGrid, robot, drive, accent, metric, playTime, actions, routine, routinePose } = props;
     const showHandles = props.showHandles !== false;
     const svgRef = useRef(null);
     const [cw, setCw] = useState(1200);
@@ -38,7 +38,7 @@ import { UI } from "./ui";
     const actionsRef = useRef(actions);
     actionsRef.current = actions;
     const drag = useRef(null);
-    const pointerCleanup = useRef(null);
+    const pointerDrag = PointerDrag.useController();
     const lastInspectPress = useRef({ key: null, at: 0 });
     const flip = alliance === 'red';
     const isTank = drive === 'tank';
@@ -76,6 +76,16 @@ import { UI } from "./ui";
     }, []);
 
     useEffect(() => updateVisitFocus(null), [doc.id, updateVisitFocus]);
+    useEffect(() => {
+      if (!editStore || typeof editStore.getCancelRevision !== 'function') return undefined;
+      let revision = editStore.getCancelRevision();
+      return editStore.subscribe(() => {
+        const next = editStore.getCancelRevision();
+        if (next === revision) return;
+        revision = next;
+        pointerDrag.cancel({ flush: false });
+      });
+    }, [editStore, pointerDrag]);
 
     const visitsAt = useCallback((world) => {
       const candidates = PM.nearestVisits(world.x, world.y, pts, { tolerance: visitTolerance });
@@ -231,12 +241,11 @@ import { UI } from "./ui";
       e.preventDefault();
       const t = e.target;
       const role = t.getAttribute && t.getAttribute('data-role');
-      if (pointerCleanup.current) pointerCleanup.current();
-      pointerCleanup.current = PointerDrag.begin(e, {
+      pointerDrag.start(e, {
         move: applyMove,
         coalesce: true,
-        end: (event) => { pointerCleanup.current = null; onUp(event); },
-        cancel: (event) => { pointerCleanup.current = null; onInterrupted(event); },
+        end: onUp,
+        cancel: onInterrupted,
       });
       if (routine) {
         if (role === 'rpath') { const id = t.getAttribute('data-idx'); if (actions.selectNode) actions.selectNode(id); drag.current = null; return; }
@@ -425,13 +434,6 @@ import { UI } from "./ui";
       if (d && d.role === 'newrange') setPreview(null);
       if (d && d.historyStarted && actionsRef.current.finishEdit) actionsRef.current.finishEdit();
     };
-    useEffect(() => {
-      return () => {
-        if (pointerCleanup.current) pointerCleanup.current();
-        pointerCleanup.current = null;
-      };
-    }, []);
-
     const onWheel = (e) => {
       e.preventDefault();
       const svg = svgRef.current; const ctm = svg.getScreenCTM();

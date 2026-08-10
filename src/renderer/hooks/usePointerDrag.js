@@ -68,7 +68,7 @@ import * as React from "react";
 
   function useController() {
     const active = React.useRef(null);
-    React.useEffect(() => () => { if (active.current) active.current(); }, []);
+    React.useEffect(() => () => { if (active.current) active.current({ flush: false }); }, []);
     return React.useMemo(() => ({
       start(event, handlers) {
         if (active.current) active.current();
