@@ -8,6 +8,7 @@ const latencySamples = Number.parseInt(process.env.BORDEAUX_BROWSER_LATENCY_SAMP
 const stressDurationMs = Number.parseInt(process.env.BORDEAUX_BROWSER_STRESS_MS || "2000", 10);
 const inputHz = Number.parseInt(process.env.BORDEAUX_BROWSER_INPUT_HZ || "120", 10);
 const checkCorrectness = process.env.BORDEAUX_BROWSER_CHECK_CORRECTNESS === "1";
+const correctnessOnly = process.env.BORDEAUX_BROWSER_CORRECTNESS_ONLY === "1";
 const workerAsset = process.env.BORDEAUX_BENCHMARK_WORKER_ASSET || "";
 const frameBudgetMs = 1000 / 60;
 const primaryPath = { id: "browser_benchmark_path", name: "100-waypoint browser benchmark" };
@@ -55,6 +56,43 @@ function frameSummary(frameDeltas) {
   };
 }
 
+function matchesBitmapColor(bitmap, offset, color, tolerance = 10) {
+  const first = Math.abs(bitmap[offset] - color[0]) <= tolerance
+    && Math.abs(bitmap[offset + 1] - color[1]) <= tolerance
+    && Math.abs(bitmap[offset + 2] - color[2]) <= tolerance;
+  const swapped = Math.abs(bitmap[offset] - color[2]) <= tolerance
+    && Math.abs(bitmap[offset + 1] - color[1]) <= tolerance
+    && Math.abs(bitmap[offset + 2] - color[0]) <= tolerance;
+  return (first || swapped) && bitmap[offset + 3] >= 240;
+}
+
+function countBitmapColor(bitmap, size, center, color, minimumRadius, maximumRadius) {
+  let count = 0;
+  const minX = Math.max(0, Math.floor(center.x - maximumRadius));
+  const maxX = Math.min(size.width - 1, Math.ceil(center.x + maximumRadius));
+  const minY = Math.max(0, Math.floor(center.y - maximumRadius));
+  const maxY = Math.min(size.height - 1, Math.ceil(center.y + maximumRadius));
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      const radius = Math.hypot(x - center.x, y - center.y);
+      if (radius < minimumRadius || radius > maximumRadius) continue;
+      if (matchesBitmapColor(bitmap, (y * size.width + x) * 4, color)) count += 1;
+    }
+  }
+  return count;
+}
+
+function containsPaintedGeometry(image, viewport, proof) {
+  const size = image.getSize();
+  if (!size.width || !size.height) return false;
+  const bitmap = image.toBitmap();
+  const center = { x: proof.target.x * size.width / viewport.width, y: proof.target.y * size.height / viewport.height };
+  const scale = (size.width / viewport.width + size.height / viewport.height) / 2;
+  const waypointPixels = countBitmapColor(bitmap, size, center, proof.token.waypoint, 0, 4 * scale);
+  const curvePixels = countBitmapColor(bitmap, size, center, proof.token.curve, 7 * scale, 28 * scale);
+  return waypointPixels >= 3 && curvePixels >= 3;
+}
+
 async function waitFor(predicate, timeoutMs, description) {
   const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
@@ -76,6 +114,10 @@ function installProbe(waypointIndex) {
     pending: null,
     lastCorrect: null,
     trace: null,
+    traceAfterRelease: 0,
+    armedPaintToken: null,
+    taggedGeometry: null,
+    tokenSequence: 0,
   };
   const waypoint = () => document.querySelector(`[data-role="wp"][data-idx="${waypointIndex}"]`);
   const benchmarkSvg = waypoint()?.ownerSVGElement;
@@ -88,7 +130,7 @@ function installProbe(waypointIndex) {
     const local = point.matrixTransform(benchmarkInverse);
     return { x: local.x, y: local.y };
   };
-  const read = () => {
+  const inspect = () => {
     const node = waypoint();
     const svg = node?.ownerSVGElement;
     if (!node || !svg) return null;
@@ -99,16 +141,44 @@ function installProbe(waypointIndex) {
     point.y = Number(node.getAttribute("y")) + Number(node.getAttribute("height")) / 2;
     const centerlines = [...svg.querySelectorAll("path")].filter((candidate) =>
       candidate.getAttribute("stroke") === "#05060a" && candidate.getAttribute("stroke-opacity") === "0.75");
-    const curveCorrect = centerlines.some((candidate) =>
+    const curve = centerlines.find((candidate) =>
       typeof candidate.isPointInStroke === "function" && candidate.isPointInStroke(point));
-    return { ...screen, localX: point.x, localY: point.y, curveCorrect };
+    return { node, curve, value: { ...screen, localX: point.x, localY: point.y, curveCorrect: Boolean(curve) } };
+  };
+  const read = () => inspect()?.value || null;
+  const clearPaintToken = () => {
+    const tagged = state.taggedGeometry;
+    if (!tagged) return;
+    tagged.node.style.removeProperty('fill');
+    tagged.node.style.removeProperty('stroke');
+    tagged.curve.style.removeProperty('stroke');
+    tagged.curve.style.removeProperty('stroke-opacity');
+    state.taggedGeometry = null;
+  };
+  const colorFor = (sequence, offset) => [
+    24 + (sequence * (53 + offset * 4)) % 208,
+    24 + (sequence * (89 + offset * 6)) % 208,
+    24 + (sequence * (127 + offset * 10)) % 208,
+  ];
+  const applyPaintToken = (geometry, token) => {
+    clearPaintToken();
+    const waypointColor = `rgb(${token.waypoint.join(' ')})`;
+    const curveColor = `rgb(${token.curve.join(' ')})`;
+    geometry.node.style.setProperty('fill', waypointColor);
+    geometry.node.style.setProperty('stroke', waypointColor);
+    geometry.curve.style.setProperty('stroke', curveColor);
+    geometry.curve.style.setProperty('stroke-opacity', '1');
+    state.taggedGeometry = { node: geometry.node, curve: geometry.curve };
   };
   window.addEventListener("pointermove", (event) => {
     const local = localAt(event.clientX, event.clientY);
-    state.pending = { x: event.clientX, y: event.clientY, localX: local?.x, localY: local?.y, inputAtEpochMs: epoch() };
+    state.pending = { x: event.clientX, y: event.clientY, localX: local?.x, localY: local?.y, inputAtEpochMs: epoch(), paintToken: state.armedPaintToken };
+    state.armedPaintToken = null;
   }, true);
+  window.addEventListener("pointerup", () => { if (state.trace) state.traceAfterRelease = epoch(); }, true);
   const tick = (timestamp) => {
-    const current = read();
+    const geometry = inspect();
+    const current = geometry?.value || null;
     if (state.active) {
       state.frames.push(timestamp);
       if (current?.curveCorrect && (!state.lastGeometry
@@ -117,10 +187,11 @@ function installProbe(waypointIndex) {
         state.lastGeometry = current;
       }
     }
-    if (state.trace && current) state.trace.push({ atEpochMs: epoch(), x: current.x, y: current.y, curveCorrect: current.curveCorrect });
+    if (state.trace && state.traceAfterRelease && current) state.trace.push({ atEpochMs: epoch(), x: current.x, y: current.y, curveCorrect: current.curveCorrect });
     if (state.pending && current?.curveCorrect
       && Math.hypot(current.x - state.pending.x, current.y - state.pending.y) <= 2.5
       && Math.hypot(current.localX - state.pending.localX, current.localY - state.pending.localY) <= 7) {
+      if (state.pending.paintToken && geometry?.curve) applyPaintToken(geometry, state.pending.paintToken);
       state.lastCorrect = { ...state.pending, correctAtEpochMs: epoch() };
       state.pending = null;
     }
@@ -142,7 +213,15 @@ function installProbe(waypointIndex) {
       state.active = false;
       return { frames: state.frames, geometry: state.geometry };
     },
-    startTrace() { state.trace = []; },
+    armPaintToken() {
+      clearPaintToken();
+      const sequence = ++state.tokenSequence;
+      const token = { id: sequence, waypoint: colorFor(sequence, 1), curve: colorFor(sequence, 2) };
+      state.armedPaintToken = token;
+      return token;
+    },
+    clearPaintToken,
+    startTrace() { state.trace = []; state.traceAfterRelease = 0; },
     stopTrace() { const trace = state.trace || []; state.trace = null; return trace; },
   };
 }
@@ -166,14 +245,22 @@ app.whenReady().then(async () => {
 
   const paintTimestamps = [];
   const paintWaiters = new Set();
+  const geometryPaintWaiters = new Set();
   let lastPaintAt = epochNow();
-  window.webContents.on("paint", () => {
+  window.webContents.on("paint", (_event, _dirtyRect, image) => {
     const timestamp = epochNow();
     lastPaintAt = timestamp;
     paintTimestamps.push(timestamp);
     for (const waiter of paintWaiters) {
       if (timestamp < waiter.after) continue;
       paintWaiters.delete(waiter);
+      clearTimeout(waiter.timeout);
+      waiter.resolve(timestamp);
+    }
+    const viewport = window.getContentSize();
+    for (const waiter of geometryPaintWaiters) {
+      if (timestamp < waiter.after || !containsPaintedGeometry(image, { width: viewport[0], height: viewport[1] }, waiter.proof)) continue;
+      geometryPaintWaiters.delete(waiter);
       clearTimeout(waiter.timeout);
       waiter.resolve(timestamp);
     }
@@ -200,12 +287,43 @@ app.whenReady().then(async () => {
     });
   }
 
+  function paintedGeometryAfter(after, proof, timeoutMs = 5000) {
+    return new Promise((resolve, reject) => {
+      const waiter = {
+        after,
+        proof,
+        resolve,
+        timeout: setTimeout(() => {
+          geometryPaintWaiters.delete(waiter);
+          reject(new Error(`Timed out waiting for painted geometry token ${proof.token.id}`));
+        }, timeoutMs),
+      };
+      geometryPaintWaiters.add(waiter);
+    });
+  }
+
   async function waitForPaintQuiet(quietMs = 70, timeoutMs = 4000) {
     await waitFor(() => epochNow() - lastPaintAt >= quietMs, timeoutMs, "a quiet paint interval");
   }
 
   async function loadFixture() {
-    await window.loadFile(rendererHtml);
+    const load = () => new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`Timed out loading ${rendererHtml}`)), 10000);
+      window.loadFile(rendererHtml).then(
+        (value) => { clearTimeout(timeout); resolve(value); },
+        (error) => { clearTimeout(timeout); reject(error); },
+      );
+    });
+    try {
+      await load();
+    } catch (error) {
+      await delay(100);
+      try {
+        await load();
+      } catch {
+        throw error;
+      }
+    }
     await waitFor(
       () => window.webContents.executeJavaScript('document.querySelectorAll(\'[data-role="wp"]\').length === 100'),
       10000,
@@ -537,20 +655,21 @@ app.whenReady().then(async () => {
       await waitForPaintQuiet(34);
       const direction = index % 2 === 0 ? 1 : -1;
       target = { x: origin.x + direction * (42 + index % 5), y: origin.y + ((index % 7) - 3) * 4 };
+      const token = await window.webContents.executeJavaScript("window.__rendererBenchmark.armPaintToken()");
       const sentAt = epochNow();
+      const paintedGeometry = paintedGeometryAfter(sentAt, { target, token });
       moveMouse(target);
       const anyPaint = await paintAfter(sentAt);
       const correct = await waitFor(async () => {
         const value = await window.webContents.executeJavaScript("window.__rendererBenchmark.lastCorrect()");
-        return value && Math.hypot(value.x - target.x, value.y - target.y) <= 1 ? value : null;
+        return value && value.paintToken?.id === token.id && Math.hypot(value.x - target.x, value.y - target.y) <= 1 ? value : null;
       }, 5000, "a correct-geometry frame");
-      // Without a cross-process frame token, only a compositor paint observed
-      // after correct geometry is known can safely be called a correct paint.
-      const correctPaint = await paintAfter(correct.correctAtEpochMs);
+      const correctPaint = await paintedGeometry;
       if (correctPaint < correct.correctAtEpochMs) throw new Error('A correct paint cannot precede the correct-geometry observation.');
       anyPaintSamples.push(anyPaint - sentAt);
       correctPaintSamples.push(correctPaint - sentAt);
     }
+    await window.webContents.executeJavaScript("window.__rendererBenchmark.clearPaintToken()");
     releaseMouse(target);
     await waitForPaintQuiet(100);
     return { anyPaintMs: statistics(anyPaintSamples), correctPaintMs: statistics(correctPaintSamples), samples: correctPaintSamples };
@@ -565,7 +684,7 @@ app.whenReady().then(async () => {
     const firstPaint = paintTimestamps.length;
     const startedAt = epochNow();
     const inputIntervalMs = 1000 / inputHz;
-    const inputCount = Math.floor(stressDurationMs / inputIntervalMs);
+    const inputCount = Math.max(1, Math.floor(stressDurationMs / inputIntervalMs));
     let target = origin;
     const finalAngle = (inputCount - 1) / 11;
     const finalTarget = { x: origin.x + Math.cos(finalAngle) * 54, y: origin.y + Math.sin(finalAngle) * 32 };
@@ -604,6 +723,15 @@ app.whenReady().then(async () => {
 
   try {
     const correctness = checkCorrectness ? await correctnessChecks() : null;
+    if (correctnessOnly) {
+      process.stdout.write(`BORDEAUX_BROWSER_BENCHMARK=${JSON.stringify({
+        label,
+        runtime: { chrome: process.versions.chrome, electron: process.versions.electron, node: process.versions.node },
+        fixture: { waypoints: 100, viewport: "1440x900" },
+        correctness,
+      })}\n`);
+      return;
+    }
     const latency = await measureLatency();
     const stress = await measureStress();
     const result = {

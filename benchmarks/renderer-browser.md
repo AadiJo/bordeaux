@@ -11,18 +11,20 @@ the harness loads its emitted preview worker and requires a real request/result
 round trip, then verifies terminal pointer coordinates, save/dirty behavior,
 undo, path-switch cancellation, and matching waypoint/curve geometry.
 
-Latency is measured from Electron input dispatch to the first compositor paint
-where both the dragged waypoint and the SVG centerline match that input. The
-probe checks both screen position and SVG-local coordinates against the
-pre-drag transform, so viewport movement cannot masquerade as a path edit. The
-stress phase sends pointer input at 120 Hz and reports frame-time, estimated
-dropped frames, correct-curve update rate, and the longest correct-curve gap.
+Latency is measured from Electron input dispatch to the first compositor bitmap
+that contains sample-specific colors on the exact dragged waypoint and
+centerline nodes. The renderer applies those colors only after screen position,
+SVG-local position, and centerline containment match the input; the main process
+then verifies both colors in the offscreen `NativeImage`. The stress phase sends
+pointer input at 120 Hz and reports frame-time, estimated dropped frames,
+correct-curve update rate, and the longest correct-curve gap.
 
 Useful overrides:
 
 ```sh
 npm run benchmark:renderer:browser -- --baseline <ref> --candidate <ref>
 npm run benchmark:renderer:browser -- --trials 5 --latency-samples 48 --stress-ms 3000
+npm run benchmark:renderer:browser -- --correctness-only
 npm run benchmark:renderer:browser -- --output .benchmark-results/custom.json
 ```
 
@@ -31,6 +33,5 @@ display stack; Electron, Chrome, Node, revisions, raw trials, and protocol are
 recorded in the JSON report. Generated results are evidence, not source, and
 must not be committed.
 
-Renderer and compositor timestamps are not treated as the same-frame proof.
-The harness conservatively accepts only a compositor paint at or after the
-renderer observes matching waypoint and curve geometry.
+Each Electron child has a two-minute watchdog by default. Override it with
+`--variant-timeout-ms` when deliberately running a slower fixture.

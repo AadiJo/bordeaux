@@ -22,7 +22,12 @@ const candidateRef = option("candidate", "HEAD");
 const trials = Number.parseInt(option("trials", process.env.BORDEAUX_BROWSER_TRIALS || "3"), 10);
 const latencySamples = option("latency-samples", process.env.BORDEAUX_BROWSER_LATENCY_SAMPLES || "24");
 const stressMs = option("stress-ms", process.env.BORDEAUX_BROWSER_STRESS_MS || "2000");
+const correctnessOnly = process.argv.includes("--correctness-only");
+const variantTimeoutMs = Number.parseInt(option("variant-timeout-ms", process.env.BORDEAUX_BROWSER_VARIANT_TIMEOUT_MS || "120000"), 10);
 const output = path.resolve(repository, option("output", ".benchmark-results/renderer-browser.json"));
+
+if (!Number.isInteger(trials) || trials < 1) throw new Error("--trials must be at least 1");
+if (!Number.isFinite(variantTimeoutMs) || variantTimeoutMs < 1000) throw new Error("--variant-timeout-ms must be at least 1000");
 
 function makePath(count, name, id) {
   return {
@@ -116,7 +121,7 @@ async function buildVariant(reference, key) {
   };
 }
 
-function runVariant(label, variant, checkCorrectness) {
+function runVariant(label, variant, checkCorrectness, runCorrectnessOnly = false) {
   return new Promise((resolve, reject) => {
     const child = spawn(electron, [runner], {
       cwd: repository,
@@ -129,6 +134,7 @@ function runVariant(label, variant, checkCorrectness) {
         BORDEAUX_BROWSER_LATENCY_SAMPLES: latencySamples,
         BORDEAUX_BROWSER_STRESS_MS: stressMs,
         BORDEAUX_BROWSER_CHECK_CORRECTNESS: checkCorrectness ? "1" : "0",
+        BORDEAUX_BROWSER_CORRECTNESS_ONLY: runCorrectnessOnly ? "1" : "0",
         DISPLAY: process.env.DISPLAY || ":0",
         XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || "/mnt/wslg/runtime-dir",
         ELECTRON_DISABLE_SECURITY_WARNINGS: "true",
@@ -139,8 +145,13 @@ function runVariant(label, variant, checkCorrectness) {
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; process.stderr.write(chunk); });
-    child.once("error", reject);
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`${label} benchmark exceeded ${variantTimeoutMs}ms`));
+    }, variantTimeoutMs);
+    child.once("error", (error) => { clearTimeout(timeout); reject(error); });
     child.once("exit", (code) => {
+      clearTimeout(timeout);
       if (code !== 0) return reject(new Error(`${label} benchmark exited with ${code}\n${stderr}`));
       const line = stdout.split("\n").find((entry) => entry.startsWith("BORDEAUX_BROWSER_BENCHMARK="));
       if (!line) return reject(new Error(`${label} benchmark returned no result\n${stdout}\n${stderr}`));
@@ -195,6 +206,26 @@ function comparison(upstream, candidate) {
 const format = (value, digits = 2) => Number(value.toFixed(digits));
 
 try {
+  if (correctnessOnly) {
+    const candidateVariant = await buildVariant(candidateRef, "candidate");
+    const run = await runVariant("candidate-correctness", candidateVariant, true, true);
+    const checks = run.correctness || {};
+    const failedChecks = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+    if (!candidateVariant.workerBundle) failedChecks.push("realWorkerBundle");
+    if (failedChecks.length) throw new Error(`Candidate correctness checks failed: ${failedChecks.join(", ")}`);
+    const report = {
+      generatedAt: new Date().toISOString(),
+      revision: revision(candidateRef),
+      workerBundle: candidateVariant.workerBundle,
+      runtime: run.runtime,
+      fixture: run.fixture,
+      correctness: checks,
+    };
+    await fs.mkdir(path.dirname(output), { recursive: true });
+    await fs.writeFile(output, JSON.stringify(report, null, 2) + "\n");
+    process.stdout.write(`candidate ${report.revision}: ${Object.keys(checks).length} correctness checks passed\n`);
+    process.stdout.write(`Raw report: ${path.relative(repository, output)}\n`);
+  } else {
   const [upstreamVariant, candidateVariant] = await Promise.all([
     buildVariant(baselineRef, "upstream"),
     buildVariant(candidateRef, "candidate"),
@@ -222,10 +253,10 @@ try {
       fixture: "100-waypoint profiled spline plus a 3-waypoint path-switch fixture",
       viewport: "1440x900 offscreen Electron compositor at 60 Hz",
       input: `mouse input at 120 Hz; ${latencySamples} isolated latency samples; ${stressMs} ms stress; ${trials} alternating trials`,
-      correctPaint: "input dispatch to the first compositor paint after the waypoint matches in screen and pre-drag SVG coordinates and the centerline contains it",
+      correctPaint: "input dispatch to the first compositor bitmap containing per-input colors on the exact waypoint and centerline nodes after their screen/SVG geometry matches",
       droppedFrames: "missed 16.67 ms requestAnimationFrame slots during continuous input",
       worker: "production Vite worker bundle loaded directly and required to complete a structured-clone request/result round trip",
-      clockPhase: "a correct paint must occur at or after the renderer observes matching waypoint and curve geometry",
+      paintProof: "the offscreen NativeImage must contain the sample's unique waypoint color at the target and its unique centerline color immediately outside the waypoint",
     },
     variants,
     comparison: comparison(variants.upstream, variants.candidate),
@@ -238,6 +269,7 @@ try {
     process.stdout.write(`| ${row.metric} | ${format(row.upstream)} ${row.unit} | ${format(row.candidate)} ${row.unit} | ${format(row.improvementPercent, 1)}% |\n`);
   }
   process.stdout.write(`\nRaw report: ${path.relative(repository, output)}\n`);
+  }
 } finally {
   await fs.rm(temporaryDirectory, { recursive: true, force: true });
 }
