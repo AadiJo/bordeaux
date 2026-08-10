@@ -64,6 +64,7 @@ const fixture = {
   name: "Renderer browser benchmark",
   robot: { drive: "swerve", w: 0.84, l: 0.84, heightM: 0.5, maxSpeed: 5 },
   paths: [primaryPath, alternatePath],
+  pathFolders: [{ id: "browser_benchmark_folder", name: "Benchmark folder" }],
   pathLinks: [],
   routines: [routine],
   activeRoutineId: routine.id,

@@ -1144,6 +1144,10 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       setActiveIdx(i); setSel({ kind: null, idx: -1 }); playbackStore.reset();
       hist.current = { past: [], future: [] }; setPage('plan');
     };
+    const updatePathLibrary = (update) => {
+      cancelEdit();
+      setProject(update);
+    };
     const addPath = (folderId) => {
       const name = uniquePathName('New path'), index = project.paths.length;
       const path = blankPath(name); if (folderId) path.folderId = folderId;
@@ -1165,7 +1169,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       setProject((pr) => ({ ...pr, paths: [...pr.paths, path], pathLinks: [...(pr.pathLinks || []).filter((item) => item.fromPathId !== source.id), link] }));
       resetForPath(index); return { index, name, id: path.id };
     };
-    const setPathLink = (fromPathId, toPathId) => setProject((pr) => {
+    const setPathLink = (fromPathId, toPathId) => updatePathLibrary((pr) => {
       let pathLinks = (pr.pathLinks || []).filter((link) => link.fromPathId !== fromPathId);
       if (!toPathId || fromPathId === toPathId) return { ...pr, pathLinks };
       pathLinks = pathLinks.filter((link) => link.toPathId !== toPathId);
@@ -1187,12 +1191,12 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       routines.forEach((candidate) => AUTO.walk(candidate.nodes, (node) => { if (node.type === 'path' && node.ref === target.id) referenced = true; }));
       if (referenced) { alert('“' + target.name + '” is used by an autonomous routine. Remove those routine steps before deleting the path.'); return false; }
       if (!confirm('Delete path “' + target.name + '”? This cannot be undone.')) return false;
-      setProject((pr) => { const paths = pr.paths.filter((_, k) => k !== i); return { ...pr, paths, pathLinks: (pr.pathLinks || []).filter((link) => link.fromPathId !== target.id && link.toPathId !== target.id) }; });
+      updatePathLibrary((pr) => { const paths = pr.paths.filter((_, k) => k !== i); return { ...pr, paths, pathLinks: (pr.pathLinks || []).filter((link) => link.fromPathId !== target.id && link.toPathId !== target.id) }; });
       setActiveIdx((a) => Math.max(0, a > i ? a - 1 : a === i ? Math.min(a, project.paths.length - 2) : a));
       setSel({ kind: null, idx: -1 }); playbackStore.reset(); hist.current = { past: [], future: [] };
       return true;
     };
-    const renamePath = (i, name) => { const clean = (name || '').trim(); if (!clean) return false; setProject((pr) => { const paths = pr.paths.slice(); paths[i] = { ...paths[i], name: clean }; return { ...pr, paths }; }); return true; };
+    const renamePath = (i, name) => { const clean = (name || '').trim(); if (!clean) return false; updatePathLibrary((pr) => { const paths = pr.paths.slice(); paths[i] = { ...paths[i], name: clean }; return { ...pr, paths }; }); return true; };
     const addPathFolder = () => {
       const folders = project.pathFolders || [], used = new Set(folders.map((folder) => folder.name.toLowerCase()));
       let name = 'New folder', suffix = 2; while (used.has(name.toLowerCase())) name = 'New folder ' + suffix++;
@@ -1208,10 +1212,10 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       const folder = (project.pathFolders || []).find((candidate) => candidate.id === id); if (!folder) return false;
       const count = project.paths.filter((path) => path.folderId === id).length;
       if (!confirm('Delete folder “' + folder.name + '”?' + (count ? ' Its ' + count + ' path' + (count === 1 ? '' : 's') + ' will move to Unfiled.' : ''))) return false;
-      setProject((pr) => ({ ...pr, pathFolders: (pr.pathFolders || []).filter((candidate) => candidate.id !== id), paths: pr.paths.map((path) => path.folderId === id ? (() => { const next = { ...path }; delete next.folderId; return next; })() : path) }));
+      updatePathLibrary((pr) => ({ ...pr, pathFolders: (pr.pathFolders || []).filter((candidate) => candidate.id !== id), paths: pr.paths.map((path) => path.folderId === id ? (() => { const next = { ...path }; delete next.folderId; return next; })() : path) }));
       return true;
     };
-    const movePathToFolder = (i, folderId) => setProject((pr) => ({ ...pr, paths: pr.paths.map((path, index) => {
+    const movePathToFolder = (i, folderId) => updatePathLibrary((pr) => ({ ...pr, paths: pr.paths.map((path, index) => {
       if (index !== i) return path; const next = { ...path }; if (folderId) next.folderId = folderId; else delete next.folderId; return next;
     }) }));
     const setActive = (i) => resetForPath(i);

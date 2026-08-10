@@ -10,6 +10,8 @@ const inputHz = Number.parseInt(process.env.BORDEAUX_BROWSER_INPUT_HZ || "120", 
 const checkCorrectness = process.env.BORDEAUX_BROWSER_CHECK_CORRECTNESS === "1";
 const workerAsset = process.env.BORDEAUX_BENCHMARK_WORKER_ASSET || "";
 const frameBudgetMs = 1000 / 60;
+const primaryPath = { id: "browser_benchmark_path", name: "100-waypoint browser benchmark" };
+const alternatePath = { id: "browser_benchmark_alternate", name: "Alternate benchmark path" };
 
 if (!rendererHtml) throw new Error("BORDEAUX_BENCHMARK_RENDERER_HTML is required");
 
@@ -425,11 +427,11 @@ app.whenReady().then(async () => {
     const openDuringDragKeepsFile = !openDuringDragState.projectWrites.some((write) =>
       write.kind === "autosave" && write.target === "opened" && write.projectName === originalProject.name);
 
-    await loadFixture();
+    await delay(150);
     await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkConfigure({ saveDelayMs: 120 })");
     await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkCommand('save-project')");
     await waitFor(
-      () => window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState().projectOperations.includes('save:start:original')"),
+      () => window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState().projectOperations.some((entry) => entry.startsWith('save:start:'))"),
       2000,
       "the delayed project save",
     );
@@ -442,7 +444,85 @@ app.whenReady().then(async () => {
     const saveOpenKeepsFile = overlappingSaveOpenState.currentFile === "opened"
       && overlappingSaveOpenState.maxConcurrentProjectOperations === 1;
 
-    return { realWorkerRoundTrip, releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, commandSurvivesDrag, commandUndoRestores, cancelPreservesRedo, pathSwitchCancelsDrag, openDuringDragKeepsFile, saveOpenKeepsFile };
+    const saveSnapshot = async (description) => {
+      const before = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState().savedProjects.length");
+      await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkCommand('save-project')");
+      const state = await waitFor(async () => {
+        const next = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
+        return next.savedProjects.length > before ? next : null;
+      }, 3000, description);
+      return state.savedProjects.at(-1);
+    };
+    const beginMetadataDrag = async () => {
+      const metadataOrigin = await center();
+      const metadataTarget = { x: metadataOrigin.x + 40, y: metadataOrigin.y - 16 };
+      await pressMouse(metadataOrigin);
+      const metadataTargetLocal = await localAt(metadataTarget);
+      moveMouse(metadataTarget);
+      await waitForCorrect(metadataTarget, metadataTargetLocal);
+      return metadataTarget;
+    };
+    const openPathActions = (pathName) => window.webContents.executeJavaScript(`(async () => {
+      if (!document.querySelector('.pathlib-panel')) {
+        document.querySelector('button.pathsw-btn')?.click();
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      }
+      const row = [...document.querySelectorAll('.pathlib-item')].find((candidate) =>
+        candidate.querySelector('.pathlib-name')?.textContent === ${JSON.stringify(pathName)});
+      row?.querySelector('button.pathlib-more')?.click();
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return Boolean(row);
+    })()`);
+    const closePathLibrary = () => window.webContents.executeJavaScript("document.querySelector('.pathlib-head button[aria-label=\"Close path library\"]')?.click()");
+
+    const renameRelease = await beginMetadataDrag();
+    await openPathActions(primaryPath.name);
+    await window.webContents.executeJavaScript(`(async () => {
+      const menu = document.getElementById('path-actions-${primaryPath.id}');
+      [...menu.querySelectorAll('button')].find((button) => button.textContent.includes('Rename'))?.click();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const input = document.getElementById('path-library-name');
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, 'Renamed during drag');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      input.form.requestSubmit();
+    })()`);
+    releaseMouse(renameRelease);
+    const renamedProject = await saveSnapshot("the renamed path to be saved");
+    const renameSurvivesDrag = renamedProject.paths[0].name === "Renamed during drag";
+    await closePathLibrary();
+
+    const moveRelease = await beginMetadataDrag();
+    await openPathActions("Renamed during drag");
+    await window.webContents.executeJavaScript(`(async () => {
+      document.getElementById('move-path-${primaryPath.id}')?.click();
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      document.querySelector('#move-path-${primaryPath.id}-listbox [data-value="browser_benchmark_folder"]')?.click();
+    })()`);
+    releaseMouse(moveRelease);
+    const movedProject = await saveSnapshot("the moved path to be saved");
+    const moveSurvivesDrag = movedProject.paths[0].folderId === "browser_benchmark_folder";
+    await closePathLibrary();
+
+    const linkRelease = await beginMetadataDrag();
+    await openPathActions(alternatePath.name);
+    await window.webContents.executeJavaScript(`(async () => {
+      document.getElementById('link-path-${alternatePath.id}')?.click();
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      document.querySelector('#link-path-${alternatePath.id}-listbox [data-value="${primaryPath.id}"]')?.click();
+    })()`);
+    releaseMouse(linkRelease);
+    const linkedProject = await saveSnapshot("the linked paths to be saved");
+    const link = linkedProject.pathLinks.find((candidate) => candidate.fromPathId === alternatePath.id && candidate.toPathId === primaryPath.id);
+    const sourceEnd = linkedProject.paths[1].waypoints.at(-1);
+    const targetStart = linkedProject.paths[0].waypoints[0];
+    const expectedSourceEnd = originalProject.paths[1].waypoints.at(-1);
+    const linkSurvivesDrag = Boolean(link)
+      && Math.hypot(sourceEnd.x - targetStart.x, sourceEnd.y - targetStart.y) <= 1e-6
+      && Math.hypot(sourceEnd.x - expectedSourceEnd.x, sourceEnd.y - expectedSourceEnd.y) <= 1e-6;
+
+    return { realWorkerRoundTrip, releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, commandSurvivesDrag, commandUndoRestores, cancelPreservesRedo, pathSwitchCancelsDrag, openDuringDragKeepsFile, saveOpenKeepsFile, renameSurvivesDrag, moveSurvivesDrag, linkSurvivesDrag };
   }
 
   async function measureLatency() {
