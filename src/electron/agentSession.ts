@@ -325,10 +325,10 @@ export class AgentSessionService {
     if (status === "applied" && Number.isSafeInteger(appliedRevision)) proposal.appliedRevision = appliedRevision;
   }
 
-  acknowledgeProposal(proposalId: string, sessionId: string, revision: number): void {
+  acknowledgeProposal(proposalId: string, sessionId: string, revision: number, accepted = true): void {
     const proposal = this.proposals.get(proposalId);
     if (!proposal || proposal.status !== "ready") return;
-    if (proposal.baseSessionId !== sessionId || proposal.baseRevision !== revision) proposal.status = "stale";
+    if (!accepted || proposal.baseSessionId !== sessionId || proposal.baseRevision !== revision) proposal.status = "stale";
   }
 
   getActiveProposal(): AgentProposal | null {

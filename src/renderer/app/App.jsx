@@ -556,8 +556,8 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
           editRevision: editStore.getRevision(),
         };
         agentProposalRef.current = received;
-        if (window.bordeauxAPI.acknowledgeAgentProposal) window.bordeauxAPI.acknowledgeAgentProposal(proposal.id, agentSessionId, agentRevision.current);
         if (stale && proposal.status === 'ready' && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(proposal.id, 'stale');
+        if (window.bordeauxAPI.acknowledgeAgentProposal) window.bordeauxAPI.acknowledgeAgentProposal(proposal.id, agentSessionId, agentRevision.current, !stale);
         setAgentProposal(received);
         setAgentCandidateId(proposal.recommendedCandidateId || null);
         setPage(proposal.operation === 'configureRobot' ? 'robot' : 'plan');

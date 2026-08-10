@@ -251,6 +251,19 @@ describe("agent session and private bridge", () => {
     expect(notifications.at(-1)).toEqual({ intent: "Committed preview", status: "ready" });
   });
 
+  it("does not return ready when the renderer rejects a matching proposal receipt", async () => {
+    let service!: AgentSessionService;
+    service = new AgentSessionService((proposal, requireReceipt) => {
+      if (requireReceipt) service.acknowledgeProposal(proposal.id, proposal.baseSessionId, proposal.baseRevision, false);
+    }, () => null);
+    service.publishSnapshot(snapshot());
+
+    await expect(service.request({ method: "plan_path", params: {
+      intent: "Rejected renderer preview", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 3, y: 1 }], maximumCandidates: 1,
+    } })).rejects.toThrow("changed before it acknowledged");
+    expect(service.getActiveProposal()).toBeNull();
+  });
+
   it("rolls back staging when cancellation arrives during renderer acknowledgment", async () => {
     let waitForReceipt = false;
     let proposalReceived: (() => void) | undefined;

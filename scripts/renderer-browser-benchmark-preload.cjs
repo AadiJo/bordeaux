@@ -98,7 +98,9 @@ contextBridge.exposeInMainWorld("bordeauxAPI", {
     state.publishedSessions.push(clone(snapshot));
   },
   updateAgentProposalStatus: (id, status, appliedRevision) => state.proposalStatuses.push({ id, status, appliedRevision }),
-  acknowledgeAgentProposal: () => undefined,
+  acknowledgeAgentProposal: (id, _sessionId, _revision, accepted = true) => {
+    if (!accepted) state.proposalStatuses.push({ id, status: "stale" });
+  },
   getActiveAgentProposal: async () => null,
   getMcpStatus: async () => ({ enabled: false }),
   onMcpStatus: () => unsubscribe,
