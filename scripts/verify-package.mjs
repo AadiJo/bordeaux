@@ -34,6 +34,10 @@ function collectArchives(target, archives) {
   }
 }
 
+function extractArchiveFile(archive, entry) {
+  return extractFile(archive, entry.replaceAll("/", path.sep));
+}
+
 const targets = process.argv.slice(2);
 if (targets.length === 0) targets.push("release");
 const archives = [];
@@ -64,14 +68,14 @@ for (const archive of archives) {
     || /react(?:-dom)?\.development(?:\.min)?\.js$/i.test(entry));
   if (forbidden) throw new Error(`${archive} contains development-only content: ${forbidden}`);
 
-  const packagedManifest = JSON.parse(extractFile(archive, "package.json").toString("utf8"));
+  const packagedManifest = JSON.parse(extractArchiveFile(archive, "package.json").toString("utf8"));
   for (const field of ["name", "version", "main"]) {
     if (packagedManifest[field] !== repositoryManifest[field]) {
       throw new Error(`${archive} package.json has unexpected ${field}: ${packagedManifest[field]}`);
     }
   }
 
-  const rendererHtml = extractFile(archive, "public/renderer/index.html").toString("utf8");
+  const rendererHtml = extractArchiveFile(archive, "public/renderer/index.html").toString("utf8");
   if (/react(?:-dom)?\.development(?:\.min)?\.js/i.test(rendererHtml)
       || !rendererHtml.includes("assets/react.production.min.js")
       || !rendererHtml.includes("assets/react-dom.production.min.js")) {
