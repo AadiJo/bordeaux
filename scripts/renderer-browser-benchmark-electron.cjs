@@ -387,6 +387,47 @@ app.whenReady().then(async () => {
 
     await loadFixture();
     const workerFixture = JSON.parse(Buffer.from(process.env.BORDEAUX_BENCHMARK_PROJECT, "base64").toString("utf8"));
+    const publishedSession = await waitFor(async () => {
+      const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
+      return state.publishedSessions.at(-1) || null;
+    }, 3000, "the renderer agent session to publish");
+    const proposalPath = structuredClone(workerFixture.paths[1]);
+    proposalPath.id = "browser_benchmark_agent_path";
+    const proposal = {
+      id: "browser_benchmark_agent_proposal",
+      status: "ready",
+      operation: "add",
+      intent: "Add the benchmark path",
+      baseSessionId: publishedSession.sessionId,
+      baseRevision: publishedSession.revision,
+      candidates: [{ id: "browser_benchmark_agent_candidate", label: "Benchmark candidate", valid: true, path: proposalPath }],
+      recommendedCandidateId: "browser_benchmark_agent_candidate",
+      createdAt: new Date().toISOString(),
+    };
+    await window.webContents.executeJavaScript(`window.bordeauxAPI.__benchmarkAgentProposal(${JSON.stringify(proposal)})`);
+    await waitFor(
+      () => window.webContents.executeJavaScript("document.querySelector('.agent-proposal button.primary')?.textContent === 'Add path'"),
+      3000,
+      "the current agent proposal",
+    );
+    const proposalDragOrigin = await center();
+    const proposalDragTarget = { x: proposalDragOrigin.x + 30, y: proposalDragOrigin.y - 12 };
+    await pressMouse(proposalDragOrigin);
+    const proposalDragLocal = await localAt(proposalDragTarget);
+    moveMouse(proposalDragTarget);
+    await waitForCorrect(proposalDragTarget, proposalDragLocal);
+    const staleProposalState = await waitFor(async () => {
+      const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
+      const staleInUi = await window.webContents.executeJavaScript("document.querySelector('.agent-proposal-status')?.textContent.startsWith('Stale') === true");
+      return staleInUi && state.proposalStatuses.some((entry) => entry.id === proposal.id && entry.status === "stale") ? state : null;
+    }, 1000, "an agent proposal to become stale during a drag");
+    await window.webContents.executeJavaScript("document.querySelector('.agent-proposal button.primary')?.click()");
+    await delay(50);
+    const staleProposalBlockedDuringDrag = staleProposalState.proposalStatuses.some((entry) => entry.status === "stale")
+      && await window.webContents.executeJavaScript("document.querySelectorAll('[data-role=wp]').length === 100");
+    releaseMouse(proposalDragTarget);
+
+    await loadFixture();
     const workerJob = {
       id: 2468,
       path: workerFixture.paths[0],
@@ -699,7 +740,7 @@ app.whenReady().then(async () => {
       && Math.hypot(sourceEnd.x - targetStart.x, sourceEnd.y - targetStart.y) <= 1e-6
       && Math.hypot(sourceEnd.x - expectedSourceEnd.x, sourceEnd.y - expectedSourceEnd.y) <= 1e-6;
 
-    return { realWorkerRoundTrip, nativeImagePaintProof, restoreConflictStaysDirty, releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, commandSurvivesDrag, commandUndoRestores, cancelPreservesRedo, pathSwitchCancelsDrag, openDuringDragKeepsFile, saveOpenKeepsFile, renameSurvivesDrag, moveSurvivesDrag, linkSurvivesDrag };
+    return { realWorkerRoundTrip, nativeImagePaintProof, restoreConflictStaysDirty, staleProposalBlockedDuringDrag, releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, commandSurvivesDrag, commandUndoRestores, cancelPreservesRedo, pathSwitchCancelsDrag, openDuringDragKeepsFile, saveOpenKeepsFile, renameSurvivesDrag, moveSurvivesDrag, linkSurvivesDrag };
   }
 
   async function measureLatency() {

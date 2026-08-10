@@ -250,6 +250,8 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const [mcpEnabled, setMcpEnabled] = useState(false);
     const [agentSessionId] = useState(() => 'session_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)));
     const agentRevision = useRef(-1);
+    const agentProposalRef = useRef(agentProposal); agentProposalRef.current = agentProposal;
+    const agentProposalContext = useRef(null);
     const [javaProjectState, setJavaProjectState] = useState({ status: 'unlinked', operation: null, catalog: null, integration: null, error: '', notice: '', bookmarkId: null, recentProjects: [] });
     const [exportError, setExportError] = useState('');
     const [unitSystem, setUnitSystemState] = useState(() => UnitPrefs.current());
@@ -433,6 +435,16 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       setDirty(next);
       if (window.bordeauxAPI && typeof window.bordeauxAPI.setDirty === 'function') window.bordeauxAPI.setDirty(next);
     }, []);
+    const markAgentProposalStale = useCallback(() => {
+      const current = agentProposalRef.current;
+      if (!current || current.status !== 'ready') return;
+      const stale = { ...current, status: 'stale' };
+      agentProposalRef.current = stale;
+      setAgentProposal(stale);
+      if (window.bordeauxAPI && typeof window.bordeauxAPI.updateAgentProposalStatus === 'function') {
+        window.bordeauxAPI.updateAgentProposalStatus(current.id, 'stale');
+      }
+    }, []);
     const materializeProject = useCallback(() => {
       const base = projectRef.current;
       const draft = editStore.getSnapshot();
@@ -489,12 +501,14 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       const draft = editStore.getSnapshot();
       const canceled = !draft && editStore.getLastResolution() === 'cancel';
       if (!draft && !canceled) return;
+      markAgentProposalStale();
       if (canceled || !dirtyRef.current) updateDirty(true);
       scheduleAutosave(canceled);
-    }), [editStore, scheduleAutosave, updateDirty]);
+    }), [editStore, markAgentProposalStale, scheduleAutosave, updateDirty]);
     useEffect(() => () => {
       if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);
     }, []);
+    useEffect(() => markAgentProposalStale(), [project, activeIdx, markAgentProposalStale]);
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.publishAgentSession !== 'function') return;
       let published = false;
@@ -514,7 +528,9 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         setAgentProposal((current) => {
           if (!current || current.status !== 'ready' || current.baseRevision === revision) return current;
           window.bordeauxAPI.updateAgentProposalStatus(current.id, 'stale');
-          return { ...current, status: 'stale' };
+          const stale = { ...current, status: 'stale' };
+          agentProposalRef.current = stale;
+          return stale;
         });
       };
       const timer = window.setTimeout(publish, 150);
@@ -531,8 +547,15 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         const proposalKey = proposal.id + ':' + proposal.status;
         if (proposalKey === lastProposalKey) return;
         lastProposalKey = proposalKey;
-        const stale = proposal.baseSessionId !== agentSessionId || proposal.baseRevision !== agentRevision.current;
+        const stale = proposal.baseSessionId !== agentSessionId || proposal.baseRevision !== agentRevision.current || Boolean(editStore.getSnapshot());
         const received = stale && proposal.status === 'ready' ? { ...proposal, status: 'stale' } : proposal;
+        agentProposalContext.current = {
+          id: proposal.id,
+          project: projectRef.current,
+          activePathId: docRef.current && docRef.current.id,
+          editRevision: editStore.getRevision(),
+        };
+        agentProposalRef.current = received;
         if (window.bordeauxAPI.acknowledgeAgentProposal) window.bordeauxAPI.acknowledgeAgentProposal(proposal.id, agentSessionId, agentRevision.current);
         if (stale && proposal.status === 'ready' && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(proposal.id, 'stale');
         setAgentProposal(received);
@@ -549,7 +572,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         }).catch(() => undefined);
       }
       return () => { active = false; unsubscribe(); };
-    }, [agentSessionId]);
+    }, [agentSessionId, editStore]);
     useEffect(() => {
       const onPointerDown = () => { keyboardNavigation.current = false; };
       window.addEventListener('pointerdown', onPointerDown, true);
@@ -1267,10 +1290,16 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const rejectAgentProposal = useCallback(() => {
       if (!agentProposal) return;
       if (window.bordeauxAPI && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(agentProposal.id, 'rejected');
-      setAgentProposal({ ...agentProposal, status: 'rejected' });
+      const rejected = { ...agentProposal, status: 'rejected' };
+      agentProposalRef.current = rejected;
+      setAgentProposal(rejected);
     }, [agentProposal]);
     const applyAgentProposal = useCallback(() => {
-      if (!agentProposal || agentProposal.status !== 'ready' || agentProposal.baseSessionId !== agentSessionId || agentProposal.baseRevision !== agentRevision.current || (agentProposal.blockingIssues && agentProposal.blockingIssues.length)) return;
+      const proposalContext = agentProposalContext.current;
+      if (!agentProposal || agentProposal.status !== 'ready' || agentProposal.baseSessionId !== agentSessionId || agentProposal.baseRevision !== agentRevision.current
+        || !proposalContext || proposalContext.id !== agentProposal.id || proposalContext.project !== projectRef.current
+        || proposalContext.activePathId !== (docRef.current && docRef.current.id) || proposalContext.editRevision !== editStore.getRevision()
+        || editStore.getSnapshot() || (agentProposal.blockingIssues && agentProposal.blockingIssues.length)) return;
       const before = { project: clone(project), activeIdx };
       let nextIndex = activeIdx;
       let nextProject;
@@ -1291,8 +1320,10 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       projectHist.current.past.push(before); if (projectHist.current.past.length > 80) projectHist.current.past.shift(); projectHist.current.future = [];
       setProject(nextProject); if (agentProposal.operation !== 'configureRobot') resetForPath(nextIndex); updateDirty(true);
       if (window.bordeauxAPI && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(agentProposal.id, 'applied', agentRevision.current + 1);
-      setAgentProposal({ ...agentProposal, status: 'applied', appliedRevision: agentRevision.current + 1 });
-    }, [agentProposal, agentCandidate, project, activeIdx, agentSessionId, updateDirty]);
+      const applied = { ...agentProposal, status: 'applied', appliedRevision: agentRevision.current + 1 };
+      agentProposalRef.current = applied;
+      setAgentProposal(applied);
+    }, [agentProposal, agentCandidate, project, activeIdx, agentSessionId, editStore, updateDirty]);
 
     const total = derived.prof.totalTime || 0;
     useEffect(() => playbackStore.setTotal(total), [playbackStore, total]);

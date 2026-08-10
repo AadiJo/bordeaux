@@ -11,6 +11,8 @@ const state = {
   autosavedProjects: [],
   dirtyValues: [],
   publishedProjects: [],
+  publishedSessions: [],
+  proposalStatuses: [],
   currentFile: "original",
   files: { original: clone(fixture), opened: clone(openedFixture), reopened: clone(reopenedFixture) },
   projectWrites: [],
@@ -21,6 +23,7 @@ const state = {
   mainDirty: false,
 };
 let menuListener = null;
+let agentProposalListener = null;
 let releaseRestore;
 const restoreGate = new Promise((resolve) => { releaseRestore = resolve; });
 const unsubscribe = () => undefined;
@@ -90,16 +93,23 @@ contextBridge.exposeInMainWorld("bordeauxAPI", {
   buildJavaCatalog: async () => null,
   cancelJavaCatalogBuild: async () => null,
   setDirty: (dirty) => { state.mainDirty = Boolean(dirty); state.dirtyValues.push(state.mainDirty); },
-  publishAgentSession: (snapshot) => state.publishedProjects.push(clone(snapshot.project)),
-  updateAgentProposalStatus: () => undefined,
+  publishAgentSession: (snapshot) => {
+    state.publishedProjects.push(clone(snapshot.project));
+    state.publishedSessions.push(clone(snapshot));
+  },
+  updateAgentProposalStatus: (id, status, appliedRevision) => state.proposalStatuses.push({ id, status, appliedRevision }),
   acknowledgeAgentProposal: () => undefined,
   getActiveAgentProposal: async () => null,
   getMcpStatus: async () => ({ enabled: false }),
   onMcpStatus: () => unsubscribe,
-  onAgentProposal: () => unsubscribe,
+  onAgentProposal: (listener) => {
+    agentProposalListener = listener;
+    return () => { if (agentProposalListener === listener) agentProposalListener = null; };
+  },
   onMenuCommand: (listener) => { menuListener = listener; return () => { if (menuListener === listener) menuListener = null; }; },
   __benchmarkCommand: (command) => menuListener?.({ command }),
   __benchmarkConfigure: (options) => { state.saveDelayMs = Math.max(0, Number(options?.saveDelayMs) || 0); },
+  __benchmarkAgentProposal: (proposal) => agentProposalListener?.(clone(proposal)),
   __benchmarkReleaseRestore: () => releaseRestore(),
   __benchmarkState: () => clone(state),
 });
