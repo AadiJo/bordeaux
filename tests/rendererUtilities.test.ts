@@ -109,6 +109,7 @@ describe("renderer utilities", () => {
       cancel: (event) => canceled.push(event.pointerId),
     });
 
+    harness.dispatchTarget("lostpointercapture", { pointerId: 7 });
     harness.dispatchWindow("pointermove", { pointerId: 7, clientX: 20 });
     harness.dispatchTarget("lostpointercapture", { pointerId: 7 });
     harness.dispatchWindow("pointermove", { pointerId: 7, clientX: 80 });
