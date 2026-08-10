@@ -1,5 +1,4 @@
-// Project-local path endpoint links. Exports window.PathLinks.
-(function () {
+// Project-local path endpoint links.
   const clone = (value) => JSON.parse(JSON.stringify(value));
 
   function changed(before, after) {
@@ -45,5 +44,4 @@
     return { ...project, paths };
   }
 
-  window.PathLinks = { copyPose, sync, reconcile };
-})();
+export const PathLinks = { copyPose, sync, reconcile };

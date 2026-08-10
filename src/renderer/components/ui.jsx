@@ -1,5 +1,10 @@
-// Bordeaux — shared UI primitives. Exports window.UI
-(function () {
+import * as React from "react";
+import { createPortal } from "react-dom";
+import { PointerDrag } from "../hooks/usePointerDrag";
+import { PM } from "../lib/pathMath";
+import { UnitPrefs } from "../lib/unitPreferences";
+
+// Bordeaux shared UI primitives.
   const { useState, useRef, useEffect, useId } = React;
   const h = React.createElement;
 
@@ -183,7 +188,7 @@
       }
     };
 
-    const panel = open && panelStyle && ReactDOM.createPortal(h('div', { ref: panelRef, className: 'cmd-picker-panel dropdown-panel', style: panelStyle, onKeyDown: handleKeyDown },
+    const panel = open && panelStyle && createPortal(h('div', { ref: panelRef, className: 'cmd-picker-panel dropdown-panel', style: panelStyle, onKeyDown: handleKeyDown },
       showSearch && h('div', { className: 'cmd-picker-search' }, h(Icon, { name: 'search', size: 14 }),
         h('label', { className: 'sr-only', htmlFor: id + '-search' }, 'Filter ' + pickerName.toLowerCase()),
         h('input', { id: id + '-search', ref: searchRef, type: 'search', value: query,
@@ -235,8 +240,8 @@
     const id = useId();
     const [edit, setEdit] = useState(null);
     const ref = useRef(null);
-    const pointerDrag = window.PointerDrag.useController();
-    const unitSystem = window.UnitPrefs.current();
+    const pointerDrag = PointerDrag.useController();
+    const unitSystem = UnitPrefs.current();
     useEffect(() => setEdit(null), [unitSystem]);
     const start = () => (down) => {
       down.preventDefault();
@@ -245,7 +250,7 @@
       const mv = (e) => { let nv = v0 + (e.clientX - sx) * sens; if (min != null) nv = Math.max(min, nv); if (max != null) nv = Math.min(max, nv); onChange(Math.round(nv / step) * step); };
       pointerDrag.start(down, { move: mv, cursor: 'ew-resize' });
     };
-    const displayValue = typeof value === 'number' ? window.UnitPrefs.fromCanonical(value, unit, imperialUnit) : value;
+    const displayValue = typeof value === 'number' ? UnitPrefs.fromCanonical(value, unit, imperialUnit) : value;
     const disp = edit != null ? edit : (typeof displayValue === 'number' ? displayValue.toFixed(precision) : displayValue);
     return h('div', { className: 'numrow' },
       label != null && h('label', { className: 'numlbl', htmlFor: id, onPointerDown: start() }, label),
@@ -254,10 +259,10 @@
           id, ref, className: 'numinput', value: disp, inputMode: 'decimal', 'aria-describedby': unit ? id + '-unit' : undefined,
           onChange: (e) => setEdit(e.target.value),
           onFocus: (e) => { setEdit(typeof displayValue === 'number' ? String(displayValue) : displayValue); requestAnimationFrame(() => e.target.select()); },
-          onBlur: (e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) onChange(window.UnitPrefs.toCanonical(n, unit, imperialUnit)); setEdit(null); },
+          onBlur: (e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) onChange(UnitPrefs.toCanonical(n, unit, imperialUnit)); setEdit(null); },
           onKeyDown: (e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { setEdit(null); e.target.blur(); } },
         }),
-        unit && h('span', { id: id + '-unit', className: 'numunit' }, window.UnitPrefs.label(unit, imperialUnit))),
+        unit && h('span', { id: id + '-unit', className: 'numunit' }, UnitPrefs.label(unit, imperialUnit))),
     );
   }
 
@@ -294,12 +299,12 @@
   }
 
   function constraintRangeSummary(range, constraints, robot) {
-    const c = window.PM.effectiveConstraints(constraints || {}, robot);
+    const c = PM.effectiveConstraints(constraints || {}, robot);
     const velocityBase = Math.min(c.maxVel || Infinity, robot && robot.maxSpeed > 0 ? robot.maxSpeed : Infinity);
     const candidates = [
-      { key: 'maxVel', base: velocityBase, order: 0, text: (v) => 'v \u2264 ' + window.UnitPrefs.format(v, 'm/s', 1), aria: (v) => 'maximum velocity ' + window.UnitPrefs.format(v, 'm/s', 1) },
-      { key: 'maxAccel', base: c.maxAccel, order: 1, text: (v) => 'a \u2264 ' + window.UnitPrefs.format(v, 'm/s²', 1), aria: (v) => 'maximum acceleration ' + window.UnitPrefs.format(v, 'm/s²', 1) },
-      { key: 'maxDecel', base: c.maxDecel != null ? c.maxDecel : c.maxAccel, order: 2, text: (v) => 'decel \u2264 ' + window.UnitPrefs.format(v, 'm/s²', 1), aria: (v) => 'maximum deceleration ' + window.UnitPrefs.format(v, 'm/s²', 1) },
+      { key: 'maxVel', base: velocityBase, order: 0, text: (v) => 'v \u2264 ' + UnitPrefs.format(v, 'm/s', 1), aria: (v) => 'maximum velocity ' + UnitPrefs.format(v, 'm/s', 1) },
+      { key: 'maxAccel', base: c.maxAccel, order: 1, text: (v) => 'a \u2264 ' + UnitPrefs.format(v, 'm/s²', 1), aria: (v) => 'maximum acceleration ' + UnitPrefs.format(v, 'm/s²', 1) },
+      { key: 'maxDecel', base: c.maxDecel != null ? c.maxDecel : c.maxAccel, order: 2, text: (v) => 'decel \u2264 ' + UnitPrefs.format(v, 'm/s²', 1), aria: (v) => 'maximum deceleration ' + UnitPrefs.format(v, 'm/s²', 1) },
       { key: 'maxAngVel', base: c.maxAngVel, order: 3, text: (v) => '\u03c9 \u2264 ' + v.toFixed(0) + '\u00b0/s', aria: (v) => 'maximum angular velocity ' + v.toFixed(0) + ' degrees per second' },
       { key: 'maxAngAccel', base: c.maxAngAccel, order: 4, text: (v) => '\u03b1 \u2264 ' + v.toFixed(0) + '\u00b0/s\u00b2', aria: (v) => 'maximum angular acceleration ' + v.toFixed(0) + ' degrees per second squared' },
     ].filter((candidate) => {
@@ -337,5 +342,5 @@
             it.hint && h('span', { className: 'ctxmenu-k' }, it.hint))));
   }
 
-  window.UI = { Icon, IconBtn, Dropdown, Num, Section, Toggle, Seg, ContextMenu, constraintRangeSummary };
-})();
+export const UI = { Icon, IconBtn, Dropdown, Num, Section, Toggle, Seg, ContextMenu, constraintRangeSummary };
+export { Icon, IconBtn, Dropdown, Num, Section, Toggle, Seg, ContextMenu, constraintRangeSummary };

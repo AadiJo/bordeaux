@@ -1,10 +1,15 @@
+import * as React from "react";
+import { PointerDrag } from "../hooks/usePointerDrag";
+import { PM } from "../lib/pathMath";
+import { AUTO } from "../lib/routineModel";
+import { UnitPrefs } from "../lib/unitPreferences";
+import { UI } from "./ui";
+
 // Bordeaux — chrome: top bar, path switcher, tool rail, outline, constraint chip bar,
 // metric overlay, telemetry/transport, view controls.
-// Needs React + window.UI + window.PM. Exports window.Panels
-(function () {
   const { useRef, useState, useEffect, useMemo } = React;
   const h = React.createElement;
-  const { Icon, IconBtn, Dropdown, Section, Num, Seg, constraintRangeSummary } = window.UI;
+  const { Icon, IconBtn, Dropdown, Section, Num, Seg, constraintRangeSummary } = UI;
   const R2D = 180 / Math.PI;
 
   // ---------------- path manager ----------------
@@ -204,7 +209,7 @@
             h('button', { type: 'button', className: 'pathlib-pick', 'aria-current': routine.id === activeRoutineId ? 'true' : undefined, onClick: () => { setActiveRoutine(routine.id); close(); } },
               h(Icon, { name: routine.id === activeRoutineId ? 'check' : 'layers', size: 14 }),
               h('span', { className: 'pathlib-copy' }, h('span', { className: 'pathlib-name' }, routine.name)),
-              h('span', { className: 'pathlib-time' }, window.AUTO.countSteps(routine) + ' steps')),
+              h('span', { className: 'pathlib-time' }, AUTO.countSteps(routine) + ' steps')),
             h('button', { className: 'pathlib-more', type: 'button', title: 'Routine actions', 'aria-label': 'Actions for ' + routine.name, 'aria-expanded': menuId === routine.id, onClick: () => setMenuId((current) => current === routine.id ? null : routine.id) }, '\u2026')),
           menuId === routine.id && h('div', { className: 'pathlib-actionmenu', role: 'group', 'aria-label': routine.name + ' actions' },
             h('div', { className: 'pathlib-actionrow' },
@@ -213,7 +218,7 @@
               h('button', { className: 'danger', type: 'button', disabled: routines.length <= 1, onClick: () => { if (deleteRoutine(routine.id)) close(); } }, h(Icon, { name: 'trash', size: 13 }), 'Delete'))));
     return h('div', { className: 'pathsw routinelib' },
       h('button', { ref: triggerRef, className: 'pathsw-btn' + (open ? ' open' : ''), type: 'button', title: active.name, 'aria-haspopup': 'dialog', 'aria-expanded': open, onClick: () => open ? close() : setOpen(true) },
-        h('span', { className: 'pathsw-ic' }, h(Icon, { name: 'layers', size: 15 })), h('span', { className: 'pathsw-nm' }, active.name), h('span', { className: 'pathsw-t' }, window.AUTO.countSteps(active) + ' steps'), h(Icon, { name: 'chevron', size: 14 })),
+        h('span', { className: 'pathsw-ic' }, h(Icon, { name: 'layers', size: 15 })), h('span', { className: 'pathsw-nm' }, active.name), h('span', { className: 'pathsw-t' }, AUTO.countSteps(active) + ' steps'), h(Icon, { name: 'chevron', size: 14 })),
       open && h(React.Fragment, null,
         h('button', { className: 'pathlib-scrim', type: 'button', tabIndex: -1, 'aria-label': 'Close routine library', onClick: close }),
         h('aside', { ref: panelRef, className: 'pathlib-panel', role: 'dialog', 'aria-modal': true, 'aria-label': 'Routine library', tabIndex: -1, onKeyDown: trapFocus },
@@ -267,26 +272,26 @@
 
   // ---------------- canvas tool rail (left edge) — spatial creation (memo §2) ----------------
   const TOOLS = [
-    { id: 'select', icon: 'select', label: 'Select / move', key: '1', legacy: 'V' },
-    { id: 'waypoint', icon: 'waypoint', label: 'Place waypoint', key: '2', legacy: 'W' },
-    { id: 'rotation', icon: 'rotation', label: 'Rotation target', key: '3', legacy: 'R' },
-    { id: 'marker', icon: 'flag2', label: 'Event marker', key: '4', legacy: 'M' },
-    { id: 'range', icon: 'gauge', label: 'Constraint range', key: '5', legacy: 'C' },
+    { id: 'select', icon: 'select', label: 'Select / move', key: '1', alternateKey: 'V' },
+    { id: 'waypoint', icon: 'waypoint', label: 'Place waypoint', key: '2', alternateKey: 'W' },
+    { id: 'rotation', icon: 'rotation', label: 'Rotation target', key: '3', alternateKey: 'R' },
+    { id: 'marker', icon: 'flag2', label: 'Event marker', key: '4', alternateKey: 'M' },
+    { id: 'range', icon: 'gauge', label: 'Constraint range', key: '5', alternateKey: 'C' },
   ];
   function ToolRail({ tool, setTool }) {
     return h('div', { className: 'toolrail' }, TOOLS.map((t) =>
-      h('button', { key: t.id, className: 'toolrail-b' + (tool === t.id ? ' on' : ''), type: 'button', 'aria-label': t.label, 'aria-pressed': tool === t.id, title: t.label + '  (' + t.key + ' or ' + t.legacy + ')', onClick: () => setTool(t.id) },
+      h('button', { key: t.id, className: 'toolrail-b' + (tool === t.id ? ' on' : ''), type: 'button', 'aria-label': t.label, 'aria-pressed': tool === t.id, title: t.label + '  (' + t.key + ' or ' + t.alternateKey + ')', onClick: () => setTool(t.id) },
         h(Icon, { name: t.icon, size: 18 }), h('span', { className: 'toolrail-k' }, t.key))));
   }
 
   // ---------------- global-constraint chip bar (top of canvas) — memo §6 ----------------
   function ConstraintBar({ c, robot, onOpen }) {
-    const limits = window.PM.effectiveConstraints(c, robot);
+    const limits = PM.effectiveConstraints(c, robot);
     const physical = limits !== c;
     const chips = [
-      { k: 'Max V', v: window.UnitPrefs.fromCanonical(Math.min(limits.maxVel, robot.maxSpeed), 'm/s').toFixed(1), u: window.UnitPrefs.label('m/s') },
-      { k: 'Max A', v: window.UnitPrefs.fromCanonical(limits.maxAccel, 'm/s²').toFixed(1), u: window.UnitPrefs.label('m/s²') },
-      { k: 'Decel', v: window.UnitPrefs.fromCanonical(limits.maxDecel != null ? limits.maxDecel : limits.maxAccel, 'm/s²').toFixed(1), u: window.UnitPrefs.label('m/s²') },
+      { k: 'Max V', v: UnitPrefs.fromCanonical(Math.min(limits.maxVel, robot.maxSpeed), 'm/s').toFixed(1), u: UnitPrefs.label('m/s') },
+      { k: 'Max A', v: UnitPrefs.fromCanonical(limits.maxAccel, 'm/s²').toFixed(1), u: UnitPrefs.label('m/s²') },
+      { k: 'Decel', v: UnitPrefs.fromCanonical(limits.maxDecel != null ? limits.maxDecel : limits.maxAccel, 'm/s²').toFixed(1), u: UnitPrefs.label('m/s²') },
       { k: 'Max \u03c9', v: (limits.maxAngVel || 0).toFixed(0), u: '\u00b0/s' },
     ];
     return h('button', { className: 'cbar', type: 'button', title: physical ? 'View robot limits' : 'Edit global constraints', onClick: onOpen },
@@ -309,7 +314,7 @@
   function WaypointList({ wps, sel, actions }) {
     const [drag, setDrag] = useState(null);
     const rows = useRef([]);
-    const pointerDrag = window.PointerDrag.useController();
+    const pointerDrag = PointerDrag.useController();
     const startDrag = (i) => (e) => {
       e.preventDefault(); e.stopPropagation();
       setDrag({ from: i, over: i });
@@ -345,7 +350,7 @@
   function SegmentList({ wps, sel, actions }) {
     if (wps.length < 2) return h('div', { className: 'featempty' }, 'Add a second waypoint to form a segment');
     const name = (k) => k === 0 ? 'Start' : k === wps.length - 1 ? 'End' : 'Waypoint ' + k;
-    const typeName = (id) => (window.PM.SEGTYPES.find((s) => s.id === id) || window.PM.SEGTYPES[2]).label;
+    const typeName = (id) => (PM.SEGTYPES.find((s) => s.id === id) || PM.SEGTYPES[2]).label;
     return h(React.Fragment, null, wps.slice(0, -1).map((w, i) =>
       h('div', { key: i, className: 'featrow segfeatrow' + (sel.kind === 'seg' && sel.idx === i ? ' sel' : '') },
         h('span', { className: 'featindent', 'aria-hidden': true }),
@@ -376,18 +381,18 @@
           right: h('button', { className: 'mini', type: 'button', title: 'Add rotation target', 'aria-label': 'Add rotation target', onClick: (e) => { e.stopPropagation(); actions.addTargetMid(); } }, h(Icon, { name: 'plus', size: 13 })) },
           doc.targets.length === 0 ? h('div', { className: 'featempty' }, 'Press R, then click the path') :
             doc.targets.map((t, i) => h('div', { key: i, className: 'featrow' + (sel.kind === 'rt' && sel.idx === i ? ' sel' : '') },
-              h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'rt' && sel.idx === i, onClick: () => actions.select('rt', i), onDoubleClick: (e) => inspectItem(actions, 'rt', i, e) }, h('span', { className: 'featdot n' }), h('span', { className: 'featnm' }, t.deg.toFixed(0) + '\u00b0'), h('span', { className: 'featmeta' }, t.anchor === 'dist' ? window.UnitPrefs.format(t.d != null ? t.d : window.PM.featureFraction(t, derived.sample) * derived.sample.length, 'm', 1) : (window.PM.featureFraction(t, derived.sample) * 100).toFixed(0) + '%')),
+              h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'rt' && sel.idx === i, onClick: () => actions.select('rt', i), onDoubleClick: (e) => inspectItem(actions, 'rt', i, e) }, h('span', { className: 'featdot n' }), h('span', { className: 'featnm' }, t.deg.toFixed(0) + '\u00b0'), h('span', { className: 'featmeta' }, t.anchor === 'dist' ? UnitPrefs.format(t.d != null ? t.d : PM.featureFraction(t, derived.sample) * derived.sample.length, 'm', 1) : (PM.featureFraction(t, derived.sample) * 100).toFixed(0) + '%')),
               h('button', { className: 'featdel', 'aria-label': 'Delete rotation target', title: 'Delete', onClick: () => actions.delTarget(i) }, h(Icon, { name: 'trash', size: 12 }))))),
         h(Section, { icon: 'flag2', title: 'Event Markers', count: doc.markers.length, open: secOpen.em, onToggle: () => tog('em'),
           right: h('button', { className: 'mini', type: 'button', title: 'Add event marker', 'aria-label': 'Add event marker', onClick: (e) => { e.stopPropagation(); actions.addMarkerMid(); } }, h(Icon, { name: 'plus', size: 13 })) },
           doc.markers.length === 0 ? h('div', { className: 'featempty' }, 'Press M, then click the path') :
             doc.markers.map((m, i) => h('div', { key: i, className: 'featrow' + (sel.kind === 'em' && sel.idx === i ? ' sel' : '') },
-              h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'em' && sel.idx === i, onClick: () => actions.select('em', i), onDoubleClick: (e) => inspectItem(actions, 'em', i, e) }, h('span', { className: 'featdot n' }), h('span', { className: 'featnm', title: m.name }, m.name), h('span', { className: 'featmeta' }, m.anchor === 'dist' ? window.UnitPrefs.format(m.d != null ? m.d : window.PM.featureFraction(m, derived.sample) * derived.sample.length, 'm', 1) : (window.PM.featureFraction(m, derived.sample) * 100).toFixed(0) + '%')),
+              h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'em' && sel.idx === i, onClick: () => actions.select('em', i), onDoubleClick: (e) => inspectItem(actions, 'em', i, e) }, h('span', { className: 'featdot n' }), h('span', { className: 'featnm', title: m.name }, m.name), h('span', { className: 'featmeta' }, m.anchor === 'dist' ? UnitPrefs.format(m.d != null ? m.d : PM.featureFraction(m, derived.sample) * derived.sample.length, 'm', 1) : (PM.featureFraction(m, derived.sample) * 100).toFixed(0) + '%')),
               h('button', { className: 'featdel', 'aria-label': 'Delete event marker ' + m.name, title: 'Delete', onClick: () => actions.delMarker(i) }, h(Icon, { name: 'trash', size: 12 }))))),
         h(Section, { icon: 'gauge', title: 'Constraint Ranges', count: (doc.ranges || []).length, open: secOpen.cr !== false, onToggle: () => tog('cr'),
           right: h('button', { className: 'mini', type: 'button', title: 'Add constraint range', 'aria-label': 'Add constraint range', onClick: (e) => { e.stopPropagation(); actions.addRangeMid(); } }, h(Icon, { name: 'plus', size: 13 })) },
           (doc.ranges || []).length === 0 ? h('div', { className: 'featempty' }, 'Press C, then drag the path') :
-            doc.ranges.map((rg, i) => { const effective = (derived.effRanges && derived.effRanges[i]) || rg; const summary = constraintRangeSummary(rg, doc.constraints, robot); const rangeLabel = summary ? summary.text : (rg.name || 'Constraint range'); const rangeMeta = rg.anchor === 'dist' ? window.UnitPrefs.fromCanonical(Math.min(effective.f0, effective.f1) * derived.sample.length, 'm').toFixed(1) + '\u2013' + window.UnitPrefs.format(Math.max(effective.f0, effective.f1) * derived.sample.length, 'm', 1) : rg.anchor === 'wp' && rg.t0 != null && rg.t1 != null ? 'S' + ((rg.w0 || 0) + 1) + ' ' + Math.round(rg.t0 * 100) + '% \u2013 S' + ((rg.w1 || 0) + 1) + ' ' + Math.round(rg.t1 * 100) + '%' : rg.anchor === 'wp' ? 'Waypoint ' + Math.min(rg.w0 || 0, rg.w1 || 0) + '\u2013' + Math.max(rg.w0 || 0, rg.w1 || 0) : (Math.min(effective.f0, effective.f1) * 100).toFixed(0) + '\u2013' + (Math.max(effective.f0, effective.f1) * 100).toFixed(0) + '%'; return h('div', { key: i, className: 'featrow' + (sel.kind === 'cr' && sel.idx === i ? ' sel' : '') },
+            doc.ranges.map((rg, i) => { const effective = (derived.effRanges && derived.effRanges[i]) || rg; const summary = constraintRangeSummary(rg, doc.constraints, robot); const rangeLabel = summary ? summary.text : (rg.name || 'Constraint range'); const rangeMeta = rg.anchor === 'dist' ? UnitPrefs.fromCanonical(Math.min(effective.f0, effective.f1) * derived.sample.length, 'm').toFixed(1) + '\u2013' + UnitPrefs.format(Math.max(effective.f0, effective.f1) * derived.sample.length, 'm', 1) : rg.anchor === 'wp' && rg.t0 != null && rg.t1 != null ? 'S' + ((rg.w0 || 0) + 1) + ' ' + Math.round(rg.t0 * 100) + '% \u2013 S' + ((rg.w1 || 0) + 1) + ' ' + Math.round(rg.t1 * 100) + '%' : rg.anchor === 'wp' ? 'Waypoint ' + Math.min(rg.w0 || 0, rg.w1 || 0) + '\u2013' + Math.max(rg.w0 || 0, rg.w1 || 0) : (Math.min(effective.f0, effective.f1) * 100).toFixed(0) + '\u2013' + (Math.max(effective.f0, effective.f1) * 100).toFixed(0) + '%'; return h('div', { key: i, className: 'featrow' + (sel.kind === 'cr' && sel.idx === i ? ' sel' : '') },
               h('button', { className: 'featselect', type: 'button', 'aria-label': 'Constraint range, ' + (summary ? summary.ariaLabel : rangeLabel) + ', ' + rangeMeta, 'aria-pressed': sel.kind === 'cr' && sel.idx === i, onClick: () => actions.select('cr', i), onDoubleClick: (e) => inspectItem(actions, 'cr', i, e) }, h('span', { className: 'featdot w' }), h('span', { className: 'featnm' }, rangeLabel), h('span', { className: 'featmeta' }, rangeMeta)),
               h('button', { className: 'featdel', 'aria-label': 'Delete constraint range', title: 'Delete', onClick: () => actions.delRange(i) }, h(Icon, { name: 'trash', size: 12 }))); }))));
   }
@@ -395,21 +400,21 @@
   // ---------------- compact metric control for the timeline toolbar ----------------
   function MetricControl({ metric, setMetric, derived, plannerId }) {
     const M = derived.metrics || {};
-    const grad = window.PM.metricGradient(metric);
-    const def = (window.PM.METRICS || []).find((m) => m.id === metric) || {};
+    const grad = PM.metricGradient(metric);
+    const def = (PM.METRICS || []).find((m) => m.id === metric) || {};
     let lo = '0', hi = '0';
     const displayUnit = def.unit || '';
-    if (metric === 'velocity') { lo = '0'; hi = window.UnitPrefs.fromCanonical(M.vMax || 0, displayUnit).toFixed(1); }
-    else if (metric === 'accel') { const a = window.UnitPrefs.fromCanonical(M.aMax || 0, displayUnit).toFixed(1); lo = '-' + a; hi = '+' + a; }
+    if (metric === 'velocity') { lo = '0'; hi = UnitPrefs.fromCanonical(M.vMax || 0, displayUnit).toFixed(1); }
+    else if (metric === 'accel') { const a = UnitPrefs.fromCanonical(M.aMax || 0, displayUnit).toFixed(1); lo = '-' + a; hi = '+' + a; }
     else if (metric === 'angvel') { const w = ((M.wMax || 0) * R2D).toFixed(0); lo = '-' + w; hi = '+' + w; }
-    else { lo = '0'; hi = window.UnitPrefs.fromCanonical(M.kMax || 0, displayUnit).toFixed(2); }
+    else { lo = '0'; hi = UnitPrefs.fromCanonical(M.kMax || 0, displayUnit).toFixed(2); }
     return h('div', { className: 'metricctl' },
       h(Dropdown, { id: 'field-overlay-metric', ariaLabel: 'Field overlay metric', compact: true,
         className: 'metric-dropdown', value: metric,
-        items: (window.PM.METRICS || []).map((m) => ({ value: m.id, label: m.label, meta: window.UnitPrefs.label(m.unit || '') })),
+        items: (PM.METRICS || []).map((m) => ({ value: m.id, label: m.label, meta: UnitPrefs.label(m.unit || '') })),
         onChange: setMetric }),
       h('span', { className: 'metric-swatch', style: { background: grad }, 'aria-hidden': true }),
-      h('span', { className: 'metric-range', 'aria-hidden': true }, lo + '\u2013' + hi + ' ' + window.UnitPrefs.label(displayUnit)));
+      h('span', { className: 'metric-range', 'aria-hidden': true }, lo + '\u2013' + hi + ' ' + UnitPrefs.label(displayUnit)));
   }
 
   // ---------------- telemetry graph + transport ----------------
@@ -438,12 +443,12 @@
       const markers = ((doc && doc.markers) || []).map((marker, index) => ({
         key: 'event-' + index,
         label: marker.name || 'Event marker ' + (index + 1),
-        left: percentAt(window.PM.featureFraction(marker, derived.sample)),
+        left: percentAt(PM.featureFraction(marker, derived.sample)),
       }));
       const targets = ((doc && doc.targets) || []).map((target, index) => ({
         key: 'target-' + index,
         label: 'Rotation target ' + (index + 1) + ' · ' + Number(target.deg || 0).toFixed(0) + '°',
-        left: percentAt(window.PM.featureFraction(target, derived.sample)),
+        left: percentAt(PM.featureFraction(target, derived.sample)),
       }));
       const ranges = (derived.effRanges || []).map((range, index) => {
         const start = percentAt(range.f0), end = percentAt(range.f1);
@@ -468,13 +473,13 @@
       label: (total * fraction).toFixed(total < 10 ? 2 : 1) + 's',
     }));
 
-    let arr = graphOpen ? M.v.map((value) => window.UnitPrefs.fromCanonical(value, 'm/s')) : null, vmin = 0, vmax = window.UnitPrefs.fromCanonical(M.vMax || 1, 'm/s'), signed = false, unit = window.UnitPrefs.label('m/s'), title = 'Velocity';
-    if (graphOpen && metric === 'accel') { arr = M.accel.map((value) => window.UnitPrefs.fromCanonical(value, 'm/s²')); vmax = window.UnitPrefs.fromCanonical(M.aMax || 1, 'm/s²'); vmin = -vmax; signed = true; unit = window.UnitPrefs.label('m/s²'); title = 'Acceleration'; }
+    let arr = graphOpen ? M.v.map((value) => UnitPrefs.fromCanonical(value, 'm/s')) : null, vmin = 0, vmax = UnitPrefs.fromCanonical(M.vMax || 1, 'm/s'), signed = false, unit = UnitPrefs.label('m/s'), title = 'Velocity';
+    if (graphOpen && metric === 'accel') { arr = M.accel.map((value) => UnitPrefs.fromCanonical(value, 'm/s²')); vmax = UnitPrefs.fromCanonical(M.aMax || 1, 'm/s²'); vmin = -vmax; signed = true; unit = UnitPrefs.label('m/s²'); title = 'Acceleration'; }
     else if (graphOpen && metric === 'angvel') { arr = (M.omega || []).map((o) => o * R2D); vmax = (M.wMax || 0.01) * R2D; vmin = -vmax; signed = true; unit = '\u00b0/s'; title = 'Angular velocity'; }
-    else if (graphOpen && metric === 'curvature') { arr = M.curv.map((value) => window.UnitPrefs.fromCanonical(value, '1/m')); vmin = 0; vmax = window.UnitPrefs.fromCanonical(M.kMax || 0.01, '1/m'); unit = window.UnitPrefs.label('1/m'); title = 'Curvature'; }
+    else if (graphOpen && metric === 'curvature') { arr = M.curv.map((value) => UnitPrefs.fromCanonical(value, '1/m')); vmin = 0; vmax = UnitPrefs.fromCanonical(M.kMax || 0.01, '1/m'); unit = UnitPrefs.label('1/m'); title = 'Curvature'; }
 
     const jigglePeak = graphOpen && metric === 'velocity' && prof.jiggles
-      ? window.UnitPrefs.fromCanonical(prof.jiggles.reduce((value, action) => Math.max(value, 4 * action.config.distanceM / action.strokeDuration), 0), 'm/s')
+      ? UnitPrefs.fromCanonical(prof.jiggles.reduce((value, action) => Math.max(value, 4 * action.config.distanceM / action.strokeDuration), 0), 'm/s')
       : 0;
     const peak = Math.max(vmax, jigglePeak);
     vmax = Math.max(0.01, peak * 1.1);
@@ -490,8 +495,8 @@
       const geometryEnd = prof.t[prof.t.length - 1];
       if (tt > geometryEnd + 1e-9) {
         if (metric !== 'velocity') return 0;
-        const pose = window.PM.poseAtTime(tt, pts, prof, derived.anchors, derived.mode, derived.rev);
-        return pose ? window.UnitPrefs.fromCanonical(pose.speed, 'm/s') : 0;
+        const pose = PM.poseAtTime(tt, pts, prof, derived.anchors, derived.mode, derived.rev);
+        return pose ? UnitPrefs.fromCanonical(pose.speed, 'm/s') : 0;
       }
       let lo = 1, hi = prof.t.length - 1;
       while (lo < hi) { const mid = (lo + hi) >> 1; if (prof.t[mid] < tt) lo = mid + 1; else hi = mid; }
@@ -511,7 +516,7 @@
     const baseY = signed ? zeroY : (GH - padB);
     const playX = padL + pct * (GW - padL - padR);
     const currentValue = valueAtTime(playTime), playY = yOf(currentValue);
-    const pointerDrag = window.PointerDrag.useController();
+    const pointerDrag = PointerDrag.useController();
     const onGraphDown = (e) => {
       const seekTo = (cx) => { const r = graphRef.current.getBoundingClientRect(); const f = Math.max(0, Math.min(1, (cx - r.left) / r.width)); seek(f * total); };
       seekTo(e.clientX);
@@ -554,7 +559,7 @@
           featureCount > 0 && h('span', { className: 'timeline-summary', 'aria-hidden': true }, featureSummary),
           h('div', { className: 'transport-meta' },
             h(MetricControl, { metric, setMetric, derived, plannerId }),
-            h('div', { className: 'roi', title: 'Path length' }, h('span', { className: 'roi-v' }, window.UnitPrefs.fromCanonical(derived.totalDistance || derived.sample.length, 'm').toFixed(2)), h('span', { className: 'roi-u' }, window.UnitPrefs.label('m'))),
+            h('div', { className: 'roi', title: 'Path length' }, h('span', { className: 'roi-v' }, UnitPrefs.fromCanonical(derived.totalDistance || derived.sample.length, 'm').toFixed(2)), h('span', { className: 'roi-u' }, UnitPrefs.label('m'))),
             h(IconBtn, { icon: 'gauge', active: graphOpen, onClick: () => setGraphOpen(!graphOpen), title: 'Telemetry graph' }))),
         h('div', { className: 'timeline-editor' },
           h('div', { className: 'timeline' },
@@ -620,5 +625,5 @@
         running ? 'Executing' : 'Staged', h('span', { className: 'rlegend-nowt' }, fmt(time) + ' / ' + fmt(run.total))));
   }
 
-  window.Panels = { Toolbar, ToolRail, ConstraintBar, Outline, Transport, ViewControls, RoutineLegend };
-})();
+export const Panels = { Toolbar, ToolRail, ConstraintBar, Outline, Transport, ViewControls, RoutineLegend };
+export { Toolbar, ToolRail, ConstraintBar, Outline, Transport, ViewControls, RoutineLegend };

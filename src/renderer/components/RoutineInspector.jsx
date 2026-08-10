@@ -1,11 +1,15 @@
+import * as React from "react";
+import { AUTO } from "../lib/routineModel";
+import { UnitPrefs } from "../lib/unitPreferences";
+import { CommandParameterEditor, commandArguments, parameterValueError, safeControlId } from "./ContextInspector";
+import { UI } from "./ui";
+
 // Autonomous Routine — step inspector (RIGHT rail) + run transport (bottom).
 // One inspector system, shared with the Plan page (.ctxinsp shell + form primitives).
-// Needs React + window.UI + window.AUTO. Exports window.StepInspector, window.RoutineTransport
-(function () {
   const { useState } = React;
   const h = React.createElement;
-  const { Icon, Dropdown, Num, Seg } = window.UI;
-  const A = window.AUTO;
+  const { Icon, Dropdown, Num, Seg } = UI;
+  const A = AUTO;
   const fmt = (t) => (t || 0).toFixed(2) + 's';
 
   function FieldLabel(t, right) { return h('div', { className: 'fieldlabel' }, h('span', null, t), right || null); }
@@ -41,7 +45,7 @@
           onChange: (value) => set({ ref: value }) }),
         seg && h('div', { className: 'rt-stat' },
           h('div', { className: 'rt-stat-i' }, h('span', { className: 'rt-stat-v' }, fmt(seg.t1 - seg.t0)), h('span', { className: 'rt-stat-k' }, 'duration')),
-          h('div', { className: 'rt-stat-i' }, h('span', { className: 'rt-stat-v' }, window.UnitPrefs.format(seg.deriv.sample.length, 'm', 2)), h('span', { className: 'rt-stat-k' }, 'distance')),
+          h('div', { className: 'rt-stat-i' }, h('span', { className: 'rt-stat-v' }, UnitPrefs.format(seg.deriv.sample.length, 'm', 2)), h('span', { className: 'rt-stat-k' }, 'distance')),
           h('div', { className: 'rt-stat-i' }, h('span', { className: 'rt-stat-v' }, '#' + seg.idxLabel), h('span', { className: 'rt-stat-k' }, 'run order'))),
         h('button', { className: 'rt-openbtn', type: 'button', onClick: () => acq.openInEditor(node.ref) }, h(Icon, { name: 'route', size: 14 }), 'Open in path editor'),
         h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Remove from routine'));
@@ -66,7 +70,6 @@
       const C = A.CATS[node.cat]; icon = C.icon; accent = C.color; tag = C.label;
       title = 'Function';
       if (node.cat === 'command') {
-        const editor = window.BordeauxCommandEditor;
         const commands = javaProject && javaProject.catalog ? javaProject.catalog.commands || [] : [];
         const invocationId = node.invocation && node.invocation.commandId || '';
         const selected = commands.find((command) => command.id === invocationId);
@@ -74,7 +77,7 @@
         const saved = node.invocation && node.invocation.arguments || {};
         const argumentsValue = selected ? Object.fromEntries(parameters.map((parameter) => {
           const value = Object.prototype.hasOwnProperty.call(saved, parameter.name) ? saved[parameter.name] : undefined;
-          return [parameter.name, editor.parameterValueError(value, parameter) ? editor.commandArguments(selected)[parameter.name] : value];
+          return [parameter.name, parameterValueError(value, parameter) ? commandArguments(selected)[parameter.name] : value];
         })) : saved;
         body = h(React.Fragment, null,
           h('div', { className: 'rt-callout' }, h(Icon, { name: 'info', size: 14 }), 'Runs after the previous path and before the next path is selected.'),
@@ -85,7 +88,7 @@
                   badge: command.runtimeReady === true ? 'ready' : 'build',
                 }))], placeholder: 'Choose a command', icon: 'bolt', onChange: (value) => {
                 const command = commands.find((candidate) => candidate.id === value);
-                set({ title: command ? command.label : 'Robot command', invocation: command ? { commandId: command.id, arguments: editor.commandArguments(command) } : null });
+                set({ title: command ? command.label : 'Robot command', invocation: command ? { commandId: command.id, arguments: commandArguments(command) } : null });
               } })
             : h(React.Fragment, null, FieldLabel('Java command'),
                 h('button', { className: 'cmd-primary-action', type: 'button', onClick: javaProject && javaProject.link }, 'Choose Java project')),
@@ -93,9 +96,9 @@
           selected && selected.runtimeReady !== true && h('div', { className: 'cmd-project-error', role: 'status' }, 'Build the annotated command catalog before export.'),
           selected && h('form', { className: 'cmd-parameters', onSubmit: (event) => event.preventDefault() },
             parameters.length === 0 ? h('div', { className: 'cmd-empty-params' }, 'No parameters')
-              : parameters.map((parameter) => h(editor.CommandParameterEditor, {
+              : parameters.map((parameter) => h(CommandParameterEditor, {
                   key: parameter.name,
-                  id: 'routine-command-param-' + editor.safeControlId(parameter.name),
+                  id: 'routine-command-param-' + safeControlId(parameter.name),
                   label: parameter.label || parameter.name,
                   schema: parameter.schema,
                   parameter,
@@ -220,6 +223,4 @@
         h('input', { className: 'rt-tp-scrub', type: 'range', 'aria-label': 'Routine playback position', min: 0, max: 1000, value: Math.round(pct * 1000), onChange: (event) => controls.seek((event.target.value / 1000) * run.total) })));
   }
 
-  window.StepInspector = StepInspector;
-  window.RoutineTransport = RoutineTransport;
-})();
+export { StepInspector, RoutineTransport };

@@ -1,5 +1,4 @@
-// Bordeaux — path math engine (no React). Exports to window.PM
-(function () {
+// Bordeaux path math engine. Kept renderer-local until the shared planner reaches API parity.
   // ---- geometry helpers ----
   const lerp = (a, b, t) => a + (b - a) * t;
   function bez(p0, c0, c1, p1, t) {
@@ -728,9 +727,9 @@
   // engine + overlays stay simple, while the stored anchor keeps the range
   // attached the way the user intends as the path is edited.
   //   param : fixed percent of the path        {f0,f1}
-  //   dist  : legacy fixed metres of travel    {d0,d1}
+  //   dist  : fixed metres of travel           {d0,d1}
   //   wp    : local positions within segments  {w0,t0,w1,t1}; omitted t values
-  //           preserve legacy whole-waypoint spans
+  //           preserve whole-waypoint spans from older project files
   function waypointFracs(doc, smp) {
     const pts = smp.pts; const total = smp.length || 1; const n = doc.waypoints.length;
     if (!pts.length) return doc.waypoints.map(() => 0);
@@ -1156,5 +1155,4 @@
     return positions;
   }
 
-  window.PM = { bez, bezD, splitBezier, nearestPointOnSegment, sample, profile, poseAtTime, headingAt, metrics, analyze, metricColor, metricGradient, METRICS, SEGTYPES, buildAnchors, pointAtFraction, nearestFraction, nearestVisits, autoHandles, angWrap, angLerp, D2R, R2D, lerp, derivePath, jigglePositions, effectiveRanges, featureFraction, remapWaypointRange, waypointFracs, robotHardLimits, effectiveConstraints };
-})();
+export const PM = { bez, bezD, splitBezier, nearestPointOnSegment, sample, profile, poseAtTime, headingAt, metrics, analyze, metricColor, metricGradient, METRICS, SEGTYPES, buildAnchors, pointAtFraction, nearestFraction, nearestVisits, autoHandles, angWrap, angLerp, D2R, R2D, lerp, derivePath, jigglePositions, effectiveRanges, featureFraction, remapWaypointRange, waypointFracs, robotHardLimits, effectiveConstraints };

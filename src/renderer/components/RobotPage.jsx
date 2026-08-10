@@ -1,8 +1,13 @@
-// Bordeaux — Robot config page (project-global). Needs React + window.UI. Exports window.RobotPage
-(function () {
+import * as React from "react";
+import { PointerDrag } from "../hooks/usePointerDrag";
+import { PM } from "../lib/pathMath";
+import { UnitPrefs } from "../lib/unitPreferences";
+import { UI } from "./ui";
+
+// Bordeaux Robot config page (project-global).
   const { useRef, useState, useEffect } = React;
   const h = React.createElement;
-  const { Dropdown, Icon } = window.UI;
+  const { Dropdown, Icon } = UI;
 
   // Published 12 V free speeds from the manufacturers' product documentation.
   const DRIVE_MOTORS = [
@@ -41,11 +46,11 @@
   function BigNum({ label, value, onChange, unit, imperialUnit = unit === 'm' ? 'in' : undefined, step = 0.01, min, max, precision = 2 }) {
     const [edit, setEdit] = useState(null);
     const cancelEdit = useRef(false);
-    const pointerDrag = window.PointerDrag.useController();
-    const unitSystem = window.UnitPrefs.current();
+    const pointerDrag = PointerDrag.useController();
+    const unitSystem = UnitPrefs.current();
     useEffect(() => setEdit(null), [unitSystem]);
     const commitEdit = (raw) => {
-      let next = window.UnitPrefs.toCanonical(Number(raw), unit, imperialUnit);
+      let next = UnitPrefs.toCanonical(Number(raw), unit, imperialUnit);
       if (!Number.isFinite(next)) return;
       if (min != null) next = Math.max(min, next);
       if (max != null) next = Math.min(max, next);
@@ -58,7 +63,7 @@
       const mv = (e) => { let nv = v0 + (e.clientX - sx) * sens; if (min != null) nv = Math.max(min, nv); if (max != null) nv = Math.min(max, nv); onChange(Math.round(nv / step) * step); };
       pointerDrag.start(down, { move: mv, cursor: 'ew-resize' });
     };
-    const displayValue = typeof value === 'number' ? window.UnitPrefs.fromCanonical(value, unit, imperialUnit) : value;
+    const displayValue = typeof value === 'number' ? UnitPrefs.fromCanonical(value, unit, imperialUnit) : value;
     const display = edit != null ? edit : (typeof displayValue === 'number' ? displayValue.toFixed(precision) : '');
     return h('div', { className: 'rp-big', onPointerDown: (e) => { if (e.target.tagName !== 'INPUT') start(e); } },
       h('input', {
@@ -71,7 +76,7 @@
           else if (e.key === 'Escape') { e.preventDefault(); cancelEdit.current = true; e.currentTarget.blur(); }
         },
       }),
-      unit && h('span', { className: 'u' }, window.UnitPrefs.label(unit, imperialUnit)));
+      unit && h('span', { className: 'u' }, UnitPrefs.label(unit, imperialUnit)));
   }
 
   function RobotPage({ robot, setRobot, mcpEnabled, agentProposal, onApplyProposal, onRejectProposal }) {
@@ -80,7 +85,7 @@
     const [selectedVertex, setSelectedVertex] = useState(0);
     const [dragVertices, setDragVertices] = useState(null);
     const previewRef = useRef(null);
-    const vertexDrag = window.PointerDrag.useController();
+    const vertexDrag = PointerDrag.useController();
     const shape = customEditing && robot.footprint ? 'custom' : footprintShape(robot);
     const roundPreset = robot.footprintPreset && robot.footprintPreset.kind === 'round'
       ? robot.footprintPreset : { kind: 'round', vertices: 12 };
@@ -133,7 +138,7 @@
     };
     const driveModel = { ...fallbackDriveModel, ...(robot.driveModel || {}) };
     const chassisFreeSpeed = (model) => model.motorFreeRpm / 60 * Math.PI * model.wheelDiameterM / model.gearRatio;
-    const hardLimits = window.PM.robotHardLimits(robot);
+    const hardLimits = PM.robotHardLimits(robot);
     const setDriveModel = (patch) => {
       const next = { ...driveModel, ...patch };
       if (![next.motorFreeRpm, next.gearRatio, next.wheelDiameterM].every((value) => Number.isFinite(value) && value > 0)) return;
@@ -313,7 +318,7 @@
               !hardLimits && h('button', { className: 'rp-add-profile', type: 'button', onClick: () => setDriveModel({}) }, 'Use physical limits'),
               hardLimits && h('div', { className: 'rp-hard-limits' },
                 [['Top speed', hardLimits.maxSpeed, 'm/s', 2], ['Linear accel', hardLimits.maxAccel, 'm/s²', 2], ['Corner accel', hardLimits.maxCornerAccel, 'm/s²', 2], ['Angular speed', hardLimits.maxAngVel, '°/s', 0]].map(([label, value, unit, precision]) =>
-                  h('div', { className: 'rp-drive-result', key: label }, h('span', null, label), h('strong', null, window.UnitPrefs.fromCanonical(value, unit).toFixed(precision), h('small', null, ' ' + window.UnitPrefs.label(unit)))))),
+                  h('div', { className: 'rp-drive-result', key: label }, h('span', null, label), h('strong', null, UnitPrefs.fromCanonical(value, unit).toFixed(precision), h('small', null, ' ' + UnitPrefs.label(unit)))))),
               h('div', { className: 'rp-note' }, h(Icon, { name: 'info', size: 14 }), 'Robot limits. Path ranges only tighten them.'))),
 
             mcpEnabled && h('div', { className: 'rp-sec rp-agent' },
@@ -367,8 +372,8 @@
                     h('line', { x1: 0, y1: 0, x2: rw / 2 + 4, y2: 0, stroke: '#fff', strokeWidth: 2.5 }),
                     h('path', { d: `M ${rw / 2 + 2} -6 L ${rw / 2 + 14} 0 L ${rw / 2 + 2} 6 Z`, fill: '#fff' }),
                     // width / length ticks
-                    h('text', { x: 0, y: -rh / 2 - 10, fill: 'var(--txt-3)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace', textAnchor: 'middle' }, window.UnitPrefs.format(robot.w, 'm', 2, 'in')),
-                    h('text', { x: rw / 2 + 26, y: 4, fill: 'var(--txt-3)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace', transform: `rotate(90 ${rw / 2 + 26} 0)`, textAnchor: 'middle' }, window.UnitPrefs.format(robot.l, 'm', 2, 'in')),
+                    h('text', { x: 0, y: -rh / 2 - 10, fill: 'var(--txt-3)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace', textAnchor: 'middle' }, UnitPrefs.format(robot.w, 'm', 2, 'in')),
+                    h('text', { x: rw / 2 + 26, y: 4, fill: 'var(--txt-3)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace', transform: `rotate(90 ${rw / 2 + 26} 0)`, textAnchor: 'middle' }, UnitPrefs.format(robot.l, 'm', 2, 'in')),
                     shape === 'custom' && footprint.map((point, index) => h('g', { key: index },
                       h('circle', { cx: point.x * unit, cy: -point.y * unit, r: 22, className: 'rp-vertex-hit',
                         role: 'button', tabIndex: 0, 'aria-label': `Footprint vertex ${index + 1}`,
@@ -393,11 +398,10 @@
                       })))))),
               h('div', { className: 'rp-readout' },
                 h('div', { className: 'rr' }, h('div', { className: 'rrv' }, isSwerve ? 'Swerve' : 'Tank'), h('div', { className: 'rru' }, 'drive')),
-                h('div', { className: 'rr' }, h('div', { className: 'rrv' }, window.UnitPrefs.fromCanonical(footprintArea, 'm²').toFixed(2)), h('div', { className: 'rru' }, window.UnitPrefs.label('m²') + ' footprint')),
-                h('div', { className: 'rr' }, h('div', { className: 'rrv' }, typeof robot.heightM === 'number' ? window.UnitPrefs.fromCanonical(robot.heightM, 'm', 'in').toFixed(2) : '—'), h('div', { className: 'rru' }, window.UnitPrefs.label('m', 'in') + ' high')),
-                h('div', { className: 'rr' }, h('div', { className: 'rrv' }, window.UnitPrefs.fromCanonical(robot.maxSpeed, 'm/s').toFixed(1)), h('div', { className: 'rru' }, window.UnitPrefs.label('m/s') + ' top')))),
+                h('div', { className: 'rr' }, h('div', { className: 'rrv' }, UnitPrefs.fromCanonical(footprintArea, 'm²').toFixed(2)), h('div', { className: 'rru' }, UnitPrefs.label('m²') + ' footprint')),
+                h('div', { className: 'rr' }, h('div', { className: 'rrv' }, typeof robot.heightM === 'number' ? UnitPrefs.fromCanonical(robot.heightM, 'm', 'in').toFixed(2) : '—'), h('div', { className: 'rru' }, UnitPrefs.label('m', 'in') + ' high')),
+                h('div', { className: 'rr' }, h('div', { className: 'rrv' }, UnitPrefs.fromCanonical(robot.maxSpeed, 'm/s').toFixed(1)), h('div', { className: 'rru' }, UnitPrefs.label('m/s') + ' top')))),
             customVerticesEditor))));
   }
 
-  window.RobotPage = RobotPage;
-})();
+export { RobotPage };
