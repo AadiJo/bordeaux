@@ -24,16 +24,18 @@ afterEach(async () => {
 describe("Java project bookmarks", () => {
   it("persists bounded project records while renderer summaries omit paths", async () => {
     const filePath = await temporaryFile();
-    let bookmarks = rememberJavaProject([], "/tmp/robot-one", "Robot One", new Date("2026-08-04T12:00:00Z"));
-    bookmarks = rememberJavaProject(bookmarks, "/tmp/robot-two", "Robot Two", new Date("2026-08-04T13:00:00Z"));
-    bookmarks = rememberJavaProject(bookmarks, "/tmp/robot-one", "Robot One Renamed", new Date("2026-08-04T14:00:00Z"));
+    const robotOne = path.resolve("/tmp/robot-one");
+    const robotTwo = path.resolve("/tmp/robot-two");
+    let bookmarks = rememberJavaProject([], robotOne, "Robot One", new Date("2026-08-04T12:00:00Z"));
+    bookmarks = rememberJavaProject(bookmarks, robotTwo, "Robot Two", new Date("2026-08-04T13:00:00Z"));
+    bookmarks = rememberJavaProject(bookmarks, robotOne, "Robot One Renamed", new Date("2026-08-04T14:00:00Z"));
 
     await writeJavaProjectBookmarks(filePath, bookmarks);
     const restored = await readJavaProjectBookmarks(filePath);
     const summaries = summarizeJavaProjectBookmarks(restored);
 
     expect(restored).toHaveLength(2);
-    expect(restored[0]).toMatchObject({ projectName: "Robot One Renamed", projectPath: "/tmp/robot-one" });
+    expect(restored[0]).toMatchObject({ projectName: "Robot One Renamed", projectPath: robotOne });
     expect(summaries[0]).toEqual({
       id: restored[0].id,
       projectName: "Robot One Renamed",

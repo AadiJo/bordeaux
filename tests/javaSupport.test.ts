@@ -14,6 +14,12 @@ import type { JavaCommandCatalog } from "../src/shared/types";
 
 const temporaryDirectories: string[] = [];
 
+async function writeWrapper(project: string, posixScript: string, windowsScript: string): Promise<void> {
+  const wrapper = path.join(project, process.platform === "win32" ? "gradlew.bat" : "gradlew");
+  await fs.writeFile(wrapper, process.platform === "win32" ? windowsScript : posixScript);
+  if (process.platform !== "win32") await fs.chmod(wrapper, 0o755);
+}
+
 async function fixture(dialect: "groovy" | "kotlin" = "groovy"): Promise<{ project: string; artifacts: string }> {
   const project = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-java-support-"));
   temporaryDirectories.push(project);
@@ -21,9 +27,7 @@ async function fixture(dialect: "groovy" | "kotlin" = "groovy"): Promise<{ proje
   await fs.writeFile(path.join(project, buildName), dialect === "groovy"
     ? "plugins { id 'edu.wpi.first.GradleRIO' version '2026.2.2' }\n"
     : "plugins { id(\"edu.wpi.first.GradleRIO\") version \"2026.2.2\" }\n");
-  const wrapper = path.join(project, process.platform === "win32" ? "gradlew.bat" : "gradlew");
-  await fs.writeFile(wrapper, process.platform === "win32" ? "@echo off\r\necho catalog built\r\n" : "#!/bin/sh\nprintf 'catalog built in %s\\n' \"$PWD\"\n");
-  if (process.platform !== "win32") await fs.chmod(wrapper, 0o755);
+  await writeWrapper(project, "#!/bin/sh\nprintf 'catalog built in %s\\n' \"$PWD\"\n", "@echo off\r\necho catalog built in %CD%\r\n");
   const artifacts = path.join(project, "artifacts");
   await fs.mkdir(artifacts);
   await fs.writeFile(path.join(artifacts, "bordeaux-runtime.jar"), "runtime");
@@ -97,27 +101,19 @@ describe("Java support installation and trusted catalog builds", () => {
 
   it("enforces output, timeout, cancellation, and one-build-at-a-time limits", async () => {
     const noisy = await fixture();
-    const noisyWrapper = path.join(noisy.project, "gradlew");
-    await fs.writeFile(noisyWrapper, "#!/bin/sh\nyes x | head -c 4096\n");
-    await fs.chmod(noisyWrapper, 0o755);
+    await writeWrapper(noisy.project, "#!/bin/sh\nyes x | head -c 4096\n", "@echo off\r\nfor /L %%i in (1,1,200) do @echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\n");
     await expect(runJavaCatalogBuild(noisy.project, { outputBytes: 128 })).rejects.toThrow(/output limit/);
 
     const slow = await fixture();
-    const slowWrapper = path.join(slow.project, "gradlew");
-    await fs.writeFile(slowWrapper, "#!/bin/sh\nsleep 5\n");
-    await fs.chmod(slowWrapper, 0o755);
+    await writeWrapper(slow.project, "#!/bin/sh\nsleep 5\n", "@echo off\r\nping 127.0.0.1 -n 6 >nul\r\n");
     await expect(runJavaCatalogBuild(slow.project, { timeoutMs: 30, killGraceMs: 30 })).rejects.toThrow(/time limit/);
 
     const stubborn = await fixture();
-    const stubbornWrapper = path.join(stubborn.project, "gradlew");
-    await fs.writeFile(stubbornWrapper, "#!/bin/sh\ntrap '' TERM\nwhile :; do sleep 1; done\n");
-    await fs.chmod(stubbornWrapper, 0o755);
+    await writeWrapper(stubborn.project, "#!/bin/sh\ntrap '' TERM\nwhile :; do sleep 1; done\n", "@echo off\r\nping 127.0.0.1 -n 6 >nul\r\n");
     await expect(runJavaCatalogBuild(stubborn.project, { timeoutMs: 30, killGraceMs: 30 })).rejects.toThrow(/time limit/);
 
     const cancel = await fixture();
-    const cancelWrapper = path.join(cancel.project, "gradlew");
-    await fs.writeFile(cancelWrapper, "#!/bin/sh\nsleep 5\n");
-    await fs.chmod(cancelWrapper, 0o755);
+    await writeWrapper(cancel.project, "#!/bin/sh\nsleep 5\n", "@echo off\r\nping 127.0.0.1 -n 6 >nul\r\n");
     const running = runJavaCatalogBuild(cancel.project, { timeoutMs: 5_000 });
     await new Promise((resolve) => setTimeout(resolve, 30));
     await expect(runJavaCatalogBuild(cancel.project)).rejects.toThrow(/already running/);

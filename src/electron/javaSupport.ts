@@ -317,7 +317,12 @@ export async function runJavaCatalogBuild(projectRoot: string, limits: { timeout
   if (!(await regularFile(wrapper))) throw new Error(`Linked project does not have a regular ${wrapperName} wrapper`);
   const fixedArgs = ["bordeauxCatalog", "--no-daemon", "--console=plain"];
   const child = process.platform === "win32"
-    ? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", windowsGradleCommand(wrapper, fixedArgs)], { cwd: canonicalRoot, env: sanitizedBuildEnvironment(), windowsHide: true })
+    ? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", windowsGradleCommand(wrapper, fixedArgs)], {
+        cwd: canonicalRoot,
+        env: sanitizedBuildEnvironment(),
+        windowsHide: true,
+        windowsVerbatimArguments: true,
+      })
     : spawn(wrapper, fixedArgs, { cwd: canonicalRoot, env: sanitizedBuildEnvironment(), detached: true });
   const killGraceMs = limits.killGraceMs ?? 2_000;
   activeBuild = { child, canceled: false, killGraceMs };
