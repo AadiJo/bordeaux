@@ -18,9 +18,11 @@ const state = {
   activeProjectOperations: 0,
   maxConcurrentProjectOperations: 0,
   saveDelayMs: 0,
-  restoreDelayMs: Number.parseInt(process.env.BORDEAUX_BENCHMARK_RESTORE_DELAY_MS || "0", 10),
+  mainDirty: false,
 };
 let menuListener = null;
+let releaseRestore;
+const restoreGate = new Promise((resolve) => { releaseRestore = resolve; });
 const unsubscribe = () => undefined;
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const projectOperation = async (kind, operation) => {
@@ -37,19 +39,28 @@ const projectOperation = async (kind, operation) => {
 const openProject = () => projectOperation("open", async () => {
   const reopening = state.currentFile === "opened";
   state.currentFile = reopening ? "reopened" : "opened";
+  state.mainDirty = false;
+  state.dirtyValues.push(false);
   return { project: clone(reopening ? reopenedFixture : openedFixture) };
 });
 
 contextBridge.exposeInMainWorld("bordeauxAPI", {
   platform: "linux",
   restoreLastProject: () => projectOperation("restore", async () => {
-    if (state.restoreDelayMs) await delay(state.restoreDelayMs);
+    await restoreGate;
     state.currentFile = "original";
+    state.mainDirty = false;
+    state.dirtyValues.push(false);
     return { project: clone(fixture) };
   }),
   openProject,
   openRecentProject: openProject,
-  newProject: async () => { state.currentFile = null; return { project: clone(fixture) }; },
+  newProject: async () => {
+    state.currentFile = null;
+    state.mainDirty = false;
+    state.dirtyValues.push(false);
+    return { project: clone(fixture) };
+  },
   saveProject: (project) => projectOperation("save", async () => {
     const target = state.currentFile;
     if (state.saveDelayMs) await delay(state.saveDelayMs);
@@ -78,7 +89,7 @@ contextBridge.exposeInMainWorld("bordeauxAPI", {
   installJavaSupport: async () => null,
   buildJavaCatalog: async () => null,
   cancelJavaCatalogBuild: async () => null,
-  setDirty: (dirty) => state.dirtyValues.push(Boolean(dirty)),
+  setDirty: (dirty) => { state.mainDirty = Boolean(dirty); state.dirtyValues.push(state.mainDirty); },
   publishAgentSession: (snapshot) => state.publishedProjects.push(clone(snapshot.project)),
   updateAgentProposalStatus: () => undefined,
   acknowledgeAgentProposal: () => undefined,
@@ -89,5 +100,6 @@ contextBridge.exposeInMainWorld("bordeauxAPI", {
   onMenuCommand: (listener) => { menuListener = listener; return () => { if (menuListener === listener) menuListener = null; }; },
   __benchmarkCommand: (command) => menuListener?.({ command }),
   __benchmarkConfigure: (options) => { state.saveDelayMs = Math.max(0, Number(options?.saveDelayMs) || 0); },
+  __benchmarkReleaseRestore: () => releaseRestore(),
   __benchmarkState: () => clone(state),
 });

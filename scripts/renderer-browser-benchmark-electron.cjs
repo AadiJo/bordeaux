@@ -13,6 +13,7 @@ const workerAsset = process.env.BORDEAUX_BENCHMARK_WORKER_ASSET || "";
 const frameBudgetMs = 1000 / 60;
 const primaryPath = { id: "browser_benchmark_path", name: "100-waypoint browser benchmark" };
 const alternatePath = { id: "browser_benchmark_alternate", name: "Alternate benchmark path" };
+const reopenedProjectName = "Reopened renderer browser benchmark";
 
 if (!rendererHtml) throw new Error("BORDEAUX_BENCHMARK_RENDERER_HTML is required");
 
@@ -155,11 +156,11 @@ function installProbe(waypointIndex) {
     tagged.curve.style.removeProperty('stroke-opacity');
     state.taggedGeometry = null;
   };
-  const colorFor = (sequence, offset) => [
-    24 + (sequence * (53 + offset * 4)) % 208,
-    24 + (sequence * (89 + offset * 6)) % 208,
-    24 + (sequence * (127 + offset * 10)) % 208,
-  ];
+  const colorFor = (sequence, offset) => {
+    const salt = offset === 1 ? 0x35a7bd : 0xc8642e;
+    const packed = ((((sequence * 0x9e3779) >>> 0) ^ salt) & 0xffffff) >>> 0;
+    return [(packed >>> 16) & 0xff, (packed >>> 8) & 0xff, packed & 0xff];
+  };
   const applyPaintToken = (geometry, token) => {
     clearPaintToken();
     const waypointColor = `rgb(${token.waypoint.join(' ')})`;
@@ -180,7 +181,7 @@ function installProbe(waypointIndex) {
     const geometry = inspect();
     const current = geometry?.value || null;
     if (state.active) {
-      state.frames.push(timestamp);
+      state.frames.push(epoch());
       if (current?.curveCorrect && (!state.lastGeometry
         || Math.hypot(current.localX - state.lastGeometry.localX, current.localY - state.lastGeometry.localY) > 0.75)) {
         state.geometry.push(epoch());
@@ -214,9 +215,10 @@ function installProbe(waypointIndex) {
       return { frames: state.frames, geometry: state.geometry };
     },
     armPaintToken() {
+      const clearedPrevious = Boolean(state.taggedGeometry);
       clearPaintToken();
       const sequence = ++state.tokenSequence;
-      const token = { id: sequence, waypoint: colorFor(sequence, 1), curve: colorFor(sequence, 2) };
+      const token = { id: sequence, waypoint: colorFor(sequence, 1), curve: colorFor(sequence, 2), clearedPrevious };
       state.armedPaintToken = token;
       return token;
     },
@@ -324,6 +326,7 @@ app.whenReady().then(async () => {
         throw error;
       }
     }
+    await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkReleaseRestore()");
     await waitFor(
       () => window.webContents.executeJavaScript('document.querySelectorAll(\'[data-role="wp"]\').length === 100'),
       10000,
@@ -373,12 +376,13 @@ app.whenReady().then(async () => {
     const restoreTargetLocal = await localAt(restoreTarget);
     moveMouse(restoreTarget);
     await waitForCorrect(restoreTarget, restoreTargetLocal);
+    await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkReleaseRestore()");
     const restoreConflictState = await waitFor(async () => {
       const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
       return state.projectOperations.some((entry) => entry === "restore:finish:original")
-        && state.currentFile === null ? state : null;
+        && state.currentFile === null && state.mainDirty === true ? state : null;
     }, 4000, "the delayed restore conflict to detach its file");
-    const restoreConflictStaysDirty = restoreConflictState.dirtyValues.at(-1) === true;
+    const restoreConflictStaysDirty = restoreConflictState.mainDirty === true;
     releaseMouse(restoreTarget);
 
     await loadFixture();
@@ -408,12 +412,17 @@ app.whenReady().then(async () => {
     await pressMouse(origin);
     const lastMoveLocal = await localAt(lastMove);
     const releaseLocal = await localAt(release);
+    const correctnessPaintToken = await window.webContents.executeJavaScript("window.__rendererBenchmark.armPaintToken()");
+    const correctnessPaintStartedAt = epochNow();
+    const correctnessPaint = paintedGeometryAfter(correctnessPaintStartedAt, { target: lastMove, token: correctnessPaintToken });
     moveMouse(lastMove);
     await waitForCorrect(lastMove, lastMoveLocal);
+    const correctnessPaintAt = await correctnessPaint;
+    const nativeImagePaintProof = correctnessPaintAt >= correctnessPaintStartedAt;
     await window.webContents.executeJavaScript("window.__rendererBenchmark.startTrace()");
     releaseMouse(release);
     await waitForCorrect(release, releaseLocal);
-    await delay(100);
+    await delay(500);
     const releaseFinal = await readProbe();
     const trace = await window.webContents.executeJavaScript("window.__rendererBenchmark.stopTrace()");
     const releaseStable = trace.length > 0 && trace.every((point) => point.curveCorrect
@@ -426,6 +435,7 @@ app.whenReady().then(async () => {
     const saveTargetLocal = await localAt(saveTarget);
     moveMouse(saveTarget);
     await waitForCorrect(saveTarget, saveTargetLocal);
+    const closeGuardDirty = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState().mainDirty === true");
     await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkCommand('save-project')");
     const savedState = await waitFor(async () => {
       const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
@@ -435,7 +445,6 @@ app.whenReady().then(async () => {
     const savedWaypoint = savedState.savedProjects.at(-1).paths[0].waypoints[50];
     const originalWaypoint = JSON.parse(Buffer.from(process.env.BORDEAUX_BENCHMARK_PROJECT, "base64").toString("utf8")).paths[0].waypoints[50];
     const saveIncludesDraft = Math.hypot(savedWaypoint.x - originalWaypoint.x, savedWaypoint.y - originalWaypoint.y) > 0.02;
-    const closeGuardDirty = savedState.dirtyValues.includes(true);
 
     await loadFixture();
     const undoOrigin = await center();
@@ -548,7 +557,16 @@ app.whenReady().then(async () => {
     );
     releaseMouse({ x: switchOrigin.x + 70, y: switchOrigin.y + 30 });
     await delay(150);
-    const pathSwitchCancelsDrag = switched && await window.webContents.executeJavaScript('document.querySelectorAll(\'[data-role="wp"]\').length === 3');
+    const pathSwitchShowsDestination = switched && await window.webContents.executeJavaScript('document.querySelectorAll(\'[data-role="wp"]\').length === 3');
+    const pathSwitchSaveCount = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState().savedProjects.length");
+    await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkCommand('save-project')");
+    const pathSwitchState = await waitFor(async () => {
+      const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
+      return state.savedProjects.length > pathSwitchSaveCount ? state : null;
+    }, 3000, "the project after switching paths during a drag");
+    const switchedPrimaryWaypoint = pathSwitchState.savedProjects.at(-1).paths[0].waypoints[50];
+    const pathSwitchCancelsDrag = pathSwitchShowsDestination
+      && Math.hypot(switchedPrimaryWaypoint.x - originalCommandWaypoint.x, switchedPrimaryWaypoint.y - originalCommandWaypoint.y) <= 1e-6;
 
     await loadFixture();
     const openDragOrigin = await center();
@@ -563,13 +581,14 @@ app.whenReady().then(async () => {
       return state.projectOperations.some((entry) => entry === "open:finish:opened") ? state : null;
     }, 3000, "the project opened during a drag");
     releaseMouse(openDragTarget);
-    await delay(200);
+    await delay(1000);
     const openDuringDragState = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
     const openDuringDragKeepsFile = !openDuringDragState.projectWrites.some((write) =>
       write.kind === "autosave" && write.target === "opened" && write.projectName === originalProject.name);
 
     await delay(150);
     await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkConfigure({ saveDelayMs: 120 })");
+    const overlapOperationStart = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState().projectOperations.length");
     await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkCommand('save-project')");
     await waitFor(
       () => window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState().projectOperations.some((entry) => entry.startsWith('save:start:'))"),
@@ -579,11 +598,28 @@ app.whenReady().then(async () => {
     await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkCommand('open-project')");
     const overlappingSaveOpenState = await waitFor(async () => {
       const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
-      const finished = state.projectOperations.filter((entry) => entry.startsWith("save:finish:") || entry.startsWith("open:finish:"));
+      const finished = state.projectOperations.slice(overlapOperationStart)
+        .filter((entry) => entry.startsWith("save:finish:") || entry.startsWith("open:finish:"));
       return finished.length >= 2 ? state : null;
     }, 4000, "the save and project-open sequence");
-    const saveOpenKeepsFile = overlappingSaveOpenState.currentFile === "reopened"
-      && overlappingSaveOpenState.maxConcurrentProjectOperations === 1;
+    const overlapWrites = overlappingSaveOpenState.projectWrites.length;
+    await delay(150);
+    const overlapOrigin = await center();
+    const overlapTarget = { x: overlapOrigin.x + 28, y: overlapOrigin.y + 12 };
+    await pressMouse(overlapOrigin);
+    const overlapTargetLocal = await localAt(overlapTarget);
+    moveMouse(overlapTarget);
+    await waitForCorrect(overlapTarget, overlapTargetLocal);
+    releaseMouse(overlapTarget);
+    const postOpenAutosaveState = await waitFor(async () => {
+      const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
+      return state.projectWrites.slice(overlapWrites).some((write) => write.kind === "autosave") ? state : null;
+    }, 3000, "an autosave after the overlapping project open");
+    const postOpenAutosaves = postOpenAutosaveState.projectWrites.slice(overlapWrites).filter((write) => write.kind === "autosave");
+    const saveOpenKeepsFile = postOpenAutosaveState.currentFile === "reopened"
+      && postOpenAutosaveState.maxConcurrentProjectOperations === 1
+      && postOpenAutosaves.some((write) => write.target === "reopened" && write.projectName === reopenedProjectName)
+      && postOpenAutosaves.every((write) => write.target !== "opened");
 
     const saveSnapshot = async (description) => {
       const before = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState().savedProjects.length");
@@ -663,7 +699,7 @@ app.whenReady().then(async () => {
       && Math.hypot(sourceEnd.x - targetStart.x, sourceEnd.y - targetStart.y) <= 1e-6
       && Math.hypot(sourceEnd.x - expectedSourceEnd.x, sourceEnd.y - expectedSourceEnd.y) <= 1e-6;
 
-    return { realWorkerRoundTrip, restoreConflictStaysDirty, releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, commandSurvivesDrag, commandUndoRestores, cancelPreservesRedo, pathSwitchCancelsDrag, openDuringDragKeepsFile, saveOpenKeepsFile, renameSurvivesDrag, moveSurvivesDrag, linkSurvivesDrag };
+    return { realWorkerRoundTrip, nativeImagePaintProof, restoreConflictStaysDirty, releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, commandSurvivesDrag, commandUndoRestores, cancelPreservesRedo, pathSwitchCancelsDrag, openDuringDragKeepsFile, saveOpenKeepsFile, renameSurvivesDrag, moveSurvivesDrag, linkSurvivesDrag };
   }
 
   async function measureLatency() {
@@ -678,7 +714,12 @@ app.whenReady().then(async () => {
       await waitForPaintQuiet(34);
       const direction = index % 2 === 0 ? 1 : -1;
       target = { x: origin.x + direction * (42 + index % 5), y: origin.y + ((index % 7) - 3) * 4 };
+      const paintsBeforeArm = paintTimestamps.length;
       const token = await window.webContents.executeJavaScript("window.__rendererBenchmark.armPaintToken()");
+      if (token.clearedPrevious) {
+        await waitFor(() => paintTimestamps.length > paintsBeforeArm, 4000, "the paint-token clear to reach the compositor");
+        await waitForPaintQuiet(34);
+      }
       const sentAt = epochNow();
       const paintedGeometry = paintedGeometryAfter(sentAt, { target, token });
       moveMouse(target);
@@ -723,7 +764,13 @@ app.whenReady().then(async () => {
     await waitForCorrect(target, finalTargetLocal);
     releaseMouse(target);
     const probe = await window.webContents.executeJavaScript("window.__rendererBenchmark.stop()");
-    const frameDeltas = probe.frames.slice(1).map((timestamp, index) => timestamp - probe.frames[index]);
+    const framesDuringInput = probe.frames.filter((timestamp) => timestamp >= startedAt && timestamp <= endedAt);
+    // Bound the sample so a stall that resumes after input ends is still charged to the input window.
+    const frameBoundaries = [startedAt, ...framesDuringInput, endedAt];
+    const frameDeltas = frameBoundaries.slice(1)
+      .map((timestamp, index) => timestamp - frameBoundaries[index])
+      .filter((duration) => duration > 0);
+    if (!frameDeltas.length) throw new Error("The stress input window produced no measurable frame intervals.");
     const geometry = probe.geometry.filter((timestamp) => timestamp >= startedAt && timestamp <= endedAt);
     const geometryBoundaries = [startedAt, ...geometry, endedAt];
     const geometryGaps = geometryBoundaries.slice(1).map((timestamp, index) => timestamp - geometryBoundaries[index]);

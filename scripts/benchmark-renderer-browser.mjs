@@ -9,7 +9,6 @@ import { build } from "vite";
 
 const repository = fileURLToPath(new URL("..", import.meta.url));
 const runner = path.join(repository, "scripts", "renderer-browser-benchmark-electron.cjs");
-const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-browser-benchmark-"));
 
 function option(name, fallback) {
   const index = process.argv.indexOf(`--${name}`);
@@ -28,6 +27,13 @@ const output = path.resolve(repository, option("output", ".benchmark-results/ren
 
 if (!Number.isInteger(trials) || trials < 1) throw new Error("--trials must be at least 1");
 if (!Number.isFinite(variantTimeoutMs) || variantTimeoutMs < 1000) throw new Error("--variant-timeout-ms must be at least 1000");
+if (!correctnessOnly && (!Number.isInteger(Number.parseInt(latencySamples, 10)) || Number.parseInt(latencySamples, 10) < 1)) {
+  throw new Error("--latency-samples must be at least 1");
+}
+if (!correctnessOnly && (!Number.isInteger(Number.parseInt(stressMs, 10)) || Number.parseInt(stressMs, 10) < 100)) {
+  throw new Error("--stress-ms must be at least 100");
+}
+const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-browser-benchmark-"));
 
 function makePath(count, name, id) {
   return {
@@ -131,7 +137,6 @@ function runVariant(label, variant, checkCorrectness, runCorrectnessOnly = false
         BORDEAUX_BENCHMARK_PROJECT: encodedFixture,
         BORDEAUX_BENCHMARK_RENDERER_HTML: variant.html,
         BORDEAUX_BENCHMARK_WORKER_ASSET: variant.workerAsset ? `./assets/${variant.workerAsset}` : "",
-        BORDEAUX_BENCHMARK_RESTORE_DELAY_MS: "750",
         BORDEAUX_BROWSER_LATENCY_SAMPLES: latencySamples,
         BORDEAUX_BROWSER_STRESS_MS: stressMs,
         BORDEAUX_BROWSER_CHECK_CORRECTNESS: checkCorrectness ? "1" : "0",
@@ -189,9 +194,12 @@ function aggregate(runs, workerBundle) {
   };
 }
 
-const improvement = (upstream, candidate, higherIsBetter = false) => higherIsBetter
-  ? (candidate - upstream) / upstream * 100
-  : (upstream - candidate) / upstream * 100;
+const improvement = (upstream, candidate, higherIsBetter = false) => {
+  if (upstream === 0) return null;
+  return higherIsBetter
+    ? (candidate - upstream) / upstream * 100
+    : (upstream - candidate) / upstream * 100;
+};
 
 function comparison(upstream, candidate) {
   return [
@@ -204,7 +212,7 @@ function comparison(upstream, candidate) {
   ].map((row) => ({ ...row, improvementPercent: improvement(row.upstream, row.candidate, row.higherIsBetter) }));
 }
 
-const format = (value, digits = 2) => Number(value.toFixed(digits));
+const format = (value, digits = 2) => value === null || !Number.isFinite(value) ? "n/a" : Number(value.toFixed(digits));
 
 try {
   if (correctnessOnly) {
@@ -255,7 +263,7 @@ try {
       viewport: "1440x900 offscreen Electron compositor at 60 Hz",
       input: `mouse input at 120 Hz; ${latencySamples} isolated latency samples; ${stressMs} ms stress; ${trials} alternating trials`,
       correctPaint: "input dispatch to the first compositor bitmap containing per-input colors on the exact waypoint and centerline nodes after their screen/SVG geometry matches",
-      droppedFrames: "missed 16.67 ms requestAnimationFrame slots during continuous input",
+      droppedFrames: "missed 16.67 ms requestAnimationFrame slots between the bounded start and end of continuous input",
       worker: "production Vite worker bundle loaded directly and required to complete a structured-clone request/result round trip",
       paintProof: "the offscreen NativeImage must contain the sample's unique waypoint color at the target and its unique centerline color immediately outside the waypoint",
     },
@@ -267,7 +275,8 @@ try {
   process.stdout.write(`upstream ${report.revisions.upstream} vs candidate ${report.revisions.candidate}\n\n`);
   process.stdout.write("| Metric | Upstream | Candidate | Improvement |\n| --- | ---: | ---: | ---: |\n");
   for (const row of report.comparison) {
-    process.stdout.write(`| ${row.metric} | ${format(row.upstream)} ${row.unit} | ${format(row.candidate)} ${row.unit} | ${format(row.improvementPercent, 1)}% |\n`);
+    const formattedImprovement = format(row.improvementPercent, 1);
+    process.stdout.write(`| ${row.metric} | ${format(row.upstream)} ${row.unit} | ${format(row.candidate)} ${row.unit} | ${formattedImprovement === "n/a" ? formattedImprovement : `${formattedImprovement}%`} |\n`);
   }
   process.stdout.write(`\nRaw report: ${path.relative(repository, output)}\n`);
   }
