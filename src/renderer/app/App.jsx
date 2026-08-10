@@ -419,9 +419,9 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         const proposalKey = proposal.id + ':' + proposal.status;
         if (proposalKey === lastProposalKey) return;
         lastProposalKey = proposalKey;
-        if (window.bordeauxAPI.acknowledgeAgentProposal) window.bordeauxAPI.acknowledgeAgentProposal(proposal.id);
         const stale = proposal.baseSessionId !== agentSessionId || proposal.baseRevision !== agentRevision.current;
         const received = stale && proposal.status === 'ready' ? { ...proposal, status: 'stale' } : proposal;
+        if (window.bordeauxAPI.acknowledgeAgentProposal) window.bordeauxAPI.acknowledgeAgentProposal(proposal.id, agentSessionId, agentRevision.current);
         if (stale && proposal.status === 'ready' && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(proposal.id, 'stale');
         setAgentProposal(received);
         setAgentCandidateId(proposal.recommendedCandidateId || null);

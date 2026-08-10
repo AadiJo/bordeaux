@@ -229,6 +229,28 @@ describe("agent session and private bridge", () => {
     expect((await pending as any).status).toBe("ready");
   });
 
+  it("does not return ready when the renderer acknowledges against a stale revision", async () => {
+    const notifications: Array<{ intent: string; status: string }> = [];
+    let service!: AgentSessionService;
+    service = new AgentSessionService((proposal, requireReceipt) => {
+      notifications.push({ intent: proposal.intent, status: proposal.status });
+      if (requireReceipt && proposal.intent === "Stale provisional preview") {
+        service.acknowledgeProposal(proposal.id, proposal.baseSessionId, proposal.baseRevision + 1);
+      }
+    }, () => null);
+    service.publishSnapshot(snapshot());
+    const committed: any = await service.request({ method: "plan_path", params: {
+      intent: "Committed preview", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 2, y: 1 }], maximumCandidates: 1,
+    } });
+
+    await expect(service.request({ method: "plan_path", params: {
+      intent: "Stale provisional preview", alliance: "blue", start: { x: 1, y: 1 }, goals: [{ x: 3, y: 1 }], maximumCandidates: 1,
+    } })).rejects.toThrow("changed before it acknowledged");
+
+    expect(service.getActiveProposal()?.id).toBe(committed.proposalId);
+    expect(notifications.at(-1)).toEqual({ intent: "Committed preview", status: "ready" });
+  });
+
   it("rolls back staging when cancellation arrives during renderer acknowledgment", async () => {
     let waitForReceipt = false;
     let proposalReceived: (() => void) | undefined;

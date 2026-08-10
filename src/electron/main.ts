@@ -935,11 +935,12 @@ ipcMain.on("agent:proposalStatus", (event, rawId, rawStatus, rawRevision) => {
   if (typeof rawId !== "string" || !["applied", "rejected", "stale"].includes(String(rawStatus))) return;
   agentSessions.updateProposalStatus(rawId, rawStatus as "applied" | "rejected" | "stale", typeof rawRevision === "number" ? rawRevision : undefined);
 });
-ipcMain.on("agent:proposalReceipt", (event, rawId) => {
+ipcMain.on("agent:proposalReceipt", (event, rawId, rawSessionId, rawRevision) => {
   assertTrustedSender(event);
-  if (typeof rawId !== "string") return;
+  if (typeof rawId !== "string" || typeof rawSessionId !== "string" || !Number.isSafeInteger(rawRevision) || rawRevision < 0) return;
   const receipt = proposalReceipts.get(rawId);
   if (!receipt) return;
+  agentSessions.acknowledgeProposal(rawId, rawSessionId, rawRevision);
   proposalReceipts.delete(rawId);
   clearTimeout(receipt.timer);
   receipt.resolve();

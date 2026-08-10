@@ -325,6 +325,12 @@ export class AgentSessionService {
     if (status === "applied" && Number.isSafeInteger(appliedRevision)) proposal.appliedRevision = appliedRevision;
   }
 
+  acknowledgeProposal(proposalId: string, sessionId: string, revision: number): void {
+    const proposal = this.proposals.get(proposalId);
+    if (!proposal || proposal.status !== "ready") return;
+    if (proposal.baseSessionId !== sessionId || proposal.baseRevision !== revision) proposal.status = "stale";
+  }
+
   getActiveProposal(): AgentProposal | null {
     this.expireProposals();
     const proposals = [...this.proposals.values()];
