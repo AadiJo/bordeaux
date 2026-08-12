@@ -334,6 +334,82 @@ class BordeauxRuntimeTest {
     }
 
     @Test
+    void positionFollowingDoesNotJumpToANearbyFutureLoopEndpoint() {
+        List<BordeauxSample> samples = List.of(
+                positionedSample(0, 0, 0), positionedSample(1, 1, 0),
+                positionedSample(2, 1, 1), positionedSample(3, 0, 1),
+                positionedSample(4, 0.01, 0));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "loop", "Loop", 1, CATALOG_ID, HASH, List.of(), samples,
+                List.of(new BordeauxFollowSection(0, BordeauxFollowSection.Mode.POSITION, 0, 4)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        assertEquals(2, follower.update(0.02, 0.01, 0).index());
+        assertFalse(follower.isFinished());
+        follower.update(0.02, 1, 0);
+        follower.update(0.02, 1, 1);
+        follower.update(0.02, 0, 1);
+        follower.update(0.02, 0.01, 0);
+        assertTrue(follower.isFinished());
+    }
+
+    @Test
+    void sparsePositionFollowingCanCompleteWithoutFollowingEveryPolylineVertex() {
+        List<BordeauxSample> samples = List.of(
+                positionedSample(0, 0, 0), positionedSample(1, 1, 0), positionedSample(2, 1, 1));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "sparse", "Sparse", 1, CATALOG_ID, HASH, List.of(), samples,
+                List.of(new BordeauxFollowSection(0, BordeauxFollowSection.Mode.POSITION, 0, 2)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        assertEquals(2, follower.update(0.02, 0, 0).index());
+        assertEquals(2, follower.update(0.02, 1, 1).index());
+        follower.update(0.02, 1, 1);
+        assertTrue(follower.isFinished());
+    }
+
+    @Test
+    void positionNoiseCannotAccumulateProgressAroundALoop() {
+        List<BordeauxSample> samples = List.of(
+                positionedSample(0, 0, 0), positionedSample(1, 1, 0),
+                positionedSample(2, 1, 1), positionedSample(3, 0, 1),
+                positionedSample(4, 0.01, 0));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "noisy-loop", "Noisy loop", 1, CATALOG_ID, HASH, List.of(), samples,
+                List.of(new BordeauxFollowSection(0, BordeauxFollowSection.Mode.POSITION, 0, 4)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        for (int update = 0; update < 200; update++) {
+            follower.update(0.02, update % 2 == 0 ? 0 : 0.04, 0);
+        }
+        assertFalse(follower.isFinished());
+        assertEquals(0, follower.sectionIndex());
+    }
+
+    @Test
+    void positionFollowingAdvancesThroughOnlyCoincidentSamples() {
+        List<BordeauxSample> samples = List.of(
+                positionedSample(0, 0, 0), positionedSample(1, 0, 0),
+                positionedSample(2, 0, 0), positionedSample(3, 1, 0));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "coincident", "Coincident", 1, CATALOG_ID, HASH, List.of(), samples,
+                List.of(new BordeauxFollowSection(0, BordeauxFollowSection.Mode.POSITION, 0, 3)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        assertEquals(3, follower.update(0.02, 0, 0).index());
+        assertFalse(follower.isFinished());
+        follower.update(0.02, 1, 0);
+        assertTrue(follower.isFinished());
+
+        BordeauxPathEvents stationary = new BordeauxPathEvents(
+                "stationary", "Stationary", 1, CATALOG_ID, HASH, List.of(), samples.subList(0, 2),
+                List.of(new BordeauxFollowSection(0, BordeauxFollowSection.Mode.POSITION, 0, 1)));
+        BordeauxReferenceFollower stationaryFollower = new BordeauxReferenceFollower(stationary);
+        stationaryFollower.update(0.02, 0, 0);
+        assertTrue(stationaryFollower.isFinished());
+    }
+
+    @Test
     void positionFollowingDoesNotScanEveryRemainingSamplePerUpdate() {
         List<BordeauxSample> samples = new ArrayList<>();
         for (int index = 0; index < 50_000; index++) {
@@ -498,6 +574,10 @@ class BordeauxRuntimeTest {
 
     private static BordeauxSample sample(int index, double timeS, double xM) {
         return new BordeauxSample(index, timeS, xM, xM / 4, xM, 0, 0, index == 4 ? 0 : 1);
+    }
+
+    private static BordeauxSample positionedSample(int index, double xM, double yM) {
+        return new BordeauxSample(index, index * 0.2, index, index / 4.0, xM, yM, 0, index == 4 ? 0 : 1);
     }
 
     private static BordeauxCommandRegistry registry(List<String> created, String... ids) {
