@@ -47,7 +47,12 @@
   }
 
   // shortest signed angle difference (radians)
-  function angWrap(a) { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; }
+  function angWrap(a) {
+    const turn = 2 * Math.PI, wrapped = a % turn;
+    if (wrapped > Math.PI) return wrapped - turn;
+    if (wrapped < -Math.PI) return wrapped + turn;
+    return wrapped;
+  }
   function angLerp(a, b, t) { return a + angWrap(b - a) * t; }
   const D2R = Math.PI / 180, R2D = 180 / Math.PI;
   function robotHardLimits(robot) {

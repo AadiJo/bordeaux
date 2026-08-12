@@ -1,6 +1,8 @@
 // @ts-nocheck
 // Generated from Bordeaux (standalone).html. Do not edit by hand.
 import { indexIntervalPolicies } from "../planners/intervalPolicies";
+import { wrapRadians } from "./angles";
+
   // ---- geometry helpers ----
   const lerp = (a, b, t) => a + (b - a) * t;
   function bez(p0, c0, c1, p1, t) {
@@ -19,7 +21,7 @@ import { indexIntervalPolicies } from "../planners/intervalPolicies";
   }
 
   // shortest signed angle difference (radians)
-  function angWrap(a) { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; }
+  const angWrap = wrapRadians;
   function angLerp(a, b, t) { return a + angWrap(b - a) * t; }
   const D2R = Math.PI / 180, R2D = 180 / Math.PI;
 
