@@ -55,18 +55,22 @@ export function activeRanges(ranges: readonly EffectiveRange[], fraction: number
   return ranges.filter((range) => fraction >= range.start - EPSILON && fraction <= range.end + EPSILON);
 }
 
+function rangesOverlappingInterval(ranges: readonly EffectiveRange[], before: number, after: number): EffectiveRange[] {
+  const start = Math.min(before, after);
+  const end = Math.max(before, after);
+  return ranges.filter((range) => Math.min(end, range.end) - Math.max(start, range.start) >= -EPSILON);
+}
+
 function translationHasPriorityForInterval(
   ranges: readonly EffectiveRange[],
   transitions: readonly HeadingTransitionWindow[],
   before: number,
   after: number,
 ): boolean {
-  const start = Math.min(before, after);
-  const end = Math.max(before, after);
   const overlaps = (candidateStart: number, candidateEnd: number) => (
-    Math.min(end, candidateEnd) - Math.max(start, candidateStart) >= -EPSILON
+    Math.min(Math.max(before, after), candidateEnd) - Math.max(Math.min(before, after), candidateStart) >= -EPSILON
   );
-  const active = ranges.filter((range) => overlaps(range.start, range.end));
+  const active = rangesOverlappingInterval(ranges, before, after);
   const activeTransitions = transitions.filter((transition) => overlaps(transition.start, transition.end));
   return active.length + activeTransitions.length > 0
     && active.every((range) => range.rotationPriority === "translation")
@@ -90,12 +94,18 @@ function angularLimits(path: PathDoc, ranges: readonly EffectiveRange[], fractio
 }
 
 function intervalAngularLimits(path: PathDoc, ranges: readonly EffectiveRange[], before: number, after: number) {
-  const first = angularLimits(path, ranges, before);
-  const second = angularLimits(path, ranges, after);
+  let velocity = path.constraints.maxAngVel * DEG;
+  let acceleration = path.constraints.maxAngAccel * DEG;
+  let deceleration = (path.constraints.maxAngDecel ?? path.constraints.maxAngAccel) * DEG;
+  rangesOverlappingInterval(ranges, before, after).forEach((range) => {
+    velocity = Math.min(velocity, range.maxAngVel * DEG);
+    acceleration = Math.min(acceleration, range.maxAngAccel * DEG);
+    deceleration = Math.min(deceleration, range.maxAngAccel * DEG);
+  });
   return {
-    velocity: Math.min(first.velocity, second.velocity),
-    acceleration: Math.min(first.acceleration, second.acceleration),
-    deceleration: Math.min(first.deceleration, second.deceleration),
+    velocity: Math.max(velocity, EPSILON),
+    acceleration: Math.max(acceleration, EPSILON),
+    deceleration: Math.max(deceleration, EPSILON),
   };
 }
 
@@ -225,7 +235,13 @@ export function applyRotationPriority(path: PathDoc, result: PlannerResult, robo
       samples[index - 1].f,
       samples[index].f,
     );
-    if (priorityHere) following = true;
+    const previousDt = index > 1 ? result.samples[index - 1].t - result.samples[index - 2].t : 0;
+    const plannedOmega = previousDt > EPSILON
+      ? wrapRadians(desired[index - 1] - desired[index - 2]) / previousDt
+      : 0;
+    const caughtUp = Math.abs(desired[index - 1] - actual) <= 0.05 * DEG
+      && Math.abs(plannedOmega - omega) <= 0.05 * DEG;
+    following = priorityHere || (following && !caughtUp);
     if (!following || dt <= EPSILON) {
       actual = desired[index];
       omega = samples[index].angularVelocityRadps;

@@ -48,6 +48,47 @@ describe("motion features", () => {
     expect(faster.v[1]).toBeCloseTo(2, 6);
   });
 
+  it("applies narrow constraint ranges to every overlapping profile interval", () => {
+    const project = createDemoProject();
+    const points = Array.from({ length: 57 }, (_, index) => ({ s: index, curv: 0 })) as any;
+    const range = {
+      f0: 0.505, f1: 0.51,
+      maxVel: 0.25, maxAccel: 0.1, maxDecel: 0.1, maxAngVel: 10, maxAngAccel: 5,
+    };
+    const firstAfterRange = points.findIndex((point: { s: number }) => point.s / 56 > range.f1);
+    const before = firstAfterRange - 1;
+    expect(points[before].s / 56).toBeLessThan(range.f0);
+
+    const constraints = {
+      ...project.paths[0].constraints,
+      maxVel: 4, maxAccel: 10, maxDecel: 10, maxAngVel: 360, maxAngAccel: 720,
+    };
+    const velocity = PM.profile(points, constraints, 4, 4, { ranges: [range] });
+    expect(Math.max(velocity.v[before], velocity.v[firstAfterRange])).toBeLessThanOrEqual(range.maxVel);
+
+    const linearRange = { ...range, maxVel: 100, maxAngVel: 360 };
+    const linearConstraints = { ...constraints, maxVel: 100 };
+    const accelerating = PM.profile(points, linearConstraints, 0, 100, { ranges: [linearRange] });
+    const acceleration = (accelerating.v[firstAfterRange] ** 2 - accelerating.v[before] ** 2) / 2;
+    expect(acceleration).toBeLessThanOrEqual(range.maxAccel + 1e-9);
+    const decelerating = PM.profile(points, linearConstraints, 100, 0, { ranges: [linearRange] });
+    const deceleration = (decelerating.v[before] ** 2 - decelerating.v[firstAfterRange] ** 2) / 2;
+    expect(deceleration).toBeLessThanOrEqual(range.maxDecel + 1e-9);
+
+    const heading = points.map((_: unknown, index: number) => index < firstAfterRange ? 0 : Math.PI / 2);
+    const angular = PM.profile(points, constraints, 4, 4, { ranges: [{ ...range, maxVel: 4 }], heading });
+    const angularVelocity = (Math.PI / 2) / (angular.t[firstAfterRange] - angular.t[before]);
+    expect(angularVelocity).toBeLessThanOrEqual(range.maxAngVel * Math.PI / 180 + 1e-9);
+
+    const accelerationHeading = points.map((_: unknown, index: number) => index < firstAfterRange ? 0 : 0.2);
+    const angularAcceleration = PM.profile(points, linearConstraints, 100, 100, {
+      ranges: [{ ...linearRange, maxAngAccel: 1 }],
+      heading: accelerationHeading,
+    });
+    const accelerationDt = angularAcceleration.t[firstAfterRange] - angularAcceleration.t[before];
+    expect(0.2 / accelerationDt ** 2).toBeLessThanOrEqual(Math.PI / 180 + 1e-9);
+  });
+
   it("acquires the first real target monotonically when Targets becomes active", () => {
     const points = Array.from({ length: 25 }, (_, index) => ({ s: index * 0.25 }));
     const waypoints = buildWaypoints([
@@ -591,6 +632,106 @@ describe("motion features", () => {
     expect(after.t).toBeCloseTo(before.t, 1);
     expect(after.velocityMps).toBeCloseTo(before.velocityMps, 1);
     expect(mixed.totalTimeS).toBeGreaterThan(translationOnly.totalTimeS);
+  });
+
+  it("restores heading priority after an early translation range ends", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.constraints = {
+      ...path.constraints,
+      maxVel: 4, maxAccel: 5, maxDecel: 5, maxAngVel: 30, maxAngAccel: 60,
+    };
+    path.waypoints = buildWaypoints([
+      { x: 0.5, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 5.5, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 15.5, y: 2, theta: 180, thetaOn: true },
+    ]);
+    path.ranges = [{
+      anchor: "param", f0: 0.05, f1: 0.15,
+      maxVel: 4, maxAccel: 5, maxDecel: 5, maxAngVel: 30, maxAngAccel: 60,
+      rotationPriority: "heading",
+    }];
+    const headingPriority = getPlanner("profiledSpline").generate({ path: structuredClone(path), robot: project.robot });
+    path.ranges[0].rotationPriority = "translation";
+    const localizedTranslation = getPlanner("profiledSpline").generate({ path, robot: project.robot });
+
+    expect(Math.max(...headingPriority.samples.filter((sample) => sample.f > 0.4).map((sample) => sample.velocityMps)))
+      .toBeLessThan(4);
+    const laterMotion = localizedTranslation.samples.filter((sample) => sample.f > 0.4 && sample.velocityMps > 1e-3);
+    laterMotion.forEach((sample) => {
+      const baseline = headingPriority.samples.reduce((nearest, candidate) => (
+        Math.abs(candidate.f - sample.f) < Math.abs(nearest.f - sample.f) ? candidate : nearest
+      ));
+      expect(sample.velocityMps).toBe(baseline.velocityMps);
+    });
+    expect(localizedTranslation.totalTimeS - headingPriority.totalTimeS).toBeLessThan(0.05);
+  });
+
+  it("keeps catch-up active until authored angular velocity converges", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    const dt = 0.02;
+    const sampleCount = 301;
+    const rangeEnd = 0.4 / 6;
+    path.headingMode = "manual";
+    path.constraints.maxAngVel = 360;
+    path.constraints.maxAngAccel = 30;
+    path.constraints.maxAngDecel = 30;
+    path.waypoints = buildWaypoints([
+      { x: 0, y: 0, theta: 0, thetaOn: true, segType: "line" },
+      { x: 6, y: 0, theta: 180, thetaOn: true },
+    ]);
+    path.ranges = [{
+      anchor: "param", f0: 0, f1: rangeEnd,
+      maxVel: 4, maxAccel: 5, maxDecel: 5, maxAngVel: 360, maxAngAccel: 30,
+      rotationPriority: "translation",
+    }];
+    const desired = Array.from({ length: sampleCount }, (_, index) => (
+      0.3 * Math.sin(Math.min(index * dt, 3.5) * 3)
+    ));
+    const samples = desired.map((headingRad, index) => ({
+      i: index,
+      t: index * dt,
+      s: index * dt,
+      f: index / (sampleCount - 1),
+      x: index * dt,
+      y: 0,
+      headingRad,
+      velocityMps: 1,
+      accelerationMps2: 0,
+      angularVelocityRadps: index === 0 ? 0 : PM.angWrap(headingRad - desired[index - 1]) / dt,
+      curvatureInvM: 0,
+    }));
+    const raw: PlannerResult = {
+      planner: "profiledSpline",
+      samples,
+      markers: [],
+      diagnostics: [],
+      totalDistanceM: 6,
+      totalTimeS: 6,
+    };
+
+    const tracked = applyRotationPriority(path, raw, project.robot);
+    const plannedOmega = (index: number) => index === 0 ? 0 : (
+      PM.angWrap(desired[index] - desired[index - 1])
+      / (samples[index].t - samples[index - 1].t)
+    );
+    const convergenceIndex = tracked.samples.findIndex((sample, index) => index > 1
+      && sample.f > rangeEnd
+      && Math.abs(tracked.samples[index - 1].headingRad - desired[index - 1]) <= 0.05 * Math.PI / 180
+      && Math.abs(tracked.samples[index - 1].angularVelocityRadps - plannedOmega(index - 1)) > 0.05 * Math.PI / 180);
+
+    expect(convergenceIndex).toBeGreaterThan(1);
+    expect(Math.abs(plannedOmega(convergenceIndex))).toBeGreaterThan(0.5);
+    expect(Math.abs(tracked.samples[convergenceIndex].angularVelocityRadps - plannedOmega(convergenceIndex)))
+      .toBeGreaterThan(0.5);
+    const angularAcceleration = tracked.samples.slice(1).map((sample, index) => (
+      Math.abs(sample.angularVelocityRadps - tracked.samples[index].angularVelocityRadps) / dt
+    ));
+    expect(Math.max(...angularAcceleration))
+      .toBeLessThanOrEqual(path.constraints.maxAngAccel * Math.PI / 180 * 1.001);
+    expect(tracked.diagnostics.some((issue) => issue.message.includes("angular limits"))).toBe(false);
   });
 
   it("keeps an earlier heading transition bounded when Translation is selected later", () => {
