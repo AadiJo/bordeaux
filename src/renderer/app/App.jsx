@@ -31,6 +31,13 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
   function normalizeProject(raw) {
     return PathLinks.reconcile(normalizeProjectData(raw));
   }
+  function duplicatePathForLibrary(source, name) {
+    const duplicate = clone(source);
+    duplicate.id = pathId();
+    duplicate.name = name;
+    duplicate.markers = duplicate.markers.map((marker) => ({ ...marker, id: markerId() }));
+    return duplicate;
+  }
 
   function agentProposalMatchesPublishedContext(proposal, sessionId, publishedContext, currentContext) {
     return Boolean(proposal && publishedContext
@@ -1243,7 +1250,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const dupPath = (i) => {
       const source = project.paths[i]; if (!source) return null;
       const name = uniquePathName(source.name + ' copy'), index = i + 1;
-      setProject((pr) => { const cp = clone(pr.paths[i]); cp.id = pathId(); cp.name = name; const paths = pr.paths.slice(); paths.splice(index, 0, cp); return { ...pr, paths }; });
+      setProject((pr) => { const cp = duplicatePathForLibrary(pr.paths[i], name); const paths = pr.paths.slice(); paths.splice(index, 0, cp); return { ...pr, paths }; });
       resetForPath(index); return { index, name, id: null };
     };
     const delPath = (i) => {
@@ -1675,4 +1682,4 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }
   }
 
-export { App, AppErrorBoundary, agentProposalMatchesPublishedContext };
+export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, duplicatePathForLibrary };
