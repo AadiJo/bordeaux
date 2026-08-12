@@ -1,6 +1,7 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { PointerDrag } from "../hooks/usePointerDrag";
+import { parseFiniteDraftNumber } from "../lib/numericDraft";
 import { PM } from "../lib/pathMath";
 import { UnitPrefs } from "../lib/unitPreferences";
 
@@ -236,13 +237,25 @@ import { UnitPrefs } from "../lib/unitPreferences";
   }
 
   // numeric field with drag-to-scrub
-  function Num({ label, value, onChange, unit, imperialUnit, step = 0.01, min, max, precision = 2 }) {
+  function Num({ label, value, onChange, unit, imperialUnit, step = 0.01, min, max, precision = 2, projectDraft = true }) {
     const id = useId();
     const [edit, setEdit] = useState(null);
+    const [error, setError] = useState('');
+    const cancelEdit = useRef(false);
     const ref = useRef(null);
     const pointerDrag = PointerDrag.useController();
     const unitSystem = UnitPrefs.current();
     useEffect(() => setEdit(null), [unitSystem]);
+    const commitEdit = (raw) => {
+      const parsed = parseFiniteDraftNumber(raw);
+      if (parsed == null) { setError('Enter a finite number.'); return false; }
+      let next = UnitPrefs.toCanonical(parsed, unit, imperialUnit);
+      if (min != null) next = Math.max(min, next);
+      if (max != null) next = Math.min(max, next);
+      setError('');
+      onChange(next);
+      return true;
+    };
     const start = () => (down) => {
       down.preventDefault();
       const sx = down.clientX, v0 = (typeof value === 'number' ? value : 0);
@@ -257,12 +270,14 @@ import { UnitPrefs } from "../lib/unitPreferences";
       h('div', { className: 'numbox' },
         h('input', {
           id, ref, className: 'numinput', value: disp, inputMode: 'decimal', 'aria-describedby': unit ? id + '-unit' : undefined,
-          onChange: (e) => setEdit(e.target.value),
-          onFocus: (e) => { setEdit(typeof displayValue === 'number' ? String(displayValue) : displayValue); requestAnimationFrame(() => e.target.select()); },
-          onBlur: (e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) onChange(UnitPrefs.toCanonical(n, unit, imperialUnit)); setEdit(null); },
-          onKeyDown: (e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { setEdit(null); e.target.blur(); } },
+          'data-project-draft': projectDraft ? true : undefined, 'aria-invalid': !!error,
+          onChange: (e) => { setEdit(e.target.value); if (error) setError(''); },
+          onFocus: (e) => { cancelEdit.current = false; if (edit == null) setEdit(typeof displayValue === 'number' ? String(displayValue) : displayValue); requestAnimationFrame(() => e.target.select()); },
+          onBlur: (e) => { const committed = cancelEdit.current || commitEdit(e.target.value); cancelEdit.current = false; if (committed) setEdit(null); },
+          onKeyDown: (e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { e.preventDefault(); cancelEdit.current = true; setError(''); setEdit(null); e.target.blur(); } },
         }),
         unit && h('span', { id: id + '-unit', className: 'numunit' }, UnitPrefs.label(unit, imperialUnit))),
+      error && h('span', { className: 'cmd-param-error numerror', role: 'alert' }, error),
     );
   }
 
