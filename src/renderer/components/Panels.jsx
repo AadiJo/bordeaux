@@ -281,7 +281,7 @@ import { UI } from "./ui";
   ];
   const BRUSHES = [
     { id: 'push', icon: 'brushPush', label: 'Push', detail: 'Move the curve with the pointer' },
-    { id: 'smooth', icon: 'brushSmooth', label: 'Smooth', detail: 'Relax local bends' },
+    { id: 'smooth', icon: 'brushSmooth', label: 'Smooth', detail: 'Relax bends and remove redundant points' },
     { id: 'twirl', icon: 'brushTwirl', label: 'Twirl', detail: 'Rotate the curve through the radius' },
   ];
   function ToolRail({ tool, setTool, brush, setBrush, waypointCount }) {

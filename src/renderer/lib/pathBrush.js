@@ -205,8 +205,103 @@ function smoothWaypoints(path, stroke) {
   }
 }
 
+const SEGMENT_KEYS = ['segType', 'segmentHeadingMode', 'segmentFollowMode', 'segmentLookAt'];
+
+function sameSegmentMetadata(first, second) {
+  return SEGMENT_KEYS.every((key) => JSON.stringify(first[key]) === JSON.stringify(second[key]));
+}
+
+function isSemanticWaypoint(waypoint) {
+  return waypoint.stop || waypoint.corner || waypoint.thetaOn || waypoint.wait != null
+    || waypoint.turnInPlace != null || waypoint.jiggle != null || waypoint.headingTransition != null;
+}
+
+function mergedCurveCandidate(previous, waypoint, next) {
+  const left = cubicPoints(previous, waypoint);
+  const right = cubicPoints(waypoint, next);
+  const incoming = distance(left[2], left[3]);
+  const outgoing = distance(right[0], right[1]);
+  const handleTotal = incoming + outgoing;
+  const lengthTotal = approximateLength(left, 16) + approximateLength(right, 16);
+  const splitT = clamp(handleTotal > 1e-8 ? incoming / handleTotal : approximateLength(left, 16) / Math.max(lengthTotal, 1e-8), 0.08, 0.92);
+  const curve = [
+    left[0],
+    { x: left[0].x + (left[1].x - left[0].x) / splitT, y: left[0].y + (left[1].y - left[0].y) / splitT },
+    { x: right[3].x + (right[2].x - right[3].x) / (1 - splitT), y: right[3].y + (right[2].y - right[3].y) / (1 - splitT) },
+    right[3],
+  ];
+  if (distance(curve[0], curve[1]) > lengthTotal * 1.5 || distance(curve[2], curve[3]) > lengthTotal * 1.5) return null;
+  let error = 0;
+  for (let index = 0; index <= 24; index++) {
+    const t = index / 24;
+    const original = t <= splitT
+      ? cubicPoint(left, t / splitT)
+      : cubicPoint(right, (t - splitT) / (1 - splitT));
+    error = Math.max(error, distance(original, cubicPoint(curve, t)));
+  }
+  return { curve, error, splitT };
+}
+
+function remapRangesAfterRemoval(path, removedIndex, splitT) {
+  const mergedSegment = removedIndex - 1;
+  for (const range of path.ranges || []) {
+    if (range.anchor !== 'wp') continue;
+    if (range.t0 == null && range.t1 == null && range.w0 === removedIndex && range.w1 === removedIndex) {
+      range.w0 = range.w1 = Math.min(removedIndex, path.waypoints.length - 2);
+      continue;
+    }
+    for (const [waypointKey, localKey] of [['w0', 't0'], ['w1', 't1']]) {
+      if (!Number.isInteger(range[waypointKey])) continue;
+      if (range[localKey] == null) {
+        if (range[waypointKey] > removedIndex) range[waypointKey] -= 1;
+        else if (range[waypointKey] === removedIndex) range[waypointKey] = waypointKey === 'w0' ? removedIndex : mergedSegment;
+        continue;
+      }
+      const local = clamp(Number(range[localKey]), 0, 1);
+      if (range[waypointKey] === mergedSegment) range[localKey] = local * splitT;
+      else if (range[waypointKey] === removedIndex) {
+        range[waypointKey] = mergedSegment;
+        range[localKey] = splitT + local * (1 - splitT);
+      } else if (range[waypointKey] > removedIndex) range[waypointKey] -= 1;
+    }
+    const start = range.w0 + (Number(range.t0) || 0);
+    const end = range.w1 + (Number(range.t1) || 0);
+    if (start > end) {
+      [range.w0, range.w1] = [range.w1, range.w0];
+      [range.t0, range.t1] = [range.t1, range.t0];
+    }
+  }
+}
+
+function consolidateWaypoints(path, stroke) {
+  let removed = 0;
+  for (let index = 1; index < path.waypoints.length - 1;) {
+    const previous = path.waypoints[index - 1];
+    const waypoint = path.waypoints[index];
+    const next = path.waypoints[index + 1];
+    const weight = falloff(distance(waypoint, stroke.center), stroke.radius);
+    if (weight <= 0 || isSemanticWaypoint(waypoint) || !sameSegmentMetadata(previous, waypoint)) {
+      index += 1;
+      continue;
+    }
+    const candidate = mergedCurveCandidate(previous, waypoint, next);
+    const tolerance = stroke.radius * (0.008 + stroke.strength * 0.026) * weight;
+    if (!candidate || candidate.error > tolerance) {
+      index += 1;
+      continue;
+    }
+    previous.nextC = point(candidate.curve[1]);
+    next.prevC = point(candidate.curve[2]);
+    remapRangesAfterRemoval(path, index, candidate.splitT);
+    path.waypoints.splice(index, 1);
+    removed += 1;
+    index = Math.max(1, index - 1);
+  }
+  return removed;
+}
+
 function apply(path, input) {
-  if (!path || !Array.isArray(path.waypoints) || path.waypoints.length < 2) return { path, added: 0 };
+  if (!path || !Array.isArray(path.waypoints) || path.waypoints.length < 2) return { path, added: 0, removed: 0 };
   const stroke = {
     kind: ['push', 'smooth', 'twirl'].includes(input.kind) ? input.kind : 'push',
     center: point(input.center),
@@ -214,7 +309,7 @@ function apply(path, input) {
     radius: clamp(Number(input.radius) || 0.9, 0.2, 3),
     strength: clamp(Number(input.strength) || 0.65, 0.05, 1),
   };
-  const added = densify(path, stroke.center, stroke.radius);
+  const added = stroke.kind === 'smooth' ? 0 : densify(path, stroke.center, stroke.radius);
   if (stroke.kind === 'smooth') smoothWaypoints(path, stroke);
   else {
     for (const waypoint of path.waypoints) {
@@ -228,7 +323,8 @@ function apply(path, input) {
     }
   }
   refitHandles(path, stroke.center, stroke.radius);
-  return { path, added };
+  const removed = stroke.kind === 'smooth' ? consolidateWaypoints(path, stroke) : 0;
+  return { path, added, removed };
 }
 
 export const PathBrush = { apply };
