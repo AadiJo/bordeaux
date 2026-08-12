@@ -352,13 +352,8 @@ import { UI } from "./ui";
         const travel = Math.hypot(world.x - d.lastWorld.x, world.y - d.lastWorld.y);
         setBrushCursor(world);
         if (travel > 0.002) {
-          // Open the edit only once the stroke actually changes the path, so hovering the
-          // brush over empty field never leaves an undo entry behind.
-          const started = d.historyStarted;
-          if (!started && actions.beginEdit) { actions.beginEdit(); d.historyStarted = true; }
           const changed = actions.applyBrush({ ...brush, center: world, previous: d.lastWorld, origin: d.origin });
-          if (changed === false && !started && actions.cancelEdit) { actions.cancelEdit(); d.historyStarted = false; }
-          else d.moved = true;
+          if (changed) { d.historyStarted = true; d.moved = true; }
           d.lastWorld = world;
         }
         return;

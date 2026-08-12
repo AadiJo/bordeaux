@@ -42,6 +42,47 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     return duplicate;
   }
 
+  // A brush drag should not create an edit until it actually reaches the path. Keeping
+  // that decision here lets an off-path pointer sample remain a true no-op while the same
+  // drag can continue and open one coalesced edit when a later sample changes geometry.
+  function applyBrushDraft(editStore, source, stroke) {
+    const active = editStore.getSnapshot();
+    const candidate = clone(active || source);
+    const beforeWaypoints = candidate.waypoints.slice();
+    const result = PathBrush.apply(candidate, stroke);
+    if (result.changed) {
+      if (!active) editStore.begin(clone(source));
+      editStore.update(result.path);
+    }
+    return { ...result, beforeWaypoints };
+  }
+
+  function remapBrushSelection(selection, beforeWaypoints, afterWaypoints) {
+    if (!selection || (selection.kind !== 'wp' && selection.kind !== 'seg')) return selection;
+    if (selection.kind === 'wp') {
+      const moved = afterWaypoints.indexOf(beforeWaypoints[selection.idx]);
+      return moved >= 0 ? { kind: 'wp', idx: moved } : { kind: null, idx: -1 };
+    }
+    const start = afterWaypoints.indexOf(beforeWaypoints[selection.idx]);
+    const end = afterWaypoints.indexOf(beforeWaypoints[selection.idx + 1]);
+    if (start >= 0 && start < afterWaypoints.length - 1) return { kind: 'seg', idx: start };
+    if (end > 0) return { kind: 'seg', idx: end - 1 };
+    return { kind: null, idx: -1 };
+  }
+
+  function syncBrushSelection(selectionRef, beforeWaypoints, afterWaypoints, onSelect) {
+    const current = selectionRef.current;
+    const next = remapBrushSelection(current, beforeWaypoints, afterWaypoints);
+    if (next && (next.kind !== current.kind || next.idx !== current.idx)) {
+      // Pointer-up may synchronously flush a queued move and then dispatch its final
+      // coordinates before React renders. Advance the ref with the state update so that
+      // second sample remaps from the topology produced by the first one.
+      selectionRef.current = next;
+      onSelect(next.kind, next.idx);
+    }
+    return next;
+  }
+
   function agentProposalMatchesPublishedContext(proposal, sessionId, publishedContext, currentContext) {
     return Boolean(proposal && publishedContext
       && proposal.baseSessionId === sessionId
@@ -757,24 +798,14 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       }
       return d;
     }), [mutate]);
-    // Sculpts the path in place. A stroke inserts and removes waypoints, so a `wp`
-    // selection is followed by identity and dropped if the brush merged it away, keeping
-    // the inspector off a generated waypoint. Returns false when the stroke was a no-op so
-    // the caller can skip the undo entry.
+    // Sculpts the active draft. Waypoint and segment selections follow their original
+    // endpoints across inserted or removed topology instead of jumping to generated spans.
     const applyBrush = useCallback((stroke) => {
-      let changed = false;
-      mutate((d) => {
-        const selected = selRef.current.kind === 'wp' ? d.waypoints[selRef.current.idx] : null;
-        const result = PathBrush.apply(d, stroke);
-        changed = result.changed;
-        if (selected) {
-          const moved = result.path.waypoints.indexOf(selected);
-          if (moved !== selRef.current.idx) select(moved >= 0 ? 'wp' : null, moved >= 0 ? moved : -1);
-        }
-        return result.path;
-      });
-      return changed;
-    }, [mutate, select]);
+      const result = applyBrushDraft(editStore, docRef.current, stroke);
+      if (!result.changed) return false;
+      syncBrushSelection(selRef, result.beforeWaypoints, result.path.waypoints, select);
+      return true;
+    }, [editStore, select]);
     const prepareWaypointInsertion = useCallback((rawPoint, segmentHint, onPath, selectedVisit) => {
       const p = clampWorld(rawPoint);
       const candidate = clone(docRef.current);
@@ -1754,4 +1785,4 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }
   }
 
-export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, duplicatePathForLibrary };
+export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, applyBrushDraft, duplicatePathForLibrary, remapBrushSelection, syncBrushSelection };
