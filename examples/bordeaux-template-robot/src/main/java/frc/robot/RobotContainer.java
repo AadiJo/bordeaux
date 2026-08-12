@@ -32,10 +32,18 @@ public final class RobotContainer {
         }
     }
 
-    /** Processes the final event tick before applying path-end cancellation. */
+    /** Simulation fallback for this drivetrain-free template. Real robots should pass measured progress. */
     public boolean pollBordeauxEvents(double elapsedS) {
+        double plannedFraction = pathDurationS > 0
+                ? Math.max(0, Math.min(1, elapsedS / pathDurationS))
+                : 0;
+        return pollBordeauxEvents(elapsedS, plannedFraction);
+    }
+
+    /** Processes the final event tick using monotonic measured path progress from 0 to 1. */
+    public boolean pollBordeauxEvents(double elapsedS, double measuredFraction) {
         if (eventRunner == null) return false;
-        eventRunner.periodic(elapsedS);
+        eventRunner.periodic(elapsedS, measuredFraction);
         if (elapsedS + 1e-9 >= pathDurationS) {
             endBordeauxPath();
             return false;
