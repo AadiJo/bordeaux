@@ -12,7 +12,7 @@ import { UI } from "../components/ui";
 import { PM } from "../lib/pathMath";
 import { PathLinks } from "../lib/pathLinks";
 import { AUTO } from "../lib/routineModel";
-import { flushFocusedProjectDraft, noteProjectDraftInput, projectPersistenceStayedCurrent } from "../lib/draftPersistence";
+import { enqueuePersistenceAfterPreflight, flushFocusedProjectDraft, noteProjectDraftInput, projectPersistenceStayedCurrent } from "../lib/draftPersistence";
 import { UnitPrefs } from "../lib/unitPreferences";
 import {
   createMarkerId as markerId,
@@ -1487,17 +1487,16 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       cancelEdit();
     }, [cancelEdit, invalidateScheduledAutosave]);
     const newProject = useCallback(() => {
-      if (!canReplaceProject()) return;
-      prepareProjectReplacement();
-      return enqueuePersistence(async () => {
+      return enqueuePersistenceAfterPreflight(enqueuePersistence, canReplaceProject, async () => {
+        prepareProjectReplacement();
         if (window.bordeauxAPI) await window.bordeauxAPI.newProject();
         loadProject(freshProject());
       });
     }, [canReplaceProject, enqueuePersistence, loadProject, prepareProjectReplacement]);
     const openProject = useCallback((recentIndex) => {
-      if (!window.bordeauxAPI || !canReplaceProject()) return;
-      prepareProjectReplacement();
-      return enqueuePersistence(async () => {
+      if (!window.bordeauxAPI) return;
+      return enqueuePersistenceAfterPreflight(enqueuePersistence, canReplaceProject, async () => {
+        prepareProjectReplacement();
         try {
           const result = typeof recentIndex === 'number'
             ? await window.bordeauxAPI.openRecentProject(recentIndex)
@@ -1509,9 +1508,9 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       });
     }, [canReplaceProject, enqueuePersistence, loadProject, prepareProjectReplacement]);
     const saveProject = useCallback((saveAs) => {
-      if (!window.bordeauxAPI || !flushProjectDraft()) return;
-      const requestedDraftGeneration = draftInputGeneration.current;
-      return enqueuePersistence(async () => {
+      if (!window.bordeauxAPI) return;
+      return enqueuePersistenceAfterPreflight(enqueuePersistence, flushProjectDraft, async () => {
+        const requestedDraftGeneration = draftInputGeneration.current;
         try {
           const source = { project: projectRef.current, editRevision: editStore.getRevision(), draftGeneration: requestedDraftGeneration };
           const result = await window.bordeauxAPI.saveProject(materializeProject(), saveAs === true);

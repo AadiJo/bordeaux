@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  enqueuePersistenceAfterPreflight,
   flushFocusedProjectDraft,
   noteProjectDraftInput,
   projectPersistenceStayedCurrent,
@@ -12,6 +13,15 @@ function draft(valid: boolean) {
     focus: vi.fn(),
   };
   return element;
+}
+
+function persistenceQueue() {
+  let tail = Promise.resolve();
+  return <T>(operation: () => T | Promise<T>): Promise<T> => {
+    const pending = tail.catch(() => undefined).then(operation);
+    tail = pending.then(() => undefined, () => undefined);
+    return pending;
+  };
 }
 
 describe("renderer draft persistence", () => {
@@ -58,5 +68,43 @@ describe("renderer draft persistence", () => {
     await completion;
 
     expect(clearDirty).not.toHaveBeenCalled();
+  });
+
+  it("flushes a draft begun after Save was queued before running the save", async () => {
+    const enqueue = persistenceQueue();
+    let release!: () => void;
+    const blocker = new Promise<void>((resolve) => { release = resolve; });
+    void enqueue(() => blocker);
+    let draftStarted = false;
+    const flush = vi.fn(() => draftStarted);
+    const save = vi.fn();
+
+    const pending = enqueuePersistenceAfterPreflight(enqueue, flush, save);
+    draftStarted = true;
+    release();
+    await pending;
+
+    expect(flush).toHaveBeenCalledOnce();
+    expect(save).toHaveBeenCalledOnce();
+  });
+
+  it.each(["New", "Open"])("rechecks %s replacement safety after earlier persistence finishes", async () => {
+    const enqueue = persistenceQueue();
+    let release!: () => void;
+    const blocker = new Promise<void>((resolve) => { release = resolve; });
+    void enqueue(() => blocker);
+    let dirty = false;
+    const confirmDiscard = vi.fn(() => false);
+    const canReplace = vi.fn(() => !dirty || confirmDiscard());
+    const replace = vi.fn();
+
+    const pending = enqueuePersistenceAfterPreflight(enqueue, canReplace, replace);
+    dirty = true;
+    release();
+    await pending;
+
+    expect(canReplace).toHaveBeenCalledOnce();
+    expect(confirmDiscard).toHaveBeenCalledOnce();
+    expect(replace).not.toHaveBeenCalled();
   });
 });

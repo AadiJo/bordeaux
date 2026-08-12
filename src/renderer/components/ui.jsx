@@ -245,7 +245,10 @@ import { UnitPrefs } from "../lib/unitPreferences";
     const ref = useRef(null);
     const pointerDrag = PointerDrag.useController();
     const unitSystem = UnitPrefs.current();
-    useEffect(() => setEdit(null), [unitSystem]);
+    useEffect(() => {
+      setEdit(null);
+      setError('');
+    }, [unitSystem]);
     const commitEdit = (raw) => {
       const parsed = parseFiniteDraftNumber(raw);
       if (parsed == null) { setError('Enter a finite number.'); return false; }
