@@ -56,95 +56,46 @@ function segmentMetadata(source) {
   return result;
 }
 
-// Cumulative arc-length fraction at each waypoint. This mirrors PM.waypointFracs, which
-// is what actually resolves a `wp`-anchored range, so anchors captured and restored
-// through these helpers land back on the same point of the path.
-function waypointArcFractions(path) {
-  const cumulative = [0];
-  let total = 0;
-  for (let index = 0; index + 1 < path.waypoints.length; index++) {
-    total += approximateLength(cubicPoints(path.waypoints[index], path.waypoints[index + 1]), 24);
-    cumulative.push(total);
-  }
-  if (total <= 1e-9) return cumulative.map((_, index) => (cumulative.length < 2 ? 0 : index / (cumulative.length - 1)));
-  return cumulative.map((value) => value / total);
-}
-
-// PM interpolates linearly between waypoint fractions, so this is its exact inverse.
-function fractionOfAnchor(fractions, waypointIndex, local) {
-  if (local == null) return fractions[clamp(Math.round(waypointIndex || 0), 0, fractions.length - 1)];
-  const segment = clamp(Math.round(waypointIndex || 0), 0, fractions.length - 2);
-  return fractions[segment] + (fractions[segment + 1] - fractions[segment]) * clamp(Number(local), 0, 1);
-}
-
-function anchorOfFraction(fractions, fraction) {
-  const target = clamp(fraction, 0, 1);
-  const last = fractions.length - 2;
-  for (let segment = 0; segment <= last; segment++) {
-    const start = fractions[segment];
-    const end = fractions[segment + 1];
-    if (target > end && segment < last) continue;
-    const span = end - start;
-    return { w: segment, t: span > 1e-12 ? clamp((target - start) / span, 0, 1) : 0 };
-  }
-  return { w: 0, t: 0 };
-}
-
-// Records where each `wp`-anchored range currently sits so a topology change can put it
-// back. Endpoints naming a whole waypoint (legacy ranges with no t) are tracked by object
-// identity, so they keep that form as long as the waypoint survives the edit.
-function captureRangeAnchors(path) {
-  const ranges = path.ranges || [];
-  if (!ranges.some((range) => range.anchor === 'wp')) return null;
-  const fractions = waypointArcFractions(path);
-  return ranges.map((range) => {
-    if (range.anchor !== 'wp') return null;
-    return [['w0', 't0'], ['w1', 't1']].map(([waypointKey, localKey]) => {
-      const waypointIndex = Number.isInteger(range[waypointKey]) ? range[waypointKey] : 0;
-      const local = range[localKey];
-      const fraction = fractionOfAnchor(fractions, waypointIndex, local);
-      const waypoint = local == null ? path.waypoints[clamp(waypointIndex, 0, path.waypoints.length - 1)] : null;
-      return { fraction, waypoint };
-    });
-  });
-}
-
-function restoreRangeAnchors(path, captured) {
-  if (!captured) return;
-  const ranges = path.ranges || [];
-  const fractions = waypointArcFractions(path);
-  ranges.forEach((range, index) => {
-    const endpoints = captured[index];
-    if (!endpoints || range.anchor !== 'wp') return;
-    endpoints.forEach((endpoint, side) => {
-      const waypointKey = side === 0 ? 'w0' : 'w1';
-      const localKey = side === 0 ? 't0' : 't1';
-      const survivor = endpoint.waypoint ? path.waypoints.indexOf(endpoint.waypoint) : -1;
-      if (survivor >= 0) {
-        range[waypointKey] = survivor;
-        delete range[localKey];
-        return;
+// `wp` range anchors are deliberately segment-local. Splitting a segment must therefore
+// remap its local t, while anchors on every other segment keep their local coordinates.
+function shiftWaypointRanges(path, insertedIndex, splitT) {
+  const segmentIndex = insertedIndex - 1;
+  for (const range of path.ranges || []) {
+    if (range.anchor !== 'wp') continue;
+    for (const [waypointKey, localKey] of [['w0', 't0'], ['w1', 't1']]) {
+      if (!Number.isInteger(range[waypointKey])) continue;
+      if (range[localKey] == null) {
+        if (range[waypointKey] >= insertedIndex) range[waypointKey] += 1;
+        continue;
       }
-      const anchor = anchorOfFraction(fractions, endpoint.fraction);
-      range[waypointKey] = anchor.w;
-      range[localKey] = anchor.t;
-    });
-    if (fractionOfAnchor(fractions, range.w0, range.t0) > fractionOfAnchor(fractions, range.w1, range.t1)) {
-      [range.w0, range.w1] = [range.w1, range.w0];
-      [range.t0, range.t1] = [range.t1, range.t0];
-      if (range.t0 === undefined) delete range.t0;
-      if (range.t1 === undefined) delete range.t1;
+      if (range[waypointKey] > segmentIndex) {
+        range[waypointKey] += 1;
+        continue;
+      }
+      if (range[waypointKey] !== segmentIndex) continue;
+      const local = clamp(Number(range[localKey]), 0, 1);
+      if (local <= splitT) range[localKey] = local / Math.max(splitT, 1e-9);
+      else {
+        range[waypointKey] += 1;
+        range[localKey] = (local - splitT) / Math.max(1 - splitT, 1e-9);
+      }
     }
-  });
+  }
 }
 
-// Splitting a cubic is exact, so inserting a waypoint never changes the curve. Points are
-// added across the brush and slightly past its rim. Those outermost waypoints are what pin
-// the deformation: a segment can only bend if one of its endpoints moves, and an endpoint
-// past the rim has zero falloff weight. Subdividing only up to the radius leaves the
-// segment leaving the brush anchored on a waypoint that does move, which is what let a 1 cm
-// drag shift geometry metres away.
-const RIM_MARGIN = 1.12;
+// Finds the outside side of a sampled radius crossing. A zero-falloff waypoint there pins
+// the exterior half of the exact split while leaving the interior half free to deform.
+function exteriorBoundaryParameter(curve, center, radius, firstT, secondT, firstOutside) {
+  let first = firstT;
+  let second = secondT;
+  for (let iteration = 0; iteration < 24; iteration++) {
+    const middle = (first + second) / 2;
+    const middleOutside = distance(cubicPoint(curve, middle), center) >= radius;
+    if (middleOutside === firstOutside) first = middle;
+    else second = middle;
+  }
+  return firstOutside ? first : second;
+}
 
 function subdivisionParameters(curve, center, radius, spacing) {
   const length = approximateLength(curve);
@@ -152,20 +103,26 @@ function subdivisionParameters(curve, center, radius, spacing) {
   const steps = clamp(Math.ceil(length / Math.max(0.04, spacing / 2)), 12, 96);
   const candidates = [];
   let lastDistance = -Infinity;
-  const beyondRim = (t) => distance(cubicPoint(curve, t), center) > radius * RIM_MARGIN;
-  let previousBeyond = beyondRim(0);
-  for (let index = 1; index < steps; index++) {
-    const t = index / steps;
-    const nowBeyond = beyondRim(t);
-    // The first sample past the rim on each side is the anchor, so it ignores the spacing
-    // rule. Letting spacing drop it is what reopens the leak.
-    const anchor = nowBeyond !== previousBeyond;
-    previousBeyond = nowBeyond;
-    const along = length * t;
-    if (along < spacing * 0.35 || length - along < spacing * 0.35) continue;
-    if (!anchor && (nowBeyond || along - lastDistance < spacing * 0.78)) continue;
-    candidates.push(t);
+  const outsideBrush = (t) => distance(cubicPoint(curve, t), center) >= radius;
+  const appendCandidate = (parameter, forced) => {
+    const along = length * parameter;
+    if (parameter <= 1e-7 || parameter >= 1 - 1e-7) return;
+    if (Math.abs((candidates.at(-1) ?? -1) - parameter) <= 1e-9) return;
+    if (!forced && (along < spacing * 0.35 || length - along < spacing * 0.35
+      || along - lastDistance < spacing * 0.78)) return;
+    candidates.push(parameter);
     lastDistance = along;
+  };
+  let previousOutside = outsideBrush(0);
+  for (let index = 1; index <= steps; index++) {
+    const t = index / steps;
+    const nowOutside = outsideBrush(t);
+    if (nowOutside !== previousOutside) {
+      const boundary = exteriorBoundaryParameter(curve, center, radius, (index - 1) / steps, t, previousOutside);
+      appendCandidate(boundary, true);
+    }
+    previousOutside = nowOutside;
+    if (!nowOutside) appendCandidate(t, false);
   }
   return candidates;
 }
@@ -199,6 +156,7 @@ function splitSegment(path, segmentIndex, parameters) {
       ...metadata,
     };
     waypoints.splice(insertedIndex, 0, waypoint);
+    shiftWaypointRanges(path, insertedIndex, localT);
     currentStart = waypoint;
     remaining = halves.right;
     previousT = parameter;
@@ -243,11 +201,15 @@ function twirlAngle(stroke) {
   const by = stroke.center.y - anchor.y;
   const swept = Math.atan2(ax * by - ay * bx, ax * bx + ay * by);
   if (Number.isFinite(swept) && Math.abs(swept) > 1e-9) return swept;
-  // Pointer is still at the anchor, so there is no arc yet. Fall back to the drag's
-  // component across the anchor direction so the very first move still reads as a twirl.
+  // A straight drag away from the anchor has no angular sweep, including the first UI
+  // sample where origin === previous. Use its full travel and choose direction by the
+  // dominant axis so no diagonal can cancel to zero.
   const dx = stroke.center.x - stroke.previous.x;
   const dy = stroke.center.y - stroke.previous.y;
-  return (dx - dy) / Math.max(stroke.radius, 1e-6);
+  const travel = Math.hypot(dx, dy);
+  if (travel <= 1e-9) return 0;
+  const direction = Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx || 1) : -Math.sign(dy || 1);
+  return direction * travel / Math.max(stroke.radius, 1e-6);
 }
 
 function transformPoint(value, stroke) {
@@ -431,6 +393,40 @@ function mergedCurveCandidate(previous, waypoint, next, stroke) {
 // the part of the span outside the radius where it was.
 const OUTSIDE_TOLERANCE = 1e-6;
 
+function remapRangesAfterRemoval(path, removedIndex, splitT) {
+  const mergedSegment = removedIndex - 1;
+  for (const range of path.ranges || []) {
+    if (range.anchor !== 'wp') continue;
+    for (const [waypointKey, localKey] of [['w0', 't0'], ['w1', 't1']]) {
+      if (!Number.isInteger(range[waypointKey])) continue;
+      const waypointIndex = range[waypointKey];
+      const local = range[localKey];
+      if (local == null) {
+        if (waypointIndex > removedIndex) range[waypointKey] -= 1;
+        else if (waypointIndex === removedIndex) {
+          range[waypointKey] = mergedSegment;
+          range[localKey] = splitT;
+        }
+        continue;
+      }
+      const position = clamp(Number(local), 0, 1);
+      if (waypointIndex === mergedSegment) range[localKey] = position * splitT;
+      else if (waypointIndex === removedIndex) {
+        range[waypointKey] = mergedSegment;
+        range[localKey] = splitT + position * (1 - splitT);
+      } else if (waypointIndex > removedIndex) range[waypointKey] -= 1;
+    }
+    const start = range.w0 + (Number(range.t0) || 0);
+    const end = range.w1 + (Number(range.t1) || 0);
+    if (start > end) {
+      [range.w0, range.w1] = [range.w1, range.w0];
+      [range.t0, range.t1] = [range.t1, range.t0];
+      if (range.t0 === undefined) delete range.t0;
+      if (range.t1 === undefined) delete range.t1;
+    }
+  }
+}
+
 function consolidateWaypoints(path, stroke) {
   let removed = 0;
   for (let index = 1; index < path.waypoints.length - 1;) {
@@ -451,6 +447,7 @@ function consolidateWaypoints(path, stroke) {
     }
     previous.nextC = point(candidate.curve[1]);
     next.prevC = point(candidate.curve[2]);
+    remapRangesAfterRemoval(path, index, candidate.splitT);
     path.waypoints.splice(index, 1);
     removed += 1;
     index = Math.max(1, index - 1);
@@ -481,14 +478,10 @@ function apply(path, input) {
     strength: clamp(Number(input.strength) || 0.65, 0.05, 1),
   };
   const before = geometryOf(path);
-  // Anchors are captured against the pre-edit path and restored against the post-edit one,
-  // so subdivision and consolidation cannot slide a constraint range along the path.
-  const anchors = captureRangeAnchors(path);
   const added = stroke.kind === 'smooth' ? 0 : densify(path, stroke.center, stroke.radius);
   const touched = stroke.kind === 'smooth' ? smoothWaypoints(path, stroke) : displaceWaypoints(path, stroke);
   refitHandles(path, touched);
   const removed = stroke.kind === 'smooth' ? consolidateWaypoints(path, stroke) : 0;
-  restoreRangeAnchors(path, anchors);
   return { path, added, removed, changed: added > 0 || removed > 0 || geometryOf(path) !== before };
 }
 

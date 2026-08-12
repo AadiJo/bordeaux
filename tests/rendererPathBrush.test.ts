@@ -111,6 +111,18 @@ function anchorFraction(path: Path, waypointIndex: number, local?: number): numb
   return fractions[segment] + (fractions[segment + 1] - fractions[segment]) * Math.max(0, Math.min(1, local));
 }
 
+function anchorPoint(path: Path, waypointIndex: number, local = 0): Point {
+  const segment = Math.max(0, Math.min(path.waypoints.length - 2, waypointIndex));
+  const start = path.waypoints[segment];
+  const end = path.waypoints[segment + 1];
+  const t = Math.max(0, Math.min(1, local));
+  const u = 1 - t;
+  return {
+    x: u ** 3 * start.x + 3 * u ** 2 * t * start.nextC.x + 3 * u * t ** 2 * end.prevC.x + t ** 3 * end.x,
+    y: u ** 3 * start.y + 3 * u ** 2 * t * start.nextC.y + 3 * u * t ** 2 * end.prevC.y + t ** 3 * end.y,
+  };
+}
+
 // An S-curve with realistic handle lengths, used where a straight line would hide bending.
 function curvedPath(): Path {
   return {
@@ -392,6 +404,33 @@ describe("path sculpting brushes", () => {
     expect(distanceToSamples(center, after)).toBeGreaterThan(0.002);
   });
 
+  it("pins the outside edge when a tight curve enters a small brush", () => {
+    const path: Path = {
+      waypoints: [
+        { x: 1.5, y: 2.357286002021283, prevC: { x: 0.13400839447954405, y: 1.7796357775122171 }, nextC: { x: 2.0551417665539167, y: 2.5920442280515577 }, linked: true, theta: 0, thetaOn: true, stop: false, segType: "bezier" },
+        { x: 5, y: 4.692719192709774, prevC: { x: 3.8768699890705296, y: 4.777529440879848 }, nextC: { x: 6.188715024037764, y: 4.602956462472776 }, linked: true, theta: 0, thetaOn: false, stop: false, segType: "bezier" },
+        { x: 8.5, y: 6.251226670574397, prevC: { x: 7.552763727148848, y: 4.351259580892702 }, nextC: { x: 8.876854514094784, y: 7.007121683149142 }, linked: true, theta: 0, thetaOn: false, stop: false, segType: "bezier" },
+        { x: 12, y: 1.3511616117320955, prevC: { x: 11.502353800164393, y: 0.8821462698795819 }, nextC: { x: 13.730569620727616, y: 2.982167138416041 }, linked: true, theta: 0, thetaOn: true, stop: false, segType: "bezier" },
+      ],
+      ranges: [],
+    };
+    const center = { x: 8.565781697702949, y: 6.350418574169616 };
+    const radius = 0.22996919080615044;
+    const before = samplePath(path, 600);
+
+    brush().apply(path, {
+      kind: "push",
+      previous: { x: 8.557453245336374, y: 6.355953633444609 },
+      center,
+      radius,
+      strength: 1,
+    });
+
+    // Without an entering-side exterior anchor, this moved geometry 1.81 m from the
+    // cursor by more than 1.6 cm.
+    expect(driftOutside(before, samplePath(path, 600), center, radius)).toBeLessThan(0.001);
+  });
+
   // The hardest case for locality: a waypoint carrying long, hand-authored handles, so any
   // wholesale retangent of it swings metres of far geometry.
   function longHandlePath(): Path {
@@ -466,14 +505,14 @@ describe("path sculpting brushes", () => {
   it("holds a curved-segment range anchor in place through subdivision", () => {
     const path = curvedPath();
     path.ranges = [{ anchor: "wp", w0: 0, t0: 0.4, w1: 2, t1: 0.6 }];
-    const startBefore = anchorFraction(path, 0, 0.4);
-    const endBefore = anchorFraction(path, 2, 0.6);
+    const startBefore = anchorPoint(path, 0, 0.4);
+    const endBefore = anchorPoint(path, 2, 0.6);
 
     brush().apply(path, { kind: "push", previous: { x: 5, y: 4 }, center: { x: 5, y: 4.05 }, radius: 1.5, strength: 0.4 });
 
     const range = path.ranges[0];
-    expect(anchorFraction(path, range.w0, range.t0)).toBeCloseTo(startBefore, 3);
-    expect(anchorFraction(path, range.w1, range.t1)).toBeCloseTo(endBefore, 3);
+    expect(gap(anchorPoint(path, range.w0, range.t0), startBefore)).toBeLessThan(0.0001);
+    expect(gap(anchorPoint(path, range.w1, range.t1), endBefore)).toBeLessThan(0.0001);
   });
 
   // App.applyBrush follows a `wp` selection by object identity across a stroke. These cover
@@ -569,8 +608,9 @@ describe("path sculpting brushes", () => {
 
     const origin = { x: 5.5, y: 4.4 };
     const before = samplePath(path);
-    // Equal x and y components: the exact case that used to cancel.
-    pathBrush.apply(path, { kind: "twirl", origin, previous: { x: 5.9, y: 4.4 }, center: { x: 6.2, y: 4.7 }, radius: 2, strength: 0.8 });
+    // Match the first UI sample: origin and previous are identical, and the pointer moves
+    // away with equal x and y components.
+    pathBrush.apply(path, { kind: "twirl", origin, previous: origin, center: { x: 5.8, y: 4.7 }, radius: 2, strength: 0.8 });
 
     const after = samplePath(path);
     const moved = Math.max(...before.map((sample) => distanceToSamples(sample, after)));
