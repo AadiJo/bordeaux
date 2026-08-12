@@ -440,6 +440,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
 
     const doc = project.paths[activeIdx];
     const docRef = useRef(doc); docRef.current = doc;
+    const selRef = useRef(sel); selRef.current = sel;
     const projectRef = useRef(project); projectRef.current = project;
     const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
     const hist = useRef({ past: [], future: [] });
@@ -721,7 +722,24 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       }
       return d;
     }), [mutate]);
-    const applyBrush = useCallback((stroke) => mutate((d) => PathBrush.apply(d, stroke).path), [mutate]);
+    // Sculpts the path in place. A stroke inserts and removes waypoints, so a `wp`
+    // selection is followed by identity and dropped if the brush merged it away, keeping
+    // the inspector off a generated waypoint. Returns false when the stroke was a no-op so
+    // the caller can skip the undo entry.
+    const applyBrush = useCallback((stroke) => {
+      let changed = false;
+      mutate((d) => {
+        const selected = selRef.current.kind === 'wp' ? d.waypoints[selRef.current.idx] : null;
+        const result = PathBrush.apply(d, stroke);
+        changed = result.changed;
+        if (selected) {
+          const moved = result.path.waypoints.indexOf(selected);
+          if (moved !== selRef.current.idx) select(moved >= 0 ? 'wp' : null, moved >= 0 ? moved : -1);
+        }
+        return result.path;
+      });
+      return changed;
+    }, [mutate, select]);
     const prepareWaypointInsertion = useCallback((rawPoint, segmentHint, onPath, selectedVisit) => {
       const p = clampWorld(rawPoint);
       const candidate = clone(docRef.current);
@@ -1571,8 +1589,10 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         const formControl = matches && matches('input,select,textarea,[contenteditable="true"]');
         if (formControl) return;
         // Bracket radius nudges sit below the form-control guard so a focused field
-        // (including .numinput, which tool shortcuts deliberately pass through) keeps its keystrokes.
-        if (page === 'plan' && tool === 'brush' && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === '[' || e.key === ']')) {
+        // (including .numinput, which tool shortcuts deliberately pass through) keeps its
+        // keystrokes. FieldView's visit cycling binds the same keys in the capture phase,
+        // so defer to it when it claimed the event.
+        if (page === 'plan' && tool === 'brush' && !e.defaultPrevented && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === '[' || e.key === ']')) {
           e.preventDefault();
           const direction = e.key === ']' ? 1 : -1;
           setBrush((current) => ({ ...current, radius: Math.max(0.3, Math.min(2.4, +(current.radius + direction * 0.1).toFixed(1))) }));

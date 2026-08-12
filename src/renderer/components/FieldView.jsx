@@ -259,7 +259,7 @@ import { UI } from "./ui";
       const world = clientToWorld(e.clientX, e.clientY);
       if (e.button === 0 && tool === 'brush' && brush && actions.applyBrush) {
         setBrushCursor(world);
-        drag.current = { role: 'brush', lastWorld: world, moved: false, historyStarted: false };
+        drag.current = { role: 'brush', origin: world, lastWorld: world, moved: false, historyStarted: false };
         return;
       }
       if (e.button === 0 && e.shiftKey) {
@@ -340,10 +340,14 @@ import { UI } from "./ui";
         const travel = Math.hypot(world.x - d.lastWorld.x, world.y - d.lastWorld.y);
         setBrushCursor(world);
         if (travel > 0.002) {
-          if (!d.historyStarted && actions.beginEdit) { actions.beginEdit(); d.historyStarted = true; }
-          actions.applyBrush({ ...brush, center: world, previous: d.lastWorld });
+          // Open the edit only once the stroke actually changes the path, so hovering the
+          // brush over empty field never leaves an undo entry behind.
+          const started = d.historyStarted;
+          if (!started && actions.beginEdit) { actions.beginEdit(); d.historyStarted = true; }
+          const changed = actions.applyBrush({ ...brush, center: world, previous: d.lastWorld, origin: d.origin });
+          if (changed === false && !started && actions.cancelEdit) { actions.cancelEdit(); d.historyStarted = false; }
+          else d.moved = true;
           d.lastWorld = world;
-          d.moved = true;
         }
         return;
       }
