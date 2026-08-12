@@ -3,6 +3,7 @@ import { optimizedTrajectoryPlanner } from "./optimizedTrajectory";
 import { profiledSplinePlanner } from "./profiledSpline";
 import { applyStationaryActions } from "./stationaryActions";
 import { applyRotationPriority } from "./rotationPriority";
+import { addJerkDiagnostics } from "./jerkDiagnostics";
 import { effectivePathConstraints, robotHardLimits } from "../robotLimits";
 
 export const planners: Record<TrajectoryPlannerId, TrajectoryPlanner> = {
@@ -31,7 +32,8 @@ export function getPlanner(id: TrajectoryPlannerId): TrajectoryPlanner {
           }
         : physicalInput;
       const generated = planner.generate(planningInput);
-      return applyStationaryActions(path, applyRotationPriority(path, generated, robot), robot);
+      const final = applyStationaryActions(path, applyRotationPriority(path, generated, robot), robot);
+      return addJerkDiagnostics(path, final);
     },
   };
 }
