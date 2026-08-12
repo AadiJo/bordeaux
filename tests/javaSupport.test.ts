@@ -64,7 +64,11 @@ describe("Java support installation and trusted catalog builds", () => {
     expect(contents.match(/BEGIN Bordeaux Java command support/g)).toHaveLength(1);
     expect(contents).toContain(dialect === "groovy" ? "apply from: file('.bordeaux/bordeaux.gradle')" : "apply(from = file(\".bordeaux/bordeaux.gradle\"))");
     expect(await fs.readFile(path.join(project, ".bordeaux/lib/bordeaux-runtime.jar"), "utf8")).toBe("runtime");
-    expect(await fs.readFile(path.join(project, ".bordeaux/INTEGRATION.md"), "utf8")).toContain("BordeauxBindings.generated(actions)");
+    const integrationGuide = await fs.readFile(path.join(project, ".bordeaux/INTEGRATION.md"), "utf8");
+    expect(integrationGuide).toContain("BordeauxBindings.generated(actions)");
+    expect(integrationGuide).toContain("void autonomousPeriodic(double elapsedSeconds, double measuredFraction)");
+    expect(integrationGuide).toContain("bordeauxEvents.periodic(elapsedSeconds, measuredFraction)");
+    expect(integrationGuide).not.toContain("bordeauxEvents.periodic(elapsedSeconds);");
     expect(await fs.readFile(path.join(project, ".bordeaux/bordeaux.gradle"), "utf8")).toContain("-Abordeaux.catalogId=");
     expect(await fs.readFile(path.join(project, `.bordeaux/${buildName}.before-bordeaux`), "utf8")).toContain("GradleRIO");
     await expect(inspectJavaSupport(project, sourceCatalog(), artifacts)).resolves.toMatchObject({ installed: true, supportVersion: "0.1.0", wrapperAvailable: true });
@@ -74,6 +78,18 @@ describe("Java support installation and trusted catalog builds", () => {
     await fs.writeFile(path.join(project, buildName), contents);
     await fs.writeFile(path.join(project, ".bordeaux/lib/bordeaux-runtime.jar"), "corrupted");
     await expect(inspectJavaSupport(project, sourceCatalog(), artifacts)).resolves.toMatchObject({ installed: false });
+  });
+
+  it("keeps shipped Java examples on the measured-progress event API", async () => {
+    const sources = await Promise.all([
+      fs.readFile(path.join(process.cwd(), "java/examples/RobotContainerSnippet.java"), "utf8"),
+      fs.readFile(path.join(process.cwd(), "examples/bordeaux-template-robot/src/main/java/frc/robot/RobotContainer.java"), "utf8"),
+    ]);
+
+    sources.forEach((source) => {
+      expect(source).toContain("periodic(elapsedS, measuredFraction)");
+      expect(source).not.toContain("periodic(elapsedS);");
+    });
   });
 
   it("rejects ambiguous projects, missing GradleRIO, and symlinked support directories", async () => {

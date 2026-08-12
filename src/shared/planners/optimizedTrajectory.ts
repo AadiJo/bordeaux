@@ -7,7 +7,8 @@ import type {
   ValidationIssue,
 } from "../types";
 import { profiledSplinePlanner } from "./profiledSpline";
-import { activeRanges, effectiveRanges, type EffectiveRange } from "./rotationPriority";
+import { indexIntervalPolicies, indexPointPolicies } from "./intervalPolicies";
+import { effectiveRanges } from "./rotationPriority";
 
 const R = (value: number, places = 4) => Number(value.toFixed(places));
 const EPSILON = 1e-9;
@@ -23,41 +24,25 @@ function linearLimits(input: PlannerInput) {
   };
 }
 
-type LinearLimits = ReturnType<typeof linearLimits>;
-
-function tightenLinearLimits(limits: LinearLimits, ranges: readonly EffectiveRange[]): LinearLimits {
-  let velocity = limits.velocity;
-  let acceleration = limits.acceleration;
-  let deceleration = limits.deceleration;
-  ranges.forEach((range) => {
-    if (range.maxVel > 0) velocity = Math.min(velocity, range.maxVel);
-    if (range.maxAccel > 0) acceleration = Math.min(acceleration, range.maxAccel);
-    const rangeDeceleration = range.maxDecel ?? range.maxAccel;
-    if (rangeDeceleration > 0) deceleration = Math.min(deceleration, rangeDeceleration);
-  });
-  return { ...limits, velocity, acceleration, deceleration };
-}
-
-function limitsAtFraction(limits: LinearLimits, ranges: readonly EffectiveRange[], fraction: number): LinearLimits {
-  return tightenLinearLimits(limits, activeRanges(ranges, fraction));
-}
-
-function intervalLimits(limits: LinearLimits, ranges: readonly EffectiveRange[], before: number, after: number): LinearLimits {
-  const start = Math.min(before, after);
-  const end = Math.max(before, after);
-  return tightenLinearLimits(limits, ranges.filter((range) => (
-    Math.min(end, range.end) - Math.max(start, range.start) >= -EPSILON
-  )));
-}
-
 function linearLimitProfile(input: PlannerInput, samples: readonly TrajectorySample[]) {
   const base = linearLimits(input);
   const ranges = effectiveRanges(input.path, samples, samples.at(-1)?.s ?? 0);
+  const fractions = samples.map((sample) => sample.f);
+  const policies = ranges.map((range) => ({
+    ...range,
+    maxDecel: range.maxDecel ?? range.maxAccel,
+  }));
+  const pointIndex = indexPointPolicies(fractions, policies);
+  const intervalIndex = indexIntervalPolicies(fractions, policies);
+  const limitsAt = (index: typeof pointIndex, sampleIndex: number) => ({
+    ...base,
+    velocity: Math.min(base.velocity, index.maxVel[sampleIndex]),
+    acceleration: Math.min(base.acceleration, index.maxAccel[sampleIndex]),
+    deceleration: Math.min(base.deceleration, index.maxDecel[sampleIndex]),
+  });
   return {
-    points: samples.map((sample) => limitsAtFraction(base, ranges, sample.f)),
-    intervals: samples.map((sample, index) => index === 0
-      ? limitsAtFraction(base, ranges, sample.f)
-      : intervalLimits(base, ranges, samples[index - 1].f, sample.f)),
+    points: samples.map((_, index) => limitsAt(pointIndex, index)),
+    intervals: samples.map((_, index) => index === 0 ? limitsAt(pointIndex, 0) : limitsAt(intervalIndex, index)),
   };
 }
 

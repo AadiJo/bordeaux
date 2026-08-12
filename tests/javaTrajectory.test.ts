@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildJavaTrajectory, javaTrajectoryFileName } from "../src/shared/export/javaTrajectory";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
-import type { AutonomousRoutine, JavaCommandCatalog } from "../src/shared/types";
+import type { AutonomousRoutine, JavaCommandCatalog, RoutineNode } from "../src/shared/types";
 
 function generatedCatalog(): JavaCommandCatalog {
   return {
@@ -204,5 +204,43 @@ describe("Java trajectory export", () => {
     })));
 
     expect(() => buildJavaTrajectory(project, generatedCatalog())).toThrow("exceeds 100000 samples");
+  });
+
+  it("rejects documents beyond the Java reader path and routine limits", () => {
+    const pathProject = createDemoProject();
+    const sourcePath = pathProject.paths[0];
+    pathProject.paths = Array.from({ length: 65 }, (_, index) => ({
+      ...structuredClone(sourcePath),
+      id: `path-${index}`,
+      name: `Path ${index}`,
+    }));
+    expect(() => buildJavaTrajectory(pathProject, generatedCatalog())).toThrow("exceeds 64 paths");
+
+    const routineProject = createDemoProject();
+    routineProject.routines[0].nodes = Array.from({ length: 2_001 }, (_, index) => ({
+      id: `node-${index}`,
+      type: "path" as const,
+      ref: routineProject.paths[0].id,
+    }));
+    expect(() => buildJavaTrajectory(routineProject, generatedCatalog())).toThrow("exceeds 2000 routine nodes");
+  });
+
+  it("rejects routine JSON deeper than the Java reader accepts", () => {
+    const project = createDemoProject();
+    let nodes: RoutineNode[] = [{ id: "path-node", type: "path", ref: project.paths[0].id }];
+    for (let depth = 0; depth < 20; depth += 1) {
+      nodes = [{
+        id: `decision-${depth}`,
+        type: "decision",
+        cond: `frc.robot.Conditions#depth${depth}`,
+        thenLabel: "yes",
+        elseLabel: "no",
+        then: nodes,
+        else: [],
+      }];
+    }
+    project.routines[0].nodes = nodes;
+
+    expect(() => buildJavaTrajectory(project, generatedCatalog())).toThrow("exceeds JSON nesting depth of 40");
   });
 });

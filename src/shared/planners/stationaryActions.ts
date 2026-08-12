@@ -1,16 +1,10 @@
 import { PM } from "../math/pm";
+import { wrapRadians } from "../math/angles";
 import type { ConstraintRange, PathDoc, PlannerResult, RobotConfig, TrajectorySample } from "../types";
 import { MAX_TRAJECTORY_SAMPLES } from "./limits";
 
 const EPSILON = 1e-9;
 const DEG = Math.PI / 180;
-
-function wrapRadians(value: number): number {
-  let wrapped = value;
-  while (wrapped > Math.PI) wrapped -= Math.PI * 2;
-  while (wrapped < -Math.PI) wrapped += Math.PI * 2;
-  return wrapped;
-}
 
 function directedDelta(start: number, end: number, direction = "shortest"): number {
   let delta = wrapRadians(end - start);

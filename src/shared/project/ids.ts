@@ -17,6 +17,10 @@ export function createRoutineId(): string {
   return `routine_${uniqueId()}`;
 }
 
+export function createRoutineNodeId(): string {
+  return `routine_node_${globalThis.crypto.randomUUID()}`;
+}
+
 export function createPathLinkId(): string {
   return `pathlink_${uniqueId()}`;
 }

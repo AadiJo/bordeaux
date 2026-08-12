@@ -1,5 +1,7 @@
 import type { ConstraintRange, PathDoc, PlannerResult, RobotConfig, TrajectorySample } from "../types";
-import { headingTransitionWindows, segmentHeadingLaws, type HeadingTransitionWindow } from "./headingTransitions";
+import { wrapRadians } from "../math/angles";
+import { headingTransitionWindows, segmentHeadingLaws } from "./headingTransitions";
+import { indexIntervalPolicies } from "./intervalPolicies";
 import { MAX_TRAJECTORY_SAMPLES } from "./limits";
 
 const EPSILON = 1e-9;
@@ -9,13 +11,6 @@ export type EffectiveRange = ConstraintRange & { start: number; end: number };
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
-}
-
-function wrapRadians(value: number): number {
-  let wrapped = value;
-  while (wrapped > Math.PI) wrapped -= Math.PI * 2;
-  while (wrapped < -Math.PI) wrapped += Math.PI * 2;
-  return wrapped;
 }
 
 function waypointFractions(path: PathDoc, samples: readonly TrajectorySample[]): number[] {
@@ -61,24 +56,6 @@ export function activeRanges(ranges: readonly EffectiveRange[], fraction: number
   return ranges.filter((range) => fraction >= range.start - EPSILON && fraction <= range.end + EPSILON);
 }
 
-function translationHasPriorityForInterval(
-  ranges: readonly EffectiveRange[],
-  transitions: readonly HeadingTransitionWindow[],
-  before: number,
-  after: number,
-): boolean {
-  const start = Math.min(before, after);
-  const end = Math.max(before, after);
-  const overlaps = (candidateStart: number, candidateEnd: number) => (
-    Math.min(end, candidateEnd) - Math.max(start, candidateStart) >= -EPSILON
-  );
-  const active = ranges.filter((range) => overlaps(range.start, range.end));
-  const activeTransitions = transitions.filter((transition) => overlaps(transition.start, transition.end));
-  return active.length + activeTransitions.length > 0
-    && active.every((range) => range.rotationPriority === "translation")
-    && activeTransitions.every((transition) => transition.rotationPriority === "translation");
-}
-
 function angularLimits(path: PathDoc, ranges: readonly EffectiveRange[], fraction: number) {
   let velocity = path.constraints.maxAngVel * DEG;
   let acceleration = path.constraints.maxAngAccel * DEG;
@@ -95,13 +72,18 @@ function angularLimits(path: PathDoc, ranges: readonly EffectiveRange[], fractio
   };
 }
 
-function intervalAngularLimits(path: PathDoc, ranges: readonly EffectiveRange[], before: number, after: number) {
-  const first = angularLimits(path, ranges, before);
-  const second = angularLimits(path, ranges, after);
+function intervalAngularLimits(
+  path: PathDoc,
+  policies: ReturnType<typeof indexIntervalPolicies>,
+  interval: number,
+) {
+  const velocity = Math.min(path.constraints.maxAngVel, policies.maxAngVel[interval]) * DEG;
+  const acceleration = Math.min(path.constraints.maxAngAccel, policies.maxAngAccel[interval]) * DEG;
+  const deceleration = Math.min(path.constraints.maxAngDecel ?? path.constraints.maxAngAccel, policies.maxAngAccel[interval]) * DEG;
   return {
-    velocity: Math.min(first.velocity, second.velocity),
-    acceleration: Math.min(first.acceleration, second.acceleration),
-    deceleration: Math.min(first.deceleration, second.deceleration),
+    velocity: Math.max(velocity, EPSILON),
+    acceleration: Math.max(acceleration, EPSILON),
+    deceleration: Math.max(deceleration, EPSILON),
   };
 }
 
@@ -153,13 +135,19 @@ function samplePeriod(samples: readonly TrajectorySample[]): number {
   return Number.isFinite(best) ? Math.max(0.01, Math.min(0.05, best)) : 0.02;
 }
 
-function hasAngularViolation(path: PathDoc, ranges: readonly EffectiveRange[], samples: readonly TrajectorySample[]): boolean {
+function hasAngularViolation(
+  path: PathDoc,
+  ranges: readonly EffectiveRange[],
+  samples: readonly TrajectorySample[],
+  policies: ReturnType<typeof indexIntervalPolicies>,
+): boolean {
+  const terminalLimits = angularLimits(path, ranges, 1);
   let previousAcceleration: number | undefined;
   for (let index = 0; index < samples.length; index += 1) {
     const sample = samples[index];
     const limits = index === 0
       ? angularLimits(path, ranges, sample.f)
-      : intervalAngularLimits(path, ranges, samples[index - 1].f, sample.f);
+      : index < policies.maxAngVel.length ? intervalAngularLimits(path, policies, index) : terminalLimits;
     if (Math.abs(sample.angularVelocityRadps) > limits.velocity * 1.02) return true;
     if (index === 0) continue;
     const previous = samples[index - 1];
@@ -216,6 +204,7 @@ export function applyRotationPriority(path: PathDoc, result: PlannerResult, robo
       ? sample.headingRad
       : desired[index - 1] + wrapRadians(sample.headingRad - desired[index - 1]));
   });
+  const intervalPolicies = indexIntervalPolicies(result.samples.map((sample) => sample.f), ranges, transitions);
   const samples = result.samples.map((sample) => ({ ...sample }));
   let following = false;
   let actual = desired[0];
@@ -225,20 +214,21 @@ export function applyRotationPriority(path: PathDoc, result: PlannerResult, robo
   samples[0].angularVelocityRadps = 0;
   for (let index = 1; index < samples.length; index += 1) {
     const dt = samples[index].t - samples[index - 1].t;
-    const priorityHere = translationHasPriorityForInterval(
-      ranges,
-      transitions,
-      samples[index - 1].f,
-      samples[index].f,
-    );
-    if (priorityHere) following = true;
+    const priorityHere = intervalPolicies.activeTranslationPriority[index];
+    const previousDt = index > 1 ? result.samples[index - 1].t - result.samples[index - 2].t : 0;
+    const plannedOmega = previousDt > EPSILON
+      ? wrapRadians(desired[index - 1] - desired[index - 2]) / previousDt
+      : 0;
+    const caughtUp = Math.abs(desired[index - 1] - actual) <= 0.05 * DEG
+      && Math.abs(plannedOmega - omega) <= 0.05 * DEG;
+    following = priorityHere || (following && !caughtUp);
     if (!following || dt <= EPSILON) {
       actual = desired[index];
       omega = samples[index].angularVelocityRadps;
       continue;
     }
 
-    const limits = intervalAngularLimits(path, ranges, samples[index - 1].f, samples[index].f);
+    const limits = intervalAngularLimits(path, intervalPolicies, index);
     const nextDt = index + 1 < samples.length ? samples[index + 1].t - samples[index].t : dt;
     ({ actual, omega } = trackedStep(actual, omega, desired[index], limits, dt, Math.max(dt, nextDt)));
 
@@ -275,7 +265,7 @@ export function applyRotationPriority(path: PathDoc, result: PlannerResult, robo
     });
   }
 
-  if (hasAngularViolation(path, ranges, samples)) {
+  if (hasAngularViolation(path, ranges, samples, intervalPolicies)) {
     diagnostics.push({
       severity: "error",
       path: `paths.${path.name}.waypoints`,
