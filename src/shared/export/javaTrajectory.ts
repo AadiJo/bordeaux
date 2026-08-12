@@ -7,6 +7,9 @@ import type { BordeauxProject, CommandInvocation, FollowMode, JavaCommandCatalog
 
 const MAX_SAMPLE_COUNT = 100_000;
 const MAX_EVENT_COUNT = 2_000;
+const MAX_PATH_COUNT = 64;
+const MAX_ROUTINE_NODE_COUNT = 2_000;
+const MAX_JSON_NESTING_DEPTH = 40;
 const MAX_EXPORT_BYTES = 16 * 1024 * 1024;
 
 export interface JavaTrajectoryEvent {
@@ -166,10 +169,28 @@ function assertExportSize(value: unknown): void {
   }
 }
 
+function assertJsonNestingDepth(value: unknown): void {
+  const visit = (item: unknown, depth: number): void => {
+    if (item === null || typeof item !== "object") return;
+    const nextDepth = depth + 1;
+    if (nextDepth > MAX_JSON_NESTING_DEPTH) {
+      throw new Error(`Java trajectory export exceeds JSON nesting depth of ${MAX_JSON_NESTING_DEPTH}`);
+    }
+    const children = Array.isArray(item) ? item : Object.values(item as Record<string, unknown>);
+    children.forEach((child) => visit(child, nextDepth));
+  };
+  visit(value, 0);
+}
+
 function deployableRoutine(project: BordeauxProject, pathIds: Set<string>): JavaTrajectoryRoutine | null {
   const routine = activeRoutine(project);
   if (!routine) return null;
+  let nodeCount = 0;
   const nodes = (source: RoutineNode[]): RoutineNode[] => source.map((node) => {
+    nodeCount += 1;
+    if (nodeCount > MAX_ROUTINE_NODE_COUNT) {
+      throw new Error(`Java trajectory export exceeds ${MAX_ROUTINE_NODE_COUNT} routine nodes`);
+    }
     if (node.type === "path") {
       if (!pathIds.has(node.ref)) throw new Error(`Routine path ${node.ref} is not Java-exportable`);
       return { id: node.id, type: "path", ref: node.ref };
@@ -193,6 +214,9 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
   const invocationIssues = validateProjectJavaInvocations(project, catalog);
   if (invocationIssues.length > 0) throw new Error(invocationIssues.map((item) => `${item.path}: ${item.message}`).join("\n"));
   const sourcePaths = project.paths.filter((path) => path.exportable !== false);
+  if (sourcePaths.length > MAX_PATH_COUNT) {
+    throw new Error(`Java trajectory export exceeds ${MAX_PATH_COUNT} paths`);
+  }
   let baseSampleCount = 0;
   for (const path of sourcePaths) {
     baseSampleCount += Math.max(0, path.waypoints.length - 1) * DEFAULT_SAMPLES_PER_SEGMENT + 1;
@@ -204,7 +228,7 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
     if (eventCount > MAX_EVENT_COUNT) throw new Error(`Java trajectory export exceeds ${MAX_EVENT_COUNT} events`);
   }
   const routine = deployableRoutine(project, new Set(sourcePaths.map((path) => path.id)));
-  assertExportSize({
+  const preflightDocument = {
     catalog: {
       schemaVersion: "1.0",
       catalogId: catalog.catalogId,
@@ -223,7 +247,9 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
         schedule: marker.schedule,
       }] : []),
     })),
-  });
+  };
+  assertJsonNestingDepth(preflightDocument);
+  assertExportSize(preflightDocument);
 
   const native = buildBdxExport(project);
   let sampleCount = 0;
@@ -277,6 +303,7 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
     routine,
     paths,
   };
+  assertJsonNestingDepth(document);
   assertExportSize(document);
   const contents = `${JSON.stringify(document, null, 2)}\n`;
   if (Buffer.byteLength(contents, "utf8") > MAX_EXPORT_BYTES) throw new Error(`Java trajectory export exceeds ${MAX_EXPORT_BYTES} bytes`);
