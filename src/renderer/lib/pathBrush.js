@@ -241,7 +241,33 @@ function isSemanticWaypoint(waypoint) {
     || waypoint.turnInPlace != null || waypoint.jiggle != null || waypoint.headingTransition != null;
 }
 
-function mergedCurveCandidate(previous, waypoint, next) {
+function distanceToSegment(value, start, end) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared < 1e-18) return distance(value, start);
+  const t = clamp(((value.x - start.x) * dx + (value.y - start.y) * dy) / lengthSquared, 0, 1);
+  return distance(value, { x: start.x + dx * t, y: start.y + dy * t });
+}
+
+// Shortest distance from a point to a curve, approximated by its chord polyline. Unlike
+// comparing points at equal t, this ignores the reparameterization a merge necessarily
+// introduces and only reports genuine changes in shape.
+function distanceToCurve(value, curve, steps = 64) {
+  let closest = Infinity;
+  let previous = curve[0];
+  for (let index = 1; index <= steps; index++) {
+    const current = cubicPoint(curve, index / steps);
+    closest = Math.min(closest, distanceToSegment(value, previous, current));
+    previous = current;
+  }
+  return closest;
+}
+
+// Fits one cubic through the span previous..waypoint..next and reports how far it
+// strays from the original. `error` covers the whole span; `outsideError` covers only
+// the portion beyond the stroke, which must stay put even when the merge is accepted.
+function mergedCurveCandidate(previous, waypoint, next, stroke) {
   const left = cubicPoints(previous, waypoint);
   const right = cubicPoints(waypoint, next);
   const incoming = distance(left[2], left[3]);
@@ -257,14 +283,18 @@ function mergedCurveCandidate(previous, waypoint, next) {
   ];
   if (distance(curve[0], curve[1]) > lengthTotal * 1.5 || distance(curve[2], curve[3]) > lengthTotal * 1.5) return null;
   let error = 0;
+  let outsideError = 0;
   for (let index = 0; index <= 24; index++) {
     const t = index / 24;
     const original = t <= splitT
       ? cubicPoint(left, t / splitT)
       : cubicPoint(right, (t - splitT) / (1 - splitT));
     error = Math.max(error, distance(original, cubicPoint(curve, t)));
+    if (falloff(distance(original, stroke.center), stroke.radius) <= 0) {
+      outsideError = Math.max(outsideError, distanceToCurve(original, curve));
+    }
   }
-  return { curve, error, splitT };
+  return { curve, error, outsideError, splitT };
 }
 
 function remapRangesAfterRemoval(path, removedIndex, splitT) {
@@ -298,6 +328,11 @@ function remapRangesAfterRemoval(path, removedIndex, splitT) {
   }
 }
 
+// Merges redundant waypoints back into a single curve. A merge rewrites the handles of
+// both neighbours, which can reach past the stroke, so the merged curve must also leave
+// the part of the span outside the radius where it was.
+const OUTSIDE_TOLERANCE = 1e-6;
+
 function consolidateWaypoints(path, stroke) {
   let removed = 0;
   for (let index = 1; index < path.waypoints.length - 1;) {
@@ -309,9 +344,9 @@ function consolidateWaypoints(path, stroke) {
       index += 1;
       continue;
     }
-    const candidate = mergedCurveCandidate(previous, waypoint, next);
+    const candidate = mergedCurveCandidate(previous, waypoint, next, stroke);
     const tolerance = stroke.radius * (0.008 + stroke.strength * 0.026) * weight;
-    if (!candidate || candidate.error > tolerance) {
+    if (!candidate || candidate.error > tolerance || candidate.outsideError > OUTSIDE_TOLERANCE) {
       index += 1;
       continue;
     }

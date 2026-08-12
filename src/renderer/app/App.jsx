@@ -1568,14 +1568,16 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
           setTool(toolShortcut);
           return;
         }
-        if (page === 'plan' && tool === 'brush' && !textEditing && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === '[' || e.key === ']')) {
+        const formControl = matches && matches('input,select,textarea,[contenteditable="true"]');
+        if (formControl) return;
+        // Bracket radius nudges sit below the form-control guard so a focused field
+        // (including .numinput, which tool shortcuts deliberately pass through) keeps its keystrokes.
+        if (page === 'plan' && tool === 'brush' && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === '[' || e.key === ']')) {
           e.preventDefault();
           const direction = e.key === ']' ? 1 : -1;
           setBrush((current) => ({ ...current, radius: Math.max(0.3, Math.min(2.4, +(current.radius + direction * 0.1).toFixed(1))) }));
           return;
         }
-        const formControl = matches && matches('input,select,textarea,[contenteditable="true"]');
-        if (formControl) return;
         if ((e.metaKey || e.ctrlKey) && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
         if ((e.metaKey || e.ctrlKey) && k === 'y') { e.preventDefault(); redo(); return; }
         if (page !== 'plan') return;

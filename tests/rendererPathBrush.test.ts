@@ -34,6 +34,25 @@ function straightPath(): Path {
   };
 }
 
+// Densely samples every segment so tests can compare curve shape rather than control-point
+// bookkeeping: splitting or merging a segment moves handles while leaving the curve intact.
+function samplePath(path: Path, perSegment = 30): Point[] {
+  const samples: Point[] = [];
+  for (let index = 0; index + 1 < path.waypoints.length; index++) {
+    const start = path.waypoints[index];
+    const end = path.waypoints[index + 1];
+    for (let step = 0; step <= perSegment; step++) {
+      const t = step / perSegment;
+      const u = 1 - t;
+      samples.push({
+        x: u ** 3 * start.x + 3 * u ** 2 * t * start.nextC.x + 3 * u * t ** 2 * end.prevC.x + t ** 3 * end.x,
+        y: u ** 3 * start.y + 3 * u ** 2 * t * start.nextC.y + 3 * u * t ** 2 * end.prevC.y + t ** 3 * end.y,
+      });
+    }
+  }
+  return samples;
+}
+
 describe("path sculpting brushes", () => {
   it("subdivides only the influenced curve and pushes the new waypoints", () => {
     const path = straightPath();
@@ -103,6 +122,29 @@ describe("path sculpting brushes", () => {
     const range = path.ranges[0];
     expect(position(range.w0, range.t0 ?? 0)).toBeCloseTo(3.25, 2);
     expect(position(range.w1, range.t1 ?? 0)).toBeCloseTo(7.75, 2);
+  });
+
+  it("refuses a smooth merge that would reshape the curve outside the brush", () => {
+    // Merging rewrites both neighbours' handles, which reach past a small brush. Sculpt a
+    // curve first so the span around the merge candidate carries real curvature.
+    const path = straightPath();
+    const pathBrush = brush();
+    pathBrush.apply(path, { kind: "push", previous: { x: 5.5, y: 4 }, center: { x: 5.5, y: 5 }, radius: 2.4, strength: 1 });
+    pathBrush.apply(path, { kind: "push", previous: { x: 5.5, y: 5 }, center: { x: 6.2, y: 5.3 }, radius: 2.4, strength: 1 });
+
+    const center = { x: 4.5, y: 4.7 };
+    const radius = 0.8;
+    const before = samplePath(path);
+
+    pathBrush.apply(path, { kind: "smooth", previous: { x: 4.35, y: 4.65 }, center, radius, strength: 0.4 });
+
+    // Samples the brush could not reach must still lie on the curve. Accepting the merge
+    // here would drag them roughly 2cm.
+    const after = samplePath(path);
+    const outside = before.filter((sample) => Math.hypot(sample.x - center.x, sample.y - center.y) > radius);
+    expect(outside.length).toBeGreaterThan(0);
+    const drift = Math.max(...outside.map((sample) => Math.min(...after.map((other) => Math.hypot(sample.x - other.x, sample.y - other.y)))));
+    expect(drift).toBeLessThan(0.002);
   });
 
   it("removes redundant waypoints while preserving local range positions", () => {
