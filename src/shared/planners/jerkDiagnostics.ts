@@ -11,12 +11,14 @@ export function addJerkDiagnostics(path: PathDoc, result: PlannerResult): Planne
   let maxLinear = 0;
   let maxAngular = 0;
   let previousAngularAcceleration: number | undefined;
+  let previousAngularIntervalS: number | undefined;
   for (let index = 1; index < result.samples.length; index += 1) {
     const sample = result.samples[index];
     const previous = result.samples[index - 1];
     const dt = sample.t - previous.t;
     if (dt <= EPSILON) {
       previousAngularAcceleration = undefined;
+      previousAngularIntervalS = undefined;
       continue;
     }
     if (linearLimit > 0) {
@@ -24,10 +26,15 @@ export function addJerkDiagnostics(path: PathDoc, result: PlannerResult): Planne
     }
     if (angularLimit > 0) {
       const angularAcceleration = (sample.angularVelocityRadps - previous.angularVelocityRadps) / dt;
-      if (previousAngularAcceleration !== undefined) {
-        maxAngular = Math.max(maxAngular, Math.abs(angularAcceleration - previousAngularAcceleration) / dt);
+      if (previousAngularAcceleration !== undefined && previousAngularIntervalS !== undefined) {
+        const accelerationSpacingS = (previousAngularIntervalS + dt) / 2;
+        maxAngular = Math.max(
+          maxAngular,
+          Math.abs(angularAcceleration - previousAngularAcceleration) / accelerationSpacingS,
+        );
       }
       previousAngularAcceleration = angularAcceleration;
+      previousAngularIntervalS = dt;
     }
   }
 

@@ -2,32 +2,22 @@ import { describe, expect, it } from "vitest";
 import { buildBdxExport } from "../src/shared/export/bdx";
 import { buildJavaTrajectory } from "../src/shared/export/javaTrajectory";
 import { getPlanner } from "../src/shared/planners";
+import { addJerkDiagnostics } from "../src/shared/planners/jerkDiagnostics";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
-import type { JavaCommandCatalog, TrajectoryPlannerId, TrajectorySample } from "../src/shared/types";
+import type { JavaCommandCatalog, PlannerResult, TrajectoryPlannerId, TrajectorySample } from "../src/shared/types";
 
 const PLANNERS: TrajectoryPlannerId[] = ["profiledSpline", "optimizedTrajectory"];
-const DEGREES = 180 / Math.PI;
 
-function measuredJerk(samples: readonly TrajectorySample[]): { linear: number; angularDeg: number } {
+function measuredLinearJerk(samples: readonly TrajectorySample[]): number {
   let linear = 0;
-  let angular = 0;
-  let previousAngularAcceleration: number | undefined;
   for (let index = 1; index < samples.length; index += 1) {
     const sample = samples[index];
     const previous = samples[index - 1];
     const dt = sample.t - previous.t;
-    if (dt <= 1e-9) {
-      previousAngularAcceleration = undefined;
-      continue;
-    }
+    if (dt <= 1e-9) continue;
     linear = Math.max(linear, Math.abs(sample.accelerationMps2 - previous.accelerationMps2) / dt);
-    const angularAcceleration = (sample.angularVelocityRadps - previous.angularVelocityRadps) / dt;
-    if (previousAngularAcceleration !== undefined) {
-      angular = Math.max(angular, Math.abs(angularAcceleration - previousAngularAcceleration) / dt);
-    }
-    previousAngularAcceleration = angularAcceleration;
   }
-  return { linear, angularDeg: angular * DEGREES };
+  return linear;
 }
 
 function movingProject() {
@@ -73,9 +63,8 @@ describe("final trajectory jerk diagnostics", () => {
     path.constraints.maxJerk = 0.1;
 
     const result = getPlanner(plannerId).generate({ path, robot: project.robot });
-    const measured = measuredJerk(result.samples);
 
-    expect(measured.linear).toBeGreaterThan(path.constraints.maxJerk);
+    expect(measuredLinearJerk(result.samples)).toBeGreaterThan(path.constraints.maxJerk);
     expect(result.diagnostics).toContainEqual(expect.objectContaining({
       severity: "error",
       path: `paths.${path.name}.constraints.maxJerk`,
@@ -91,9 +80,7 @@ describe("final trajectory jerk diagnostics", () => {
     path.constraints.maxAngJerk = 1;
 
     const result = getPlanner(plannerId).generate({ path, robot: project.robot });
-    const measured = measuredJerk(result.samples);
 
-    expect(measured.angularDeg).toBeGreaterThan(path.constraints.maxAngJerk);
     expect(result.diagnostics).toContainEqual(expect.objectContaining({
       severity: "error",
       path: `paths.${path.name}.constraints.maxAngJerk`,
@@ -112,11 +99,34 @@ describe("final trajectory jerk diagnostics", () => {
     path.constraints.maxAngJerk = 120;
 
     const result = getPlanner(plannerId).generate({ path, robot: project.robot });
-    const measured = measuredJerk(result.samples);
 
-    expect(measured.angularDeg).toBeLessThanOrEqual(path.constraints.maxAngJerk + 1e-6);
     expect(result.diagnostics.some((issue) => issue.message.includes("Angular jerk"))).toBe(false);
     expect(result.samples.at(-1)!.headingRad).toBeCloseTo(Math.PI / 2, 6);
+  });
+
+  it("measures angular jerk between interval midpoints on nonuniform samples", () => {
+    const project = movingProject();
+    const path = project.paths[0];
+    path.constraints.maxAngJerk = 65;
+    const sample = (i: number, t: number, angularVelocityRadps: number): TrajectorySample => ({
+      i, t, angularVelocityRadps,
+      s: 0, f: i / 2, x: 0, y: 0, headingRad: 0,
+      velocityMps: 0, accelerationMps2: 0, curvatureInvM: 0,
+    });
+    const result = addJerkDiagnostics(path, {
+      planner: "profiledSpline",
+      totalTimeS: 3,
+      totalDistanceM: 0,
+      samples: [sample(0, 0, 0), sample(1, 1, 0), sample(2, 3, 4)],
+      markers: [],
+      diagnostics: [],
+    } satisfies PlannerResult);
+
+    expect(result.diagnostics).toContainEqual({
+      severity: "error",
+      path: `paths.${path.name}.constraints.maxAngJerk`,
+      message: "Angular jerk reaches 76.394 °/s³, above the maxAngJerk limit of 65.000 °/s³",
+    });
   });
 
   it.each(PLANNERS)("blocks native and Java export when %s violates maxJerk", (plannerId) => {
