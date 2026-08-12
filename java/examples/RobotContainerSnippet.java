@@ -27,9 +27,9 @@ public final class RobotContainerSnippet {
         }
     }
 
-    // Pass the same elapsed time used by the path follower from robotPeriodic/autonomousPeriodic.
-    public void pathPeriodic(double elapsedS) {
-        if (bordeauxEvents != null) bordeauxEvents.periodic(elapsedS);
+    // Pass the follower's elapsed time and monotonic measured progress from 0 to 1.
+    public void pathPeriodic(double elapsedS, double measuredFraction) {
+        if (bordeauxEvents != null) bordeauxEvents.periodic(elapsedS, measuredFraction);
     }
 
     public void endPath() {

@@ -119,6 +119,23 @@ class BordeauxRuntimeTest {
     }
 
     @Test
+    void positionEventsAdvanceOnlyFromMeasuredProgress() {
+        BordeauxEvent event = new BordeauxEvent(
+                "collect", "Collect", 0.2, 0.5, "collect", MAPPER.createObjectNode(), false,
+                BordeauxEvent.Trigger.POSITION, null, null, null);
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "auto", "Auto", 1, CATALOG_ID, HASH, List.of(event));
+        List<String> created = new ArrayList<>();
+        BordeauxEventRunner runner = new BordeauxEventRunner(
+                path, registry(created, "collect"), new RecordingScheduler());
+
+        runner.periodic(0.9);
+        assertTrue(created.isEmpty());
+        runner.periodic(1.0, 0.5);
+        assertEquals(List.of("collect"), created);
+    }
+
+    @Test
     void expiresConditionalOneShotEventsAtTheirEndTime() {
         ObjectNode arguments = MAPPER.createObjectNode();
         BordeauxEvent event = new BordeauxEvent(
