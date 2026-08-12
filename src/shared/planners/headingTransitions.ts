@@ -1,4 +1,5 @@
 import type { HeadingTransition, PathDoc, Waypoint } from "../types";
+import { wrapRadians } from "../math/angles";
 
 const EPSILON = 1e-9;
 export const DEFAULT_HEADING_TRANSITION_DISTANCE_M = 0.75;
@@ -29,13 +30,6 @@ export interface HeadingTransitionGoal {
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
-}
-
-function wrapRadians(value: number): number {
-  let wrapped = value;
-  while (wrapped > Math.PI) wrapped -= Math.PI * 2;
-  while (wrapped < -Math.PI) wrapped += Math.PI * 2;
-  return wrapped;
 }
 
 function unwrapFrom(previous: number, next: number): number {

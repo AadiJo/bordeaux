@@ -56,6 +56,15 @@ function pointerDragHarness() {
 }
 
 describe("renderer utilities", () => {
+  it("normalizes large finite headings without iterative subtraction", () => {
+    const pathMath = loadRendererExport<{ angWrap(value: number): number }>(
+      new URL("../src/renderer/lib/pathMath.js", import.meta.url),
+      "PM",
+    );
+    expect(pathMath.angWrap(1e12)).toBeGreaterThanOrEqual(-Math.PI);
+    expect(pathMath.angWrap(1e12)).toBeLessThanOrEqual(Math.PI);
+  });
+
   it("converts display units without changing canonical SI values", () => {
     const { prefs, document, values } = unitPreferences();
     expect(prefs.current()).toBe("metric");

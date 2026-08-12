@@ -1,4 +1,5 @@
 import type { ConstraintRange, PathDoc, PlannerResult, RobotConfig, TrajectorySample } from "../types";
+import { wrapRadians } from "../math/angles";
 import { headingTransitionWindows, segmentHeadingLaws, type HeadingTransitionWindow } from "./headingTransitions";
 import { MAX_TRAJECTORY_SAMPLES } from "./limits";
 
@@ -9,13 +10,6 @@ export type EffectiveRange = ConstraintRange & { start: number; end: number };
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
-}
-
-function wrapRadians(value: number): number {
-  let wrapped = value;
-  while (wrapped > Math.PI) wrapped -= Math.PI * 2;
-  while (wrapped < -Math.PI) wrapped += Math.PI * 2;
-  return wrapped;
 }
 
 function waypointFractions(path: PathDoc, samples: readonly TrajectorySample[]): number[] {
