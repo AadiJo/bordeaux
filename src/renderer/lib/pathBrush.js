@@ -1,0 +1,234 @@
+// Local path sculpting with adaptive Bézier subdivision. Brush edits leave
+// distant segments untouched and create control points only inside the brush.
+const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
+const mix = (a, b, t) => a + (b - a) * t;
+const pointMix = (a, b, t) => ({ x: mix(a.x, b.x, t), y: mix(a.y, b.y, t) });
+const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const point = (value) => ({ x: value.x, y: value.y });
+
+function cubicPoints(start, end) {
+  const p0 = point(start), p1 = point(end);
+  if (start.segType === 'line') {
+    return [p0, pointMix(p0, p1, 1 / 3), pointMix(p0, p1, 2 / 3), p1];
+  }
+  return [p0, point(start.nextC || pointMix(p0, p1, 1 / 3)), point(end.prevC || pointMix(p0, p1, 2 / 3)), p1];
+}
+
+function cubicPoint(curve, t) {
+  const a = pointMix(curve[0], curve[1], t);
+  const b = pointMix(curve[1], curve[2], t);
+  const c = pointMix(curve[2], curve[3], t);
+  return pointMix(pointMix(a, b, t), pointMix(b, c, t), t);
+}
+
+function splitCubic(curve, t) {
+  const q0 = pointMix(curve[0], curve[1], t);
+  const q1 = pointMix(curve[1], curve[2], t);
+  const q2 = pointMix(curve[2], curve[3], t);
+  const r0 = pointMix(q0, q1, t);
+  const r1 = pointMix(q1, q2, t);
+  const center = pointMix(r0, r1, t);
+  return { left: [curve[0], q0, r0, center], right: [center, r1, q2, curve[3]] };
+}
+
+function approximateLength(curve, steps = 32) {
+  let length = 0;
+  let previous = curve[0];
+  for (let index = 1; index <= steps; index++) {
+    const next = cubicPoint(curve, index / steps);
+    length += distance(previous, next);
+    previous = next;
+  }
+  return length;
+}
+
+function segmentMetadata(source) {
+  const result = { segType: 'bezier' };
+  for (const key of ['segmentHeadingMode', 'segmentFollowMode', 'segmentLookAt']) {
+    if (source[key] !== undefined) result[key] = typeof source[key] === 'object' ? { ...source[key] } : source[key];
+  }
+  return result;
+}
+
+function shiftWaypointRanges(path, insertedIndex, splitT) {
+  const segmentIndex = insertedIndex - 1;
+  for (const range of path.ranges || []) {
+    if (range.anchor !== 'wp') continue;
+    for (const [waypointKey, localKey] of [['w0', 't0'], ['w1', 't1']]) {
+      if (!Number.isInteger(range[waypointKey])) continue;
+      if (range[localKey] == null) {
+        if (range[waypointKey] >= insertedIndex) range[waypointKey] += 1;
+        continue;
+      }
+      if (range[waypointKey] > segmentIndex) {
+        range[waypointKey] += 1;
+        continue;
+      }
+      if (range[waypointKey] !== segmentIndex) continue;
+      const local = clamp(Number(range[localKey]), 0, 1);
+      if (local <= splitT) range[localKey] = local / Math.max(splitT, 1e-9);
+      else {
+        range[waypointKey] += 1;
+        range[localKey] = (local - splitT) / Math.max(1 - splitT, 1e-9);
+      }
+    }
+  }
+}
+
+function subdivisionParameters(curve, center, radius, spacing) {
+  const length = approximateLength(curve);
+  if (length < spacing * 1.35) return [];
+  const steps = clamp(Math.ceil(length / Math.max(0.04, spacing / 2)), 12, 96);
+  const candidates = [];
+  let lastDistance = -Infinity;
+  for (let index = 1; index < steps; index++) {
+    const t = index / steps;
+    const along = length * t;
+    if (along < spacing * 0.55 || length - along < spacing * 0.55) continue;
+    if (along - lastDistance < spacing * 0.78) continue;
+    if (distance(cubicPoint(curve, t), center) > radius * 1.18) continue;
+    candidates.push(t);
+    lastDistance = along;
+  }
+  return candidates;
+}
+
+function splitSegment(path, segmentIndex, parameters) {
+  if (!parameters.length) return 0;
+  const waypoints = path.waypoints;
+  const source = waypoints[segmentIndex];
+  const end = waypoints[segmentIndex + 1];
+  const metadata = segmentMetadata(source);
+  let remaining = cubicPoints(source, end);
+  let previousT = 0;
+  let currentStart = source;
+  source.segType = 'bezier';
+
+  parameters.forEach((parameter, offset) => {
+    const localT = (parameter - previousT) / Math.max(1e-9, 1 - previousT);
+    const halves = splitCubic(remaining, localT);
+    currentStart.nextC = point(halves.left[1]);
+    const insertedIndex = segmentIndex + offset + 1;
+    const waypoint = {
+      x: halves.left[3].x,
+      y: halves.left[3].y,
+      prevC: point(halves.left[2]),
+      nextC: point(halves.right[1]),
+      linked: true,
+      corner: false,
+      stop: false,
+      thetaOn: false,
+      theta: mix(Number(source.theta) || 0, Number(end.theta) || 0, parameter),
+      ...metadata,
+    };
+    waypoints.splice(insertedIndex, 0, waypoint);
+    shiftWaypointRanges(path, insertedIndex, localT);
+    currentStart = waypoint;
+    remaining = halves.right;
+    previousT = parameter;
+  });
+  currentStart.nextC = point(remaining[1]);
+  end.prevC = point(remaining[2]);
+  return parameters.length;
+}
+
+function densify(path, center, radius) {
+  const spacing = clamp(radius * 0.3, 0.12, 0.48);
+  let added = 0;
+  let segmentIndex = 0;
+  while (segmentIndex < path.waypoints.length - 1 && path.waypoints.length < 320) {
+    const start = path.waypoints[segmentIndex];
+    const end = path.waypoints[segmentIndex + 1];
+    const curve = cubicPoints(start, end);
+    const parameters = subdivisionParameters(curve, center, radius, spacing)
+      .slice(0, Math.max(0, 320 - path.waypoints.length));
+    const inserted = splitSegment(path, segmentIndex, parameters);
+    added += inserted;
+    segmentIndex += inserted + 1;
+  }
+  return added;
+}
+
+function falloff(value, radius) {
+  const u = clamp(1 - value / Math.max(radius, 1e-6), 0, 1);
+  return u * u * (3 - 2 * u);
+}
+
+function transformPoint(value, stroke) {
+  const weight = falloff(distance(value, stroke.center), stroke.radius);
+  if (weight <= 0) return point(value);
+  const dx = stroke.center.x - stroke.previous.x;
+  const dy = stroke.center.y - stroke.previous.y;
+  if (stroke.kind === 'twirl') {
+    const angle = (dx - dy) / Math.max(stroke.radius, 1e-6) * stroke.strength * 1.8 * weight;
+    const x = value.x - stroke.center.x;
+    const y = value.y - stroke.center.y;
+    const cosine = Math.cos(angle), sine = Math.sin(angle);
+    return { x: stroke.center.x + x * cosine - y * sine, y: stroke.center.y + x * sine + y * cosine };
+  }
+  return { x: value.x + dx * stroke.strength * weight, y: value.y + dy * stroke.strength * weight };
+}
+
+function refitHandles(path, center, radius) {
+  const waypoints = path.waypoints;
+  for (let index = 0; index < waypoints.length; index++) {
+    const waypoint = waypoints[index];
+    if (waypoint.stop || waypoint.corner || distance(waypoint, center) > radius * 1.32) continue;
+    const previous = waypoints[Math.max(0, index - 1)];
+    const next = waypoints[Math.min(waypoints.length - 1, index + 1)];
+    let tx = next.x - previous.x;
+    let ty = next.y - previous.y;
+    const magnitude = Math.hypot(tx, ty);
+    if (magnitude < 1e-8) continue;
+    tx /= magnitude;
+    ty /= magnitude;
+    const incoming = index > 0 ? distance(waypoint, previous) * 0.34 : 0;
+    const outgoing = index + 1 < waypoints.length ? distance(waypoint, next) * 0.34 : 0;
+    waypoint.prevC = { x: waypoint.x - tx * incoming, y: waypoint.y - ty * incoming };
+    waypoint.nextC = { x: waypoint.x + tx * outgoing, y: waypoint.y + ty * outgoing };
+    waypoint.linked = true;
+    waypoint.corner = false;
+  }
+}
+
+function smoothWaypoints(path, stroke) {
+  const original = path.waypoints.map(point);
+  const travel = distance(stroke.center, stroke.previous);
+  const scale = clamp(travel / Math.max(stroke.radius, 1e-6) * 3.2, 0.025, 0.22) * stroke.strength;
+  for (let index = 1; index < path.waypoints.length - 1; index++) {
+    const waypoint = path.waypoints[index];
+    const weight = falloff(distance(waypoint, stroke.center), stroke.radius);
+    if (weight <= 0 || waypoint.stop || waypoint.corner) continue;
+    const average = pointMix(original[index - 1], original[index + 1], 0.5);
+    waypoint.x = mix(waypoint.x, average.x, scale * weight);
+    waypoint.y = mix(waypoint.y, average.y, scale * weight);
+  }
+}
+
+function apply(path, input) {
+  if (!path || !Array.isArray(path.waypoints) || path.waypoints.length < 2) return { path, added: 0 };
+  const stroke = {
+    kind: ['push', 'smooth', 'twirl'].includes(input.kind) ? input.kind : 'push',
+    center: point(input.center),
+    previous: point(input.previous || input.center),
+    radius: clamp(Number(input.radius) || 0.9, 0.2, 3),
+    strength: clamp(Number(input.strength) || 0.65, 0.05, 1),
+  };
+  const added = densify(path, stroke.center, stroke.radius);
+  if (stroke.kind === 'smooth') smoothWaypoints(path, stroke);
+  else {
+    for (const waypoint of path.waypoints) {
+      const transformed = transformPoint(waypoint, stroke);
+      const previousControl = transformPoint(waypoint.prevC || waypoint, stroke);
+      const nextControl = transformPoint(waypoint.nextC || waypoint, stroke);
+      waypoint.x = clamp(transformed.x, 0, 17.548);
+      waypoint.y = clamp(transformed.y, 0, 8.052);
+      waypoint.prevC = previousControl;
+      waypoint.nextC = nextControl;
+    }
+  }
+  refitHandles(path, stroke.center, stroke.radius);
+  return { path, added };
+}
+
+export const PathBrush = { apply };
