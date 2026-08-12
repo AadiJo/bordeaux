@@ -86,7 +86,7 @@ function subdivisionParameters(curve, center, radius, spacing) {
     const along = length * t;
     if (along < spacing * 0.55 || length - along < spacing * 0.55) continue;
     if (along - lastDistance < spacing * 0.78) continue;
-    if (distance(cubicPoint(curve, t), center) > radius * 1.18) continue;
+    if (distance(cubicPoint(curve, t), center) > radius) continue;
     candidates.push(t);
     lastDistance = along;
   }
@@ -169,11 +169,31 @@ function transformPoint(value, stroke) {
   return { x: value.x + dx * stroke.strength * weight, y: value.y + dy * stroke.strength * weight };
 }
 
-function refitHandles(path, center, radius) {
+// Displaces every waypoint the stroke reaches, along with its handles, and reports
+// which indices moved so only those get retangented.
+function displaceWaypoints(path, stroke) {
+  const touched = new Set();
+  path.waypoints.forEach((waypoint, index) => {
+    if (falloff(distance(waypoint, stroke.center), stroke.radius) <= 0) return;
+    touched.add(index);
+    const transformed = transformPoint(waypoint, stroke);
+    const previousControl = transformPoint(waypoint.prevC || waypoint, stroke);
+    const nextControl = transformPoint(waypoint.nextC || waypoint, stroke);
+    waypoint.x = clamp(transformed.x, 0, 17.548);
+    waypoint.y = clamp(transformed.y, 0, 8.052);
+    waypoint.prevC = previousControl;
+    waypoint.nextC = nextControl;
+  });
+  return touched;
+}
+
+// Restores collinear tangents on the waypoints the stroke moved. Waypoints outside
+// the brush radius were never displaced, so their handles stay exactly as authored.
+function refitHandles(path, touched) {
   const waypoints = path.waypoints;
-  for (let index = 0; index < waypoints.length; index++) {
+  for (const index of touched) {
     const waypoint = waypoints[index];
-    if (waypoint.stop || waypoint.corner || distance(waypoint, center) > radius * 1.32) continue;
+    if (!waypoint || waypoint.stop || waypoint.corner) continue;
     const previous = waypoints[Math.max(0, index - 1)];
     const next = waypoints[Math.min(waypoints.length - 1, index + 1)];
     let tx = next.x - previous.x;
@@ -191,10 +211,13 @@ function refitHandles(path, center, radius) {
   }
 }
 
+// Relaxes interior waypoints toward the midpoint of their neighbours and reports
+// which indices moved so only those get retangented.
 function smoothWaypoints(path, stroke) {
   const original = path.waypoints.map(point);
   const travel = distance(stroke.center, stroke.previous);
   const scale = clamp(travel / Math.max(stroke.radius, 1e-6) * 3.2, 0.025, 0.22) * stroke.strength;
+  const touched = new Set();
   for (let index = 1; index < path.waypoints.length - 1; index++) {
     const waypoint = path.waypoints[index];
     const weight = falloff(distance(waypoint, stroke.center), stroke.radius);
@@ -202,7 +225,9 @@ function smoothWaypoints(path, stroke) {
     const average = pointMix(original[index - 1], original[index + 1], 0.5);
     waypoint.x = mix(waypoint.x, average.x, scale * weight);
     waypoint.y = mix(waypoint.y, average.y, scale * weight);
+    touched.add(index);
   }
+  return touched;
 }
 
 const SEGMENT_KEYS = ['segType', 'segmentHeadingMode', 'segmentFollowMode', 'segmentLookAt'];
@@ -310,19 +335,8 @@ function apply(path, input) {
     strength: clamp(Number(input.strength) || 0.65, 0.05, 1),
   };
   const added = stroke.kind === 'smooth' ? 0 : densify(path, stroke.center, stroke.radius);
-  if (stroke.kind === 'smooth') smoothWaypoints(path, stroke);
-  else {
-    for (const waypoint of path.waypoints) {
-      const transformed = transformPoint(waypoint, stroke);
-      const previousControl = transformPoint(waypoint.prevC || waypoint, stroke);
-      const nextControl = transformPoint(waypoint.nextC || waypoint, stroke);
-      waypoint.x = clamp(transformed.x, 0, 17.548);
-      waypoint.y = clamp(transformed.y, 0, 8.052);
-      waypoint.prevC = previousControl;
-      waypoint.nextC = nextControl;
-    }
-  }
-  refitHandles(path, stroke.center, stroke.radius);
+  const touched = stroke.kind === 'smooth' ? smoothWaypoints(path, stroke) : displaceWaypoints(path, stroke);
+  refitHandles(path, touched);
   const removed = stroke.kind === 'smooth' ? consolidateWaypoints(path, stroke) : 0;
   return { path, added, removed };
 }

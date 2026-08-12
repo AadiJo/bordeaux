@@ -54,6 +54,32 @@ describe("path sculpting brushes", () => {
     expect(path.waypoints.every((waypoint) => [waypoint.x, waypoint.y, waypoint.prevC.x, waypoint.nextC.y].every(Number.isFinite))).toBe(true);
   });
 
+  it("does not retangent an unmoved waypoint just outside the brush radius", () => {
+    const path = straightPath();
+    // A hand-shaped, deliberately unlinked waypoint sitting outside the brush.
+    path.waypoints.splice(1, 0, {
+      x: 5.5,
+      y: 4,
+      prevC: { x: 4.9, y: 3.4 },
+      nextC: { x: 6.1, y: 4.6 },
+      linked: false,
+      theta: 0,
+      thetaOn: false,
+      stop: false,
+      segType: "bezier",
+    });
+    const authored = { x: 5.5, y: 4, nextC: { x: 6.1, y: 4.6 } };
+    const center = { x: 4.2, y: 4.4 };
+    const radius = 1.2;
+    expect(Math.hypot(authored.x - center.x, authored.y - center.y)).toBeGreaterThan(radius);
+
+    brush().apply(path, { kind: "push", previous: { x: 4.2, y: 4 }, center, radius, strength: 1 });
+
+    const survivor = path.waypoints.find((waypoint) => waypoint.x === authored.x && waypoint.y === authored.y);
+    expect(survivor).toBeDefined();
+    expect(survivor).toMatchObject({ nextC: authored.nextC, linked: false });
+  });
+
   it("preserves local constraint-range anchors when a segment is split", () => {
     const path = straightPath();
     path.ranges = [{ anchor: "wp", w0: 0, t0: 0.25, w1: 0, t1: 0.75 }];

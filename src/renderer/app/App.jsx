@@ -1568,7 +1568,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
           setTool(toolShortcut);
           return;
         }
-        if (page === 'plan' && tool === 'brush' && (e.key === '[' || e.key === ']')) {
+        if (page === 'plan' && tool === 'brush' && !textEditing && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === '[' || e.key === ']')) {
           e.preventDefault();
           const direction = e.key === ']' ? 1 : -1;
           setBrush((current) => ({ ...current, radius: Math.max(0.3, Math.min(2.4, +(current.radius + direction * 0.1).toFixed(1))) }));
