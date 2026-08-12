@@ -1,12 +1,10 @@
 import { PM } from "./pathMath";
+import { createRoutineNodeId } from "../../shared/project/ids";
 
 // Autonomous Routine — autonomous routine model + run engine (no React).
 // A routine is an ordered list of STEPS. Three step kinds: Path, Decision, Function.
 // A Function carries a runtime capability or a generated Java command.
 // Autonomous Routine is robot-agnostic: it ORCHESTRATES runtime generation, it does not define behaviors.
-  let _id = 0;
-  const uid = (p) => (p || 'n') + '_' + (++_id);
-
   // ---- runtime capabilities a Function can carry ----
   const CATS = {
     command:   { id: 'command',   label: 'Command',   icon: 'bolt',     color: '#4fbf78', blurb: 'Run a robot command between paths' },
@@ -67,14 +65,15 @@ import { PM } from "./pathMath";
 
   // ---- node factory ----
   function newNode(type, cat, pathRef) {
-    if (type === 'path') return { id: uid('p'), type: 'path', ref: pathRef || '' };
-    if (type === 'decision') return { id: uid('d'), type: 'decision', cond: 'robot.ready', thenLabel: 'Yes', elseLabel: 'No', then: [], else: [] };
+    const id = createRoutineNodeId();
+    if (type === 'path') return { id, type: 'path', ref: pathRef || '' };
+    if (type === 'decision') return { id, type: 'decision', cond: 'robot.ready', thenLabel: 'Yes', elseLabel: 'No', then: [], else: [] };
     const c = cat || 'terminate';
-    if (c === 'command') return { id: uid('c'), type: 'function', cat: 'command', title: 'Robot command', invocation: null };
-    if (c === 'generate') return { id: uid('g'), type: 'function', cat: 'generate', funcRef: 'GeneratePath', trigger: 'On entry', params: [], note: '', preview: null };
-    if (c === 'sequence') return { id: uid('s'), type: 'function', cat: 'sequence', op: 'skip', target: '', trigger: 'When condition is true', note: '' };
-    if (c === 'velocity') return { id: uid('v'), type: 'function', cat: 'velocity', title: 'Velocity rule', trigger: 'When condition is true', scale: 0.5, note: '' };
-    return { id: uid('f'), type: 'function', cat: 'terminate', title: 'Terminate', trigger: 'When condition is true', note: '' };
+    if (c === 'command') return { id, type: 'function', cat: 'command', title: 'Robot command', invocation: null };
+    if (c === 'generate') return { id, type: 'function', cat: 'generate', funcRef: 'GeneratePath', trigger: 'On entry', params: [], note: '', preview: null };
+    if (c === 'sequence') return { id, type: 'function', cat: 'sequence', op: 'skip', target: '', trigger: 'When condition is true', note: '' };
+    if (c === 'velocity') return { id, type: 'function', cat: 'velocity', title: 'Velocity rule', trigger: 'When condition is true', scale: 0.5, note: '' };
+    return { id, type: 'function', cat: 'terminate', title: 'Terminate', trigger: 'When condition is true', note: '' };
   }
 
   // ---- walk every node (incl. branch children) ----

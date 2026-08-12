@@ -113,7 +113,7 @@ function integrationGuide(): string {
 `2. In Bordeaux, run **Java > Build Command Catalog** and place generated commands on event markers.\n` +
 `3. Call \`dev.bordeaux.runtime.BordeauxBindings.generated(...)\` with instances of each non-static provider.\n` +
 `4. Open the exported JSON below WPILib's deploy directory and call \`BordeauxTrajectoryReader.read(input, pathId)\`.\n` +
-`5. Create \`BordeauxEventRunner\`, call \`periodic(elapsedSeconds)\` beside the path follower, and call \`endPath()\` when the path ends.\n\n` +
+`5. Create \`BordeauxEventRunner\`, call \`periodic(elapsedSeconds, measuredFraction)\` beside the path follower, and call \`endPath()\` when the path ends.\n\n` +
 `A minimal team-owned integration looks like this (replace \`actions\`, file name, and path ID with your code):\n\n` +
 "```java\n" +
 `import dev.bordeaux.runtime.BordeauxBindings;\n` +
@@ -129,15 +129,15 @@ function integrationGuide(): string {
 `    bordeauxEvents = new BordeauxEventRunner(BordeauxTrajectoryReader.read(input, pathId), bordeauxRegistry);\n` +
 `  }\n` +
 `}\n\n` +
-`void autonomousPeriodic(double elapsedSeconds) {\n` +
-`  if (bordeauxEvents != null) bordeauxEvents.periodic(elapsedSeconds);\n` +
+`void autonomousPeriodic(double elapsedSeconds, double measuredFraction) {\n` +
+`  if (bordeauxEvents != null) bordeauxEvents.periodic(elapsedSeconds, measuredFraction);\n` +
 `}\n\n` +
 `void endBordeauxPath() {\n` +
 `  if (bordeauxEvents != null) bordeauxEvents.endPath();\n` +
 `  bordeauxEvents = null;\n` +
 `}\n` +
 "```\n\n" +
-`Pass every non-static command provider to \`BordeauxBindings.generated(...)\`; provider order does not matter. Bordeaux intentionally does not edit \`RobotContainer\` or deploy robot code.\n`;
+`Pass a monotonic measured path fraction from 0 to 1 so position-triggered events can fire. Pass every non-static command provider to \`BordeauxBindings.generated(...)\`; provider order does not matter. Bordeaux intentionally does not edit \`RobotContainer\` or deploy robot code.\n`;
 }
 
 async function assertSafeSupportDirectory(projectRoot: string): Promise<void> {

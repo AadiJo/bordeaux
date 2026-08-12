@@ -6,8 +6,23 @@ import { buildWaypoints, createDemoProject } from "../src/shared/project/default
 import type { ConstraintRange, RoutineNode } from "../src/shared/types";
 import { validateProject } from "../src/shared/validation";
 import { decodeProjectValue } from "../src/shared/project/fileFormat";
+import { wrapRadians } from "../src/shared/math/angles";
 
 describe("planner correctness boundaries", () => {
+  it("normalizes large finite headings in constant time", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.waypoints[0].theta = 1e12;
+    path.waypoints[0].thetaOn = true;
+
+    const result = profiledSplinePlanner.generate({ path, robot: project.robot });
+
+    expect(result.samples.every((sample) => Number.isFinite(sample.headingRad))).toBe(true);
+    expect(wrapRadians(Math.PI * 3)).toBe(Math.PI);
+    expect(wrapRadians(-Math.PI * 3)).toBe(-Math.PI);
+  });
+
   it("rejects oversized base geometry before path sampling", () => {
     const project = createDemoProject();
     const waypoint = project.paths[0].waypoints[0];
