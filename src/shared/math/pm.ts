@@ -1,5 +1,6 @@
 // @ts-nocheck
 // Generated from Bordeaux (standalone).html. Do not edit by hand.
+import { indexIntervalPolicies } from "../planners/intervalPolicies";
   // ---- geometry helpers ----
   const lerp = (a, b, t) => a + (b - a) * t;
   function bez(p0, c0, c1, p1, t) {
@@ -197,44 +198,21 @@
     // Index i describes the interval (i - 1, i). Evaluating overlap instead of
     // requiring both endpoints to be inside a policy preserves very short
     // transition windows that fall between geometry samples.
-    const translationPriority = new Array(n).fill(false);
     const headingTransitions = opts.headingTransitions || [];
-    if (ranges.length || headingTransitions.length) {
-      let transitionFollowing = false;
-      for (let i = 1; i < n; i++) {
-        const start = pts[i - 1].s / totalS, end = pts[i].s / totalS;
-        const overlaps = (lo, hi) => Math.min(end, hi) - Math.max(start, lo) >= -1e-9;
-        let rv = Infinity, ra = Infinity, rd = Infinity, rw = Infinity, rwa = Infinity;
-        let activePolicies = 0, translationOnly = true;
-        for (let r = 0; r < ranges.length; r++) {
-          const R = ranges[r]; const lo = Math.min(R.f0, R.f1), hi = Math.max(R.f0, R.f1);
-          if (overlaps(lo, hi)) {
-            activePolicies++;
-            if (R.rotationPriority !== 'translation') translationOnly = false;
-            if (R.maxVel > 0) rv = Math.min(rv, R.maxVel);
-            if (R.maxAccel > 0) ra = Math.min(ra, R.maxAccel);
-            if (R.maxDecel > 0) rd = Math.min(rd, R.maxDecel);
-            if (R.maxAngVel > 0) rw = Math.min(rw, R.maxAngVel);
-            if (R.maxAngAccel > 0) rwa = Math.min(rwa, R.maxAngAccel);
-          }
-        }
-        let activeTransitions = 0, translationTransitions = true;
-        for (let t = 0; t < headingTransitions.length; t++) {
-          const policy = headingTransitions[t];
-          if (!overlaps(policy.start, policy.end)) continue;
-          activePolicies++;
-          activeTransitions++;
-          if (policy.rotationPriority !== 'translation') translationOnly = false;
-          if (policy.rotationPriority !== 'translation') translationTransitions = false;
-        }
-        if (rv < Infinity) { v[i - 1] = Math.min(v[i - 1], rv); v[i] = Math.min(v[i], rv); }
-        if (ra < Infinity) aFwd[i] = Math.min(accelG, ra);
-        if (rd < Infinity) aBack[i - 1] = Math.min(decelG, rd);
-        if (rw < Infinity) rangeAngV[i] = rw * Math.PI / 180;
-        if (rwa < Infinity) rangeAngA[i] = rwa * Math.PI / 180;
-        if (activeTransitions > 0) transitionFollowing = translationTransitions;
-        translationPriority[i] = activePolicies > 0 ? translationOnly : transitionFollowing;
-      }
+    const intervalPolicies = indexIntervalPolicies(
+      pts.map((point) => point.s / totalS),
+      ranges.map((range) => ({ ...range, start: Math.min(range.f0, range.f1), end: Math.max(range.f0, range.f1) })),
+      headingTransitions,
+    );
+    const translationPriority = intervalPolicies.translationPriority;
+    for (let i = 1; i < n; i++) {
+      const rv = intervalPolicies.maxVel[i], ra = intervalPolicies.maxAccel[i], rd = intervalPolicies.maxDecel[i];
+      const rw = intervalPolicies.maxAngVel[i], rwa = intervalPolicies.maxAngAccel[i];
+      if (rv < Infinity) { v[i - 1] = Math.min(v[i - 1], rv); v[i] = Math.min(v[i], rv); }
+      if (ra < Infinity) aFwd[i] = Math.min(accelG, ra);
+      if (rd < Infinity) aBack[i - 1] = Math.min(decelG, rd);
+      if (rw < Infinity) rangeAngV[i] = rw * Math.PI / 180;
+      if (rwa < Infinity) rangeAngA[i] = rwa * Math.PI / 180;
     }
     // ---- rotational limit: cap v so the commanded heading can actually be tracked ----
     // omega = (dtheta/ds) * v ; enforce |omega| <= Wmax and |d omega/dt| <= Aang (memo §16)
