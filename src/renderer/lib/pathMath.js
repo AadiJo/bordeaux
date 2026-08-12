@@ -257,6 +257,81 @@
     return high;
   }
 
+  function indexIntervalPolicies(fractions, ranges, transitions = []) {
+    const count = Math.max(0, fractions.length - 1);
+    const bound = (target, upper) => {
+      let low = 0, high = fractions.length;
+      while (low < high) {
+        const middle = (low + high) >>> 1;
+        if (fractions[middle] < target || (upper && fractions[middle] === target)) low = middle + 1; else high = middle;
+      }
+      return low;
+    };
+    const indexed = (policies) => policies.map((policy) => {
+      const start = Math.min(policy.start, policy.end), end = Math.max(policy.start, policy.end);
+      return { ...policy, first: Math.max(0, bound(start - 1e-9, false) - 1), last: Math.min(count - 1, bound(end + 1e-9, true) - 1) };
+    }).filter((policy) => policy.first <= policy.last);
+    const indexedRanges = indexed(ranges).sort((a, b) => a.first - b.first);
+    const indexedTransitions = indexed(transitions);
+    const minimums = (key) => {
+      const result = new Array(count + 1).fill(Infinity), heap = [];
+      const push = (entry) => {
+        let index = heap.length; heap.push(entry);
+        while (index > 0) {
+          const parent = (index - 1) >>> 1;
+          if (heap[parent].value <= entry.value) break;
+          heap[index] = heap[parent]; index = parent;
+        }
+        heap[index] = entry;
+      };
+      const pop = () => {
+        const tail = heap.pop();
+        if (!heap.length || !tail) return;
+        let index = 0;
+        while (index * 2 + 1 < heap.length) {
+          const left = index * 2 + 1, right = left + 1;
+          const child = right < heap.length && heap[right].value < heap[left].value ? right : left;
+          if (heap[child].value >= tail.value) break;
+          heap[index] = heap[child]; index = child;
+        }
+        heap[index] = tail;
+      };
+      let cursor = 0;
+      for (let interval = 0; interval < count; interval++) {
+        while (indexedRanges[cursor] && indexedRanges[cursor].first <= interval) {
+          const policy = indexedRanges[cursor++], value = policy[key];
+          if (typeof value === 'number' && value > 0) push({ value, last: policy.last });
+        }
+        while (heap[0] && heap[0].last < interval) pop();
+        if (heap[0]) result[interval + 1] = heap[0].value;
+      }
+      return result;
+    };
+    const deltas = Array.from({ length: 4 }, () => new Int32Array(count + 1));
+    const addPolicy = (policy, isTransition) => {
+      const add = (delta) => { delta[policy.first]++; delta[policy.last + 1]--; };
+      add(deltas[0]);
+      if (policy.rotationPriority !== 'translation') add(deltas[1]);
+      if (isTransition) { add(deltas[2]); if (policy.rotationPriority !== 'translation') add(deltas[3]); }
+    };
+    indexedRanges.forEach((policy) => addPolicy(policy, false));
+    indexedTransitions.forEach((policy) => addPolicy(policy, true));
+    const translationPriority = new Array(count + 1).fill(false);
+    const activeTranslationPriority = new Array(count + 1).fill(false);
+    let active = 0, heading = 0, activeTransitions = 0, headingTransitions = 0, transitionFollowing = false;
+    for (let interval = 0; interval < count; interval++) {
+      active += deltas[0][interval]; heading += deltas[1][interval];
+      activeTransitions += deltas[2][interval]; headingTransitions += deltas[3][interval];
+      if (activeTransitions > 0) transitionFollowing = headingTransitions === 0;
+      activeTranslationPriority[interval + 1] = active > 0 && heading === 0;
+      translationPriority[interval + 1] = active > 0 ? activeTranslationPriority[interval + 1] : transitionFollowing;
+    }
+    return {
+      maxVel: minimums('maxVel'), maxAccel: minimums('maxAccel'), maxDecel: minimums('maxDecel'),
+      maxAngVel: minimums('maxAngVel'), maxAngAccel: minimums('maxAngAccel'), activeTranslationPriority, translationPriority,
+    };
+  }
+
   function profile(pts, c, startV = 0, endV = 0, opts = {}) {
     const n = pts.length;
     if (n < 2) return { v: [], t: [], totalTime: 0, holds: [], turns: [], jiggles: [], actionDistance: 0, rotLimited: [] };
@@ -284,47 +359,24 @@
     // Index i describes the interval (i - 1, i). Evaluating overlap instead of
     // requiring both endpoints to be inside a policy preserves very short
     // transition windows that fall between geometry samples.
-    const translationPriority = new Array(n).fill(false);
     const headingTransitions = opts.headingTransitions || [];
-    if (ranges.length || headingTransitions.length) {
-      let transitionFollowing = false;
-      for (let i = 1; i < n; i++) {
-        const start = pts[i - 1].s / totalS, end = pts[i].s / totalS;
-        const overlaps = (lo, hi) => Math.min(end, hi) - Math.max(start, lo) >= -1e-9;
-        let rv = Infinity, ra = Infinity, rd = Infinity, rw = Infinity, rwa = Infinity;
-        let activePolicies = 0, translationOnly = true;
-        for (let r = 0; r < ranges.length; r++) {
-          const R = ranges[r]; const lo = Math.min(R.f0, R.f1), hi = Math.max(R.f0, R.f1);
-          if (overlaps(lo, hi)) {
-            activePolicies++;
-            if (R.rotationPriority !== 'translation') translationOnly = false;
-            if (R.maxVel > 0) rv = Math.min(rv, R.maxVel);
-            if (R.maxAccel > 0) ra = Math.min(ra, R.maxAccel);
-            if (R.maxDecel > 0) rd = Math.min(rd, R.maxDecel);
-            if (R.maxAngVel > 0) rw = Math.min(rw, R.maxAngVel);
-            if (R.maxAngAccel > 0) rwa = Math.min(rwa, R.maxAngAccel);
-          }
-        }
-        let activeTransitions = 0, translationTransitions = true;
-        for (let t = 0; t < headingTransitions.length; t++) {
-          const policy = headingTransitions[t];
-          if (!overlaps(policy.start, policy.end)) continue;
-          activePolicies++;
-          activeTransitions++;
-          if (policy.rotationPriority !== 'translation') translationOnly = false;
-          if (policy.rotationPriority !== 'translation') translationTransitions = false;
-        }
-        if (rv < Infinity) {
-          v[i - 1] = Math.min(v[i - 1], rv); v[i] = Math.min(v[i], rv);
-          vLimit[i - 1] = Math.min(vLimit[i - 1], rv); vLimit[i] = Math.min(vLimit[i], rv);
-        }
-        if (ra < Infinity) { aFwd[i - 1] = Math.min(accelG, ra); aFwd[i] = Math.min(accelG, ra); }
-        if (rd < Infinity) aBack[i - 1] = Math.min(decelG, rd);
-        if (rw < Infinity) rangeAngV[i] = rw * Math.PI / 180;
-        if (rwa < Infinity) rangeAngA[i] = rwa * Math.PI / 180;
-        if (activeTransitions > 0) transitionFollowing = translationTransitions;
-        translationPriority[i] = activePolicies > 0 ? translationOnly : transitionFollowing;
+    const intervalPolicies = indexIntervalPolicies(
+      pts.map((point) => point.s / totalS),
+      ranges.map((range) => ({ ...range, start: Math.min(range.f0, range.f1), end: Math.max(range.f0, range.f1) })),
+      headingTransitions,
+    );
+    const translationPriority = intervalPolicies.translationPriority;
+    for (let i = 1; i < n; i++) {
+      const rv = intervalPolicies.maxVel[i], ra = intervalPolicies.maxAccel[i], rd = intervalPolicies.maxDecel[i];
+      const rw = intervalPolicies.maxAngVel[i], rwa = intervalPolicies.maxAngAccel[i];
+      if (rv < Infinity) {
+        v[i - 1] = Math.min(v[i - 1], rv); v[i] = Math.min(v[i], rv);
+        vLimit[i - 1] = Math.min(vLimit[i - 1], rv); vLimit[i] = Math.min(vLimit[i], rv);
       }
+      if (ra < Infinity) { aFwd[i - 1] = Math.min(accelG, ra); aFwd[i] = Math.min(accelG, ra); }
+      if (rd < Infinity) aBack[i - 1] = Math.min(decelG, rd);
+      if (rw < Infinity) rangeAngV[i] = rw * Math.PI / 180;
+      if (rwa < Infinity) rangeAngA[i] = rwa * Math.PI / 180;
     }
     // ---- rotational limit: cap v so the commanded heading can actually be tracked ----
     // omega = (dtheta/ds) * v ; enforce |omega| <= Wmax and |d omega/dt| <= Aang (memo §16)
@@ -908,40 +960,24 @@
   function headingWithTranslationPriority(doc, robot, pts, prof, desired, ranges, transitions) {
     transitions = transitions || [];
     if (!robot || robot.drive === 'tank' || (!ranges.some((range) => range.rotationPriority === 'translation') && !transitions.some((transition) => transition.rotationPriority === 'translation')) || desired.length < 2) return desired;
-    const rangesForInterval = (before, after) => {
-      const start = Math.min(before, after), end = Math.max(before, after);
-      const overlaps = (lo, hi) => Math.min(end, hi) - Math.max(start, lo) >= -1e-9;
-      return ranges.filter((range) => overlaps(Math.min(range.f0, range.f1), Math.max(range.f0, range.f1)));
-    };
-    const translationForInterval = (before, after) => {
-      const start = Math.min(before, after), end = Math.max(before, after);
-      const overlaps = (lo, hi) => Math.min(end, hi) - Math.max(start, lo) >= -1e-9;
-      const active = rangesForInterval(before, after);
-      const activeTransitions = transitions.filter((transition) => overlaps(transition.start, transition.end));
-      return active.length + activeTransitions.length > 0
-        && active.every((range) => range.rotationPriority === 'translation')
-        && activeTransitions.every((transition) => transition.rotationPriority === 'translation');
-    };
     const out = desired.slice();
     let following = false, actual = desired[0], omega = 0;
     const total = pts[pts.length - 1].s || 1;
+    const intervalPolicies = indexIntervalPolicies(
+      pts.map((point) => point.s / total),
+      ranges.map((range) => ({ ...range, start: Math.min(range.f0, range.f1), end: Math.max(range.f0, range.f1) })),
+      transitions,
+    );
     for (let i = 1; i < desired.length; i++) {
-      const f = pts[i].s / total, previousF = pts[i - 1].s / total;
       const dt = prof.t[i] - prof.t[i - 1];
       const previousDt = i > 1 ? prof.t[i - 1] - prof.t[i - 2] : 0;
       const plannedOmega = previousDt > 1e-9 ? angWrap(desired[i - 1] - desired[i - 2]) / previousDt : 0;
       const caughtUp = Math.abs(desired[i - 1] - actual) <= 0.05 * D2R && Math.abs(plannedOmega - omega) <= 0.05 * D2R;
-      following = translationForInterval(previousF, f) || (following && !caughtUp);
+      following = intervalPolicies.activeTranslationPriority[i] || (following && !caughtUp);
       if (!following || dt <= 1e-9) { actual = desired[i]; omega = dt > 1e-9 ? angWrap(desired[i] - desired[i - 1]) / dt : omega; out[i] = actual; continue; }
-      const active = rangesForInterval(previousF, f);
-      let maxOmega = (doc.constraints.maxAngVel || 0) * D2R;
-      let maxAccel = (doc.constraints.maxAngAccel || 0) * D2R;
-      let maxDecel = (doc.constraints.maxAngDecel || doc.constraints.maxAngAccel || 0) * D2R;
-      active.forEach((range) => {
-        maxOmega = Math.min(maxOmega, range.maxAngVel * D2R);
-        maxAccel = Math.min(maxAccel, range.maxAngAccel * D2R);
-        maxDecel = Math.min(maxDecel, range.maxAngAccel * D2R);
-      });
+      const maxOmega = Math.min(doc.constraints.maxAngVel || 0, intervalPolicies.maxAngVel[i]) * D2R;
+      const maxAccel = Math.min(doc.constraints.maxAngAccel || 0, intervalPolicies.maxAngAccel[i]) * D2R;
+      const maxDecel = Math.min(doc.constraints.maxAngDecel || doc.constraints.maxAngAccel || 0, intervalPolicies.maxAngAccel[i]) * D2R;
       const error = desired[i] - actual;
       const desiredOmega = Math.max(-maxOmega, Math.min(maxOmega, (desired[i] - desired[i - 1]) / dt));
       const brakingOmega = Math.max(0, Math.sqrt(2 * Math.max(1e-9, maxDecel) * Math.abs(error)) - Math.max(1e-9, maxDecel) * dt);
@@ -1192,4 +1228,4 @@
     return positions;
   }
 
-export const PM = { splitBezier, nearestPointOnSegment, poseAtTime, headingAt, metricColor, metricGradient, METRICS, SEGTYPES, pointAtFraction, nearestFraction, nearestVisits, autoHandles, angWrap, derivePath, jigglePositions, featureFraction, remapWaypointRange, waypointFracs, robotHardLimits, effectiveConstraints };
+export const PM = { splitBezier, nearestPointOnSegment, poseAtTime, headingAt, metricColor, metricGradient, METRICS, SEGTYPES, pointAtFraction, nearestFraction, nearestVisits, autoHandles, angWrap, derivePath, jigglePositions, featureFraction, remapWaypointRange, waypointFracs, robotHardLimits, effectiveConstraints, indexIntervalPolicies };
