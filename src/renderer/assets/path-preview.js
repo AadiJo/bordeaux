@@ -1,9 +1,41 @@
 import { PM } from "../lib/pathMath";
 
   const SAMPLES_BY_QUALITY = Object.freeze({ interactive: 14, final: 56 });
+  const MAX_DIRECT_POLICY_SAMPLE_WORK = 100000;
 
   function samplesForQuality(quality) {
     return SAMPLES_BY_QUALITY[quality] || SAMPLES_BY_QUALITY.final;
+  }
+
+  function headingTransitionCount(path) {
+    const waypoints = Array.isArray(path?.waypoints) ? path.waypoints : [];
+    const defaultMode = path?.headingMode || 'targets';
+    let previousLaw = null;
+    let transitions = 0;
+    for (let segment = 0; segment < waypoints.length - 1; segment++) {
+      const waypoint = waypoints[segment] || {};
+      const mode = waypoint.segmentHeadingMode || defaultMode;
+      const target = waypoint.segmentLookAt;
+      const law = mode === 'lookAt' ? `lookAt:${target ? target.x : ''}:${target ? target.y : ''}` : mode;
+      if (previousLaw !== null && law !== previousLaw) transitions++;
+      previousLaw = law;
+    }
+    return transitions;
+  }
+
+  function headingAnchorCount(path) {
+    const waypoints = Array.isArray(path?.waypoints) ? path.waypoints : [];
+    const targets = Array.isArray(path?.targets) ? path.targets : [];
+    const waypointAnchors = waypoints.reduce((count, waypoint, index) => (
+      count + ((index === 0 || index === waypoints.length - 1 || waypoint?.thetaOn) ? 1 : 0)
+    ), 0);
+    return targets.length + waypointAnchors;
+  }
+
+  function directPreviewIsSafe(path, perSegment) {
+    const segments = Math.max(0, (path?.waypoints?.length || 0) - 1);
+    const policyScans = Math.max(1, (path?.ranges?.length || 0) + headingTransitionCount(path) + headingAnchorCount(path));
+    return segments * perSegment * policyScans <= MAX_DIRECT_POLICY_SAMPLE_WORK;
   }
 
   function browserBenchmarkTransport() {
@@ -174,6 +206,15 @@ import { PM } from "../lib/pathMath";
       });
     };
 
+    const runDirectOrFail = (job, reason) => {
+      if (directPreviewIsSafe(job.path, job.perSegment)) {
+        directJob = job;
+        runDirect();
+      } else {
+        publish(job, { error: { message: `${reason} This path is too large to derive safely on the UI thread.` } }, 'direct');
+      }
+    };
+
     const clearInFlightTimer = () => {
       if (inFlightTimer) clearTimeout(inFlightTimer);
       inFlightTimer = 0;
@@ -190,8 +231,7 @@ import { PM } from "../lib/pathMath";
     const send = (job) => {
       const targetWorker = worker;
       if (!targetWorker) {
-        directJob = job;
-        runDirect();
+        runDirectOrFail(job, 'Path preview worker is unavailable.');
         return;
       }
       inFlight = job;
@@ -254,8 +294,7 @@ import { PM } from "../lib/pathMath";
       failedWorker.terminate();
       worker = null;
       if (!queued && completed && completed.retried) {
-        directJob = completed;
-        runDirect();
+        runDirectOrFail(completed, message);
         return;
       }
       let next = queued;
@@ -267,8 +306,7 @@ import { PM } from "../lib/pathMath";
         send(next);
       } catch (_error) {
         worker = null;
-        directJob = next;
-        runDirect();
+        runDirectOrFail(next, message);
       }
     };
 
@@ -296,8 +334,7 @@ import { PM } from "../lib/pathMath";
         notify();
         ensureWorker();
         if (!worker) {
-          directJob = job;
-          runDirect();
+          runDirectOrFail(job, 'Path preview worker is unavailable.');
         } else if (inFlight) {
           queued = job;
         } else {
@@ -331,4 +368,4 @@ import { PM } from "../lib/pathMath";
     };
   }
 
-export const PathPreview = Object.freeze({ create, samplesForQuality });
+export const PathPreview = Object.freeze({ create, samplesForQuality, directPreviewIsSafe });

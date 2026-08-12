@@ -53,6 +53,19 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
 
   const ACCENT = '#3f6fd0';
 
+  const PENDING_PATH_PREVIEW = {
+    sample: { pts: [], length: 0 },
+    prof: { totalTime: 0 },
+    metrics: { head: [] },
+    anchors: [],
+    checks: [],
+    wpFrac: [],
+    wpIdx: [],
+    effRanges: [],
+    mode: 'swerve',
+    rev: false,
+  };
+
   const DEF_CONS = { maxVel: 4.2, maxAccel: 6.5, maxDecel: 6.5, maxAngVel: 540, maxAngAccel: 720, maxAngDecel: 720, maxJerk: 0, maxAngJerk: 0 };
   function alignWaypointHandles(w) {
     if (!w || !w.prevC || !w.nextC) return;
@@ -209,12 +222,13 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
   function usePathPreview(doc, robot, plannerId, quality) {
     const previewer = useMemo(() => PathPreview.create(), []);
     const fallback = useMemo(() => {
+      if (!PathPreview.directPreviewIsSafe(doc, 14)) return { path: doc, value: null, error: null };
       try { return { path: doc, value: PM.derivePath(doc, robot, 14, plannerId), error: null }; }
       catch (error) { return { path: doc, value: null, error }; }
     }, [doc, robot, plannerId]);
     const lastValid = useRef(fallback.value ? { path: fallback.path, value: fallback.value } : null);
     const [snapshot, setSnapshot] = useState(() => ({
-      status: fallback.value ? 'ready' : 'error',
+      status: fallback.value ? 'ready' : fallback.error ? 'error' : 'pending',
       key: doc.id,
       path: fallback.path,
       value: fallback.value,
@@ -245,8 +259,8 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     };
   }
 
-  function App() {
-    const [project, setProject] = useState(() => freshProject());
+  function App({ initialProject = null } = {}) {
+    const [project, setProject] = useState(() => initialProject || freshProject());
     const plannerId = project.plannerId;
     const [activeIdx, setActiveIdx] = useState(0);
     const [sel, setSel] = useState({ kind: null, idx: -1 });
@@ -633,10 +647,9 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
 
     // ---- derived path data ----
     const derivation = usePathPreview(doc, robot, plannerId, 'final');
-    if (!derivation.value) throw derivation.error || new Error('Could not derive the active path');
-    const derived = derivation.value;
+    const derived = derivation.value || PENDING_PATH_PREVIEW;
     const derivationDoc = derivation.path || doc;
-    const derivationCurrent = derivationDoc === doc;
+    const derivationCurrent = Boolean(derivation.value && derivationDoc === doc);
 
     useEffect(() => {
       if (!derivationCurrent) return;
@@ -1602,6 +1615,13 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, derivationCurrent, nudgeWp, nudgeFrac, playbackStore]);
 
     const selNode = (page === 'auto' && routineSel) ? AUTO.findNode(routine, routineSel) : null;
+
+    if (!derivation.value) {
+      if (derivation.error) throw derivation.error;
+      return h('main', { className: 'fatal-error', role: 'status', 'aria-live': 'polite' },
+        h('h1', null, 'Preparing path preview'),
+        h('p', null, 'Calculating this path off the UI thread…'));
+    }
 
     return h('div', { className: 'app' },
       h(Panels.Toolbar, { project, page, setPage, alliance, setAlliance, exportError, unitSystem, setUnitSystem, onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo, onExportJava: () => onExportJava('linked'), javaProject: javaProjectState, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
