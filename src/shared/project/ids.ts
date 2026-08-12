@@ -10,6 +10,10 @@ export function createRoutineId(): string {
   return `routine_${globalThis.crypto.randomUUID()}`;
 }
 
+export function createRoutineNodeId(): string {
+  return `routine_node_${globalThis.crypto.randomUUID()}`;
+}
+
 export function createPathLinkId(): string {
   return `pathlink_${globalThis.crypto.randomUUID()}`;
 }
