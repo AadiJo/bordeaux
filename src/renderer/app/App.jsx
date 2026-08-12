@@ -1648,7 +1648,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
                 h('button', { type: 'button', 'aria-label': 'Dismiss export error', onClick: () => setExportError('') }, '\u00d7')),
               derivation.error && h('div', { className: 'insert-preview derivation-error', role: 'alert' },
                 h('div', { className: 'insert-preview-copy' }, h('b', null, 'Path preview unavailable'), h('span', null, derivation.error.message || String(derivation.error))),
-                h('span', null, 'Showing the last valid preview. Undo or edit the selected geometry.')),
+                h('span', null, 'Showing the last valid preview. Undo the latest geometry change to recover.')),
               h(EditablePlaybackField, { store: playbackStore, editStore, doc, derived, derivedPath: derivation.path, robot, plannerId, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, drive: robot.drive, accent, metric, actions: fieldActions, showHandles: true }),
               tool !== 'select' && !waypointPreview && h('div', { className: 'stage-hint', dangerouslySetInnerHTML: { __html: toolHint(tool) } }),
               waypointPreview && h('div', { className: 'insert-preview', role: 'region', 'aria-label': 'Preview waypoint insertion' },
