@@ -1,4 +1,5 @@
 import * as React from "react";
+import { flushSync } from "react-dom";
 import { PathEdit } from "../assets/path-edit";
 import { PathPreview } from "../assets/path-preview";
 import { ContextInspector } from "../components/ContextInspector";
@@ -11,6 +12,7 @@ import { UI } from "../components/ui";
 import { PM } from "../lib/pathMath";
 import { PathLinks } from "../lib/pathLinks";
 import { AUTO } from "../lib/routineModel";
+import { enqueuePersistenceAfterPreflight, flushFocusedProjectDraft, noteProjectDraftInput, projectPersistenceStayedCurrent } from "../lib/draftPersistence";
 import { UnitPrefs } from "../lib/unitPreferences";
 import {
   createMarkerId as markerId,
@@ -466,6 +468,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const projectHist = useRef({ past: [], future: [] });
     const autosaveRevision = useRef(0);
     const autosaveTimer = useRef(0);
+    const draftInputGeneration = useRef(0);
     const persistenceTail = useRef(Promise.resolve());
     const [, force] = useState(0);
     const updateDirty = useCallback((next) => {
@@ -473,6 +476,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       setDirty(next);
       if (window.bordeauxAPI && typeof window.bordeauxAPI.setDirty === 'function') window.bordeauxAPI.setDirty(next);
     }, []);
+    const flushProjectDraft = useCallback(() => flushFocusedProjectDraft(document, flushSync), []);
     const markAgentProposalStale = useCallback(() => {
       const current = agentProposalRef.current;
       if (!current || current.status !== 'ready') return;
@@ -507,6 +511,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);
       autosaveTimer.current = 0;
       const persist = () => enqueuePersistence(async () => {
+        if (!flushProjectDraft()) return;
         if (revision !== autosaveRevision.current) return;
         const sourceProject = projectRef.current;
         const editRevision = editStore.getRevision();
@@ -522,7 +527,17 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         autosaveTimer.current = 0;
         void persist().catch((error) => console.warn('Could not autosave the Bordeaux project:', error));
       }, 900);
-    }, [editStore, enqueuePersistence, materializeProject, updateDirty]);
+    }, [editStore, enqueuePersistence, flushProjectDraft, materializeProject, updateDirty]);
+
+    useEffect(() => {
+      const onDraftInput = (event) => {
+        if (noteProjectDraftInput(event.target, dirtyRef.current, () => updateDirty(true), scheduleAutosave)) {
+          draftInputGeneration.current += 1;
+        }
+      };
+      document.addEventListener('input', onDraftInput, true);
+      return () => document.removeEventListener('input', onDraftInput, true);
+    }, [scheduleAutosave, updateDirty]);
 
     useEffect(() => {
       const activePathId = project.paths[activeIdx] && project.paths[activeIdx].id;
@@ -1440,7 +1455,8 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }, []);
 
     // ---- desktop project workflow ----
-    const canReplaceProject = useCallback(() => !dirtyRef.current || confirm('Discard unsaved changes to this project?'), []);
+    const canReplaceProject = useCallback(() => flushProjectDraft()
+      && (!dirtyRef.current || confirm('Discard unsaved changes to this project?')), [flushProjectDraft]);
     const loadProject = useCallback((incoming) => {
       invalidateScheduledAutosave();
       cancelEdit();
@@ -1484,17 +1500,16 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       cancelEdit();
     }, [cancelEdit, invalidateScheduledAutosave]);
     const newProject = useCallback(() => {
-      if (!canReplaceProject()) return;
-      prepareProjectReplacement();
-      return enqueuePersistence(async () => {
+      return enqueuePersistenceAfterPreflight(enqueuePersistence, canReplaceProject, async () => {
+        prepareProjectReplacement();
         if (window.bordeauxAPI) await window.bordeauxAPI.newProject();
         loadProject(freshProject());
       });
     }, [canReplaceProject, enqueuePersistence, loadProject, prepareProjectReplacement]);
     const openProject = useCallback((recentIndex) => {
-      if (!window.bordeauxAPI || !canReplaceProject()) return;
-      prepareProjectReplacement();
-      return enqueuePersistence(async () => {
+      if (!window.bordeauxAPI) return;
+      return enqueuePersistenceAfterPreflight(enqueuePersistence, canReplaceProject, async () => {
+        prepareProjectReplacement();
         try {
           const result = typeof recentIndex === 'number'
             ? await window.bordeauxAPI.openRecentProject(recentIndex)
@@ -1507,20 +1522,25 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }, [canReplaceProject, enqueuePersistence, loadProject, prepareProjectReplacement]);
     const saveProject = useCallback((saveAs) => {
       if (!window.bordeauxAPI) return;
-      return enqueuePersistence(async () => {
+      return enqueuePersistenceAfterPreflight(enqueuePersistence, flushProjectDraft, async () => {
+        const requestedDraftGeneration = draftInputGeneration.current;
         try {
-          const sourceProject = projectRef.current;
-          const editRevision = editStore.getRevision();
+          const source = { project: projectRef.current, editRevision: editStore.getRevision(), draftGeneration: requestedDraftGeneration };
           const result = await window.bordeauxAPI.saveProject(materializeProject(), saveAs === true);
           if (result && result.canceled) return;
-          if (sourceProject === projectRef.current && editRevision === editStore.getRevision()) updateDirty(false);
+          if (projectPersistenceStayedCurrent(source, {
+            project: projectRef.current,
+            editRevision: editStore.getRevision(),
+            draftGeneration: draftInputGeneration.current,
+          })) updateDirty(false);
         } catch (error) {
           alert('Could not save project: ' + (error && error.message ? error.message : error));
         }
       });
-    }, [editStore, enqueuePersistence, materializeProject, updateDirty]);
+    }, [editStore, enqueuePersistence, flushProjectDraft, materializeProject, updateDirty]);
 
     const onExportJava = useCallback(async (destination) => {
+      if (!flushProjectDraft()) return;
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.exportJava !== 'function') {
         setExportError('Java trajectory export is available in the Bordeaux desktop app.');
         return;
@@ -1544,7 +1564,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         setJavaProjectState((current) => ({ ...current, operation: null }));
         setExportError(message);
       }
-    }, [javaProjectState.catalog, materializeProject]);
+    }, [flushProjectDraft, javaProjectState.catalog, materializeProject]);
 
     useEffect(() => {
       if (!window.bordeauxAPI) return undefined;
